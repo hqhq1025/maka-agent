@@ -62,6 +62,21 @@ const STDERR_TAIL_CAP = 4096;
 // crisp PNGs (simple screens) pass through untouched.
 const COMPRESS_FRAME_THRESHOLD = 1.5 * 1024 * 1024;
 
+function waitForDuration(durationMs: number, signal: AbortSignal): Promise<void> {
+  if (signal.aborted) return Promise.reject(signal.reason ?? new Error('aborted'));
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      signal.removeEventListener('abort', onAbort);
+      resolve();
+    }, durationMs);
+    const onAbort = () => {
+      clearTimeout(timer);
+      reject(signal.reason ?? new Error('aborted'));
+    };
+    signal.addEventListener('abort', onAbort, { once: true });
+  });
+}
+
 export interface CuaDriverBackendOptions {
   /** Absolute path to the bundled `cua-driver` binary. */
   binaryPath: string;
@@ -1389,7 +1404,7 @@ export function createCuaDriverBackend(opts: CuaDriverBackendOptions): CuDispatc
           };
         }
         case 'wait':
-          await new Promise((res) => setTimeout(res, Math.min(action.durationMs, 10_000)));
+          await waitForDuration(action.durationMs, signal);
           return { outcome: { ok: true, tier: 'coordinate-background' } };
         case 'mouse_move':
           // By design we never move the REAL cursor; the overlay hook has already

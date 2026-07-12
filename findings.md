@@ -199,6 +199,32 @@
     signing, notarization, or post-package app verification workflow
   - the compatibility Mach-O is ad-hoc signed and byte/provenance pinned
 
+## Local Codex Computer Use Reference
+
+- Verified local architecture:
+  - orchestration host: `/Applications/ChatGPT.app`
+  - native executor: `~/.codex/computer-use/Codex Computer Use.app`
+  - service process: `SkyComputerUseService`
+  - model runtime: bundled `cua_node/bin/node_repl`
+  - model API package: bundled `@oai/sky@0.4.20`
+  - IPC: length-prefixed JSON-RPC over `computeruse.sock`
+  - API version: `CodexComputerUseIPC-2`
+- The Codex macOS API is app/window scoped and begins from fresh screenshot +
+  accessibility state. It also exposes semantic `set_value`, `select_text`, and
+  secondary AX actions rather than forcing every task through coordinates.
+- The native cursor has distinct "next interaction timing" and full completion
+  callbacks plus operation/presentation/fence identifiers. This explains why a
+  free-running overlay after backend completion feels wrong even when the final
+  coordinate is numerically correct.
+- Direct adoption decision:
+  - do not replace cua-driver in #699
+  - copy the operation lifecycle, deadlines, fresh-state identity, resolved
+    target authority, and cursor timing split
+  - validate Electron/CDP and native AppKit/AX in separate E2E lanes
+- Broad action audit found a real bug: runtime allowed `wait` up to 60 seconds
+  while the backend silently truncated it to 10 seconds and returned success.
+  The backend now honors the full duration and aborts promptly.
+
 ## PR Split Decision
 
 - Keep #699 reviewable as a backend-validity PR. Scripted actions are the

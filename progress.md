@@ -150,3 +150,16 @@
     tuning move to follow-up branch `codex/cu-model-loop-ux`
 - Saved the visual phase/path work on the follow-up branch and reverted it from
   #699 before continuing backend verification.
+- Reverse-engineered the installed Codex Computer Use stack read-only:
+  - separate signed `SkyComputerUseService` app
+  - isolated node_repl model runtime
+  - bundled `@oai/sky@0.4.20`
+  - length-prefixed JSON-RPC socket with serialized requests, deadlines, and
+    turn metadata
+  - operation/presentation/fence lifecycle and separate cursor interaction vs
+    completion timing
+- Added an exhaustive action coverage contract for all 17 `CuAction` values.
+  New actions cannot enter the model surface without an explicit support class
+  and atomic E2E case.
+- Fixed `wait` so the backend honors the full runtime contract instead of
+  silently returning after 10 seconds; added duration and abort regressions.

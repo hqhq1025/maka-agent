@@ -782,6 +782,30 @@ describe('cua-driver backend', () => {
     assert.ok(!trace.some((m) => m.startsWith('tools/call:click') || m.startsWith('tools/call:move')), 'mouse_move must not inject real input');
   });
 
+  it('wait honors the requested duration instead of silently truncating at 10 seconds', async () => {
+    const { backend } = makeBackend();
+    const startedAt = Date.now();
+    const result = await backend.run(
+      { type: 'wait', durationMs: 120 } as CuAction,
+      new AbortController().signal,
+    );
+    assert.equal(result.outcome.ok, true);
+    assert.ok(Date.now() - startedAt >= 110);
+  });
+
+  it('wait aborts promptly and never reports early success', async () => {
+    const { backend } = makeBackend();
+    const controller = new AbortController();
+    const startedAt = Date.now();
+    const pending = backend.run(
+      { type: 'wait', durationMs: 60_000 } as CuAction,
+      controller.signal,
+    );
+    setTimeout(() => controller.abort(new Error('test abort')), 25);
+    await assert.rejects(pending, /test abort|aborted/i);
+    assert.ok(Date.now() - startedAt < 1_000);
+  });
+
   it('keyboard with NO prior click fails closed — never guesses a target, never injects', async () => {
     const { backend, logPath } = makeBackend();
     const sig = new AbortController().signal;
