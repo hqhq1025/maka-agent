@@ -79,6 +79,15 @@ export type {
   MakaToolContext as BuiltinMakaToolContext,
 } from './builtin-tools.js';
 export { buildComputerUseTools, adaptToCuAction } from './computer-use-tools.js';
+export { bindCuaAction, CuaFrameState } from './cua-frame-state.js';
+export type {
+  CuaActionClaimResult,
+  CuaActionConfirmationResult,
+  CuaActionRejectionReason,
+  CuaBoundAction,
+  CuaFrameIdentity,
+  CuaFrameIdFactory,
+} from './cua-frame-state.js';
 export type {
   CuDispatchBackend,
   CuScreenshot,
