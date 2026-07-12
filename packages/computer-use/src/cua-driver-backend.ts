@@ -997,7 +997,9 @@ export function createCuaDriverBackend(opts: CuaDriverBackendOptions): CuDispatc
           if (
             action.type === 'left_click'
             || action.type === 'right_click'
+            || action.type === 'middle_click'
             || action.type === 'double_click'
+            || action.type === 'triple_click'
           ) {
             const semantic = await runElectronSemanticPointer(
               { type: action.type, screenPoint: win.screenPoint },
@@ -1020,7 +1022,7 @@ export function createCuaDriverBackend(opts: CuaDriverBackendOptions): CuDispatc
                   },
                 });
               }
-              return { outcome: semantic.outcome };
+              return { outcome: semantic.outcome, resolvedScreenPoint: win.screenPoint };
             }
           }
           {
@@ -1129,7 +1131,7 @@ export function createCuaDriverBackend(opts: CuaDriverBackendOptions): CuDispatc
                 },
               });
             }
-            return { outcome };
+            return { outcome, resolvedScreenPoint: win.screenPoint };
           }
         }
         case 'scroll': {
@@ -1172,7 +1174,10 @@ export function createCuaDriverBackend(opts: CuaDriverBackendOptions): CuDispatc
               },
               signal,
             );
-            return { outcome: normalizeCuaDriverOutcome(r) };
+            return {
+              outcome: normalizeCuaDriverOutcome(r),
+              resolvedScreenPoint: win.screenPoint,
+            };
           }
         }
         case 'left_click_drag': {
@@ -1225,7 +1230,7 @@ export function createCuaDriverBackend(opts: CuaDriverBackendOptions): CuDispatc
             context.toolCallId,
           );
           if (semantic.handled && semantic.outcome) {
-            return { outcome: semantic.outcome };
+            return { outcome: semantic.outcome, resolvedScreenPoint: to.screenPoint };
           }
           {
             let snapshot: TargetSnapshot;
@@ -1276,7 +1281,10 @@ export function createCuaDriverBackend(opts: CuaDriverBackendOptions): CuDispatc
               },
               signal,
             );
-            return { outcome: normalizeCuaDriverOutcome(r) };
+            return {
+              outcome: normalizeCuaDriverOutcome(r),
+              resolvedScreenPoint: to.screenPoint,
+            };
           }
         }
         case 'zoom': {

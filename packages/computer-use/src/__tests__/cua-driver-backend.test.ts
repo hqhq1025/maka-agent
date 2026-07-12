@@ -493,6 +493,7 @@ describe('cua-driver backend', () => {
     // screen (300,200) is inside → resolves. window-local device = (600-200, 400-200).
     const res = await backend.run({ type: 'left_click', coordinate: { x: 600, y: 400 } } as CuAction, sig);
     assert.equal(res.outcome.ok, true, 'click on a window succeeds');
+    assert.deepEqual(res.resolvedScreenPoint, { x: 300, y: 200 });
     if (res.outcome.ok) {
       assert.equal(res.outcome.tier, 'coordinate-background');
       assert.equal(res.outcome.verified, false);
@@ -695,6 +696,7 @@ describe('cua-driver backend', () => {
       sig,
     );
     assert.equal(res.outcome.ok, true, 'same-window drag succeeds');
+    assert.deepEqual(res.resolvedScreenPoint, { x: 400, y: 300 });
     const drag = toolCall(await readRecords(logPath), 'drag');
     assert.ok(drag, 'drag sent to cua-driver');
     assert.equal(drag!.pid, 4242);
@@ -1165,6 +1167,7 @@ describe('cua-driver backend', () => {
       verified: true,
       evidence: { path: 'cdp', effect: 'confirmed' },
     });
+    assert.deepEqual(result.resolvedScreenPoint, { x: 300, y: 200 });
     const records = await readRecords(click.logPath);
     const pageCall = toolCall(records, 'page');
     assert.deepEqual(pageCall, {
@@ -1202,6 +1205,45 @@ describe('cua-driver backend', () => {
     const dragRecords = await readRecords(drag.logPath);
     assert.equal(toolCalls(dragRecords, 'page').length, 1);
     assert.equal(toolCalls(dragRecords, 'drag').length, 0);
+
+    for (const [type, semanticPointerResult] of [
+      [
+        'middle_click',
+        {
+          supported: true,
+          ok: true,
+          kind: 'middle_click',
+          effect: 'mutation',
+          auxiliaryClickEvents: 1,
+          mutations: 1,
+        },
+      ],
+      [
+        'triple_click',
+        {
+          supported: true,
+          ok: true,
+          kind: 'triple_click',
+          effect: 'mutation',
+          clickEvents: 3,
+          mutations: 3,
+        },
+      ],
+    ] as const) {
+      const semantic = makeBackend({
+        processKind: 'electron',
+        pageTarget,
+        semanticPointerResult,
+      });
+      const semanticResult = await semantic.backend.run(
+        { type, coordinate: { x: 600, y: 400 } } as CuAction,
+        new AbortController().signal,
+      );
+      assert.equal(semanticResult.outcome.ok, true);
+      const semanticRecords = await readRecords(semantic.logPath);
+      assert.equal(toolCalls(semanticRecords, 'page').length, 1);
+      assert.equal(toolCalls(semanticRecords, 'click').length, 0);
+    }
   });
 
   it('Electron semantic non-text inputs never establish usable text ownership', async () => {

@@ -95,11 +95,27 @@ test('persistence: move() does NOT recreate the window; sends window-local coord
   // window-local = screen − bounds.origin (100,50)
   assert.deepEqual(moves[0].payload, { x: 200, y: 200, kind: 'move', pressed: false });
   assert.deepEqual(moves[1].payload, { x: 400, y: 400, kind: 'click', pressed: false });
+  controller.move({
+    actionId: 'a-instant',
+    sessionId: 's',
+    screenX: 520,
+    screenY: 470,
+    kind: 'click',
+    instant: true,
+  });
+  const instantMove = w.sent.filter((s) => s.channel === 'overlay:move').at(-1);
+  assert.deepEqual(instantMove?.payload, {
+    x: 420,
+    y: 420,
+    kind: 'click',
+    pressed: false,
+    instant: true,
+  });
   // a post-ready move sends immediately
   controller.move({ actionId: 'a3', sessionId: 's', screenX: 200, screenY: 150, kind: 'move' });
   const movesAfter = w.sent.filter((s) => s.channel === 'overlay:move');
-  assert.equal(movesAfter.length, 4);
-  assert.deepEqual(movesAfter[3].payload, { x: 100, y: 100, kind: 'move', pressed: false });
+  assert.equal(movesAfter.length, 5);
+  assert.deepEqual(movesAfter[4].payload, { x: 100, y: 100, kind: 'move', pressed: false });
 });
 
 test('complete() sends exact backend coordinate only for the live action', () => {
