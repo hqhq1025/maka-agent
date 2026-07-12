@@ -58,6 +58,7 @@ async function createFixtureWindow(label, slug, bounds, reveal = true) {
     },
   });
   fixture.setMenuBarVisibility(false);
+  fixture.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
   const html = `<!doctype html>
 <html>
   <head>
@@ -832,6 +833,7 @@ async function run() {
     secondWindow.setBounds(secondStageBounds);
     secondWindow.showInactive();
     secondWindow.moveAbove(firstWindow.getMediaSourceId());
+    secondWindow.moveTop();
     await sleep(250, signal);
     if (splitAxis === 'horizontal') {
       const currentPoint = await readFixtureScreenPoint(secondWindow, '#target');
@@ -842,6 +844,7 @@ async function run() {
         false,
       );
       secondWindow.moveAbove(firstWindow.getMediaSourceId());
+      secondWindow.moveTop();
       await sleep(150, signal);
     }
   });

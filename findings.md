@@ -153,11 +153,13 @@
   - Its Electron path could execute on the first page target.
   - A supplied URL hint also silently fell back when absent.
 - Root correction:
-  - source commit `adef3e87405986cc82df52ae59aef4c32e08a082`
+  - source commit `35fa565846ec60747603fa3e7b94160f796c5ecf`
   - upstream proposal `trycua/cua#2166`
   - compatibility release
-    `hqhq1025/cua@cua-driver-rs-v0.7.1-maka.1`
-  - exact ports, unique URL hints, and checked `1..=65535` port parsing
+    `hqhq1025/cua@cua-driver-rs-v0.7.1-maka.2`
+  - exact ports, unique URL hints, checked `1..=65535` port parsing,
+    targeted CDP session reuse, no JavaScript replay after dispatch failure,
+    and cross-platform targeted JS routing
 - cua-driver remains the sole execution engine:
   - Maka only discovers a PID-owned listening CDP port and unique page identity.
   - semantic pointer actions, input preparation/readback, `Input.insertText`,
@@ -185,6 +187,13 @@
     - range drag: 96/102/127 ms
     - right click: 74/80/85 ms
     - double click: 74/78/98 ms
+- Continued-driver evidence:
+  - `maka.2` source `35fa5658` passed core page 3/3, core CDP 2/2,
+    macOS CDP 6/6, release checks, bundle/provenance checks, and a full
+    two-window 39/39 real-machine E2E
+  - the earlier 10/10 repeat remains the deterministic stress baseline; cursor
+    motion and model-loop behavior are intentionally verified on the stacked
+    follow-up branch rather than added to #699
 - Remaining release gap:
   - this repository has no production Electron packaging, Developer ID
     signing, notarization, or post-package app verification workflow

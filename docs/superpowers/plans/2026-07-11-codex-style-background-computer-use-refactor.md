@@ -666,9 +666,9 @@ relaxing that safety boundary:
 
 Artifact provenance:
 
-- source `hqhq1025/cua@adef3e87405986cc82df52ae59aef4c32e08a082`
+- source `hqhq1025/cua@35fa565846ec60747603fa3e7b94160f796c5ecf`
 - upstream proposal `trycua/cua#2166`
-- release `cua-driver-rs-v0.7.1-maka.1`
+- release `cua-driver-rs-v0.7.1-maka.2`
 - executable version `0.7.1`
 - architectures arm64 + x86_64
 

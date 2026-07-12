@@ -101,7 +101,7 @@
 - Forked `trycua/cua`, implemented the root fix, and opened upstream draft
   PR `trycua/cua#2166`.
 - Built, ad-hoc signed, and released universal arm64/x86_64
-  `cua-driver-rs-v0.7.1-maka.1`.
+  `cua-driver-rs-v0.7.1-maka.2`.
 - Strengthened bundle gates with archive/binary/license/SOURCE hashes, exact
   commits, Cargo.lock, version, architectures, signature, and provenance.
 - Implemented exact Electron page targeting, effect-grounded pointer
@@ -116,7 +116,7 @@
   - real-machine E2E: 39/39
   - `semantic-targeting-v5`: 10/10 green runs, every semantic case 10/10,
     zero fallback
-- Merged latest `origin/main` at `e715e7f8` without conflicts.
+- Merged latest `origin/main` at `4165bc5e` without conflicts.
 - Final post-merge verification:
   - typecheck passed
   - build passed
@@ -129,6 +129,21 @@
 - Refreshed draft PR #699 title/body with the exact page-targeting architecture,
   `semantic-targeting-v5` evidence, and the remaining production packaging gap.
 - Remote CI passed: typecheck, test, and e2e.
+- Adopted the continued upstream #2166 fixes through source
+  `35fa565846ec60747603fa3e7b94160f796c5ecf`:
+  - cached targeted CDP sessions
+  - side-effectful JavaScript is never replayed after send
+  - explicit targeted JS works on macOS, Windows, and Linux
+- Published and pinned `cua-driver-rs-v0.7.1-maka.2`; forced prepare downloaded
+  the immutable release and the bundle/provenance gate passed.
+- Revalidated the updated driver in a real two-window E2E:
+  - 39/39 checks passed with source `35fa5658`
+  - both Window IDs and page identities switched exactly
+  - model coordinates and backend-resolved targets matched
+  - zero fallback, duplicate effect, focus steal, or real-pointer warp
+- Made the inactive fixture windows visible across full-screen Spaces and
+  re-raised each owned window before read-only target inspection. Input still
+  fails closed if another window wins the point.
 - Decided to split backend validity from model-driven UX:
   - #699 remains deterministic backend targeting/execution/effect verification
   - model-in-loop latency, coordinate quality, cursor phase sync, and motion
