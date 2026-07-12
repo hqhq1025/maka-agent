@@ -1202,6 +1202,45 @@ describe('cua-driver backend', () => {
     const dragRecords = await readRecords(drag.logPath);
     assert.equal(toolCalls(dragRecords, 'page').length, 1);
     assert.equal(toolCalls(dragRecords, 'drag').length, 0);
+
+    for (const [type, semanticPointerResult] of [
+      [
+        'middle_click',
+        {
+          supported: true,
+          ok: true,
+          kind: 'middle_click',
+          effect: 'mutation',
+          auxiliaryClickEvents: 1,
+          mutations: 1,
+        },
+      ],
+      [
+        'triple_click',
+        {
+          supported: true,
+          ok: true,
+          kind: 'triple_click',
+          effect: 'mutation',
+          clickEvents: 3,
+          mutations: 3,
+        },
+      ],
+    ] as const) {
+      const semantic = makeBackend({
+        processKind: 'electron',
+        pageTarget,
+        semanticPointerResult,
+      });
+      const semanticResult = await semantic.backend.run(
+        { type, coordinate: { x: 600, y: 400 } } as CuAction,
+        new AbortController().signal,
+      );
+      assert.equal(semanticResult.outcome.ok, true);
+      const semanticRecords = await readRecords(semantic.logPath);
+      assert.equal(toolCalls(semanticRecords, 'page').length, 1);
+      assert.equal(toolCalls(semanticRecords, 'click').length, 0);
+    }
   });
 
   it('Electron semantic non-text inputs never establish usable text ownership', async () => {

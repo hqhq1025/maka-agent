@@ -22,7 +22,7 @@ export interface CuaResolvedPageTextTarget {
 
 export type CuaSemanticPointerAction =
   | {
-      type: 'left_click' | 'right_click' | 'double_click';
+      type: 'left_click' | 'right_click' | 'middle_click' | 'double_click' | 'triple_click';
       screenPoint: CuPoint;
     }
   | {
@@ -41,6 +41,7 @@ export interface CuaSemanticPointerResult {
   inputType?: string;
   clickEvents?: number;
   doubleClickEvents?: number;
+  auxiliaryClickEvents?: number;
   contextMenuEvents?: number;
   inputEvents?: number;
   changeEvents?: number;
@@ -292,6 +293,76 @@ export function buildCuaSemanticPointerActionScript(
         ...(!ok ? { reason: 'no_observable_effect' } : {})
       });
     }
+    if (actionType === 'triple_click') {
+      let clickEvents = 0;
+      const onClick = () => { clickEvents += 1; };
+      const mutation = observeMutations();
+      element.addEventListener('click', onClick, true);
+      element.focus?.({ preventScroll: true });
+      element.click();
+      element.click();
+      element.click();
+      await settle();
+      element.removeEventListener('click', onClick, true);
+      mutation.observer.disconnect();
+      const mutations = mutation.read();
+      const ok = clickEvents === 3 && mutations > 0;
+      return JSON.stringify({
+        supported: true,
+        ok,
+        kind: actionType,
+        effect: ok ? 'mutation' : undefined,
+        editable,
+        tagName,
+        inputType,
+        clickEvents,
+        mutations,
+        ...(!ok ? { reason: 'no_observable_effect' } : {})
+      });
+    }
+    if (actionType === 'middle_click') {
+      let auxiliaryClickEvents = 0;
+      const onAuxiliaryClick = () => { auxiliaryClickEvents += 1; };
+      const mutation = observeMutations();
+      element.addEventListener('auxclick', onAuxiliaryClick, true);
+      for (const [type, buttons] of [['mousedown', 4], ['mouseup', 0]]) {
+        element.dispatchEvent(new MouseEvent(type, {
+          bubbles: true,
+          cancelable: true,
+          view: window,
+          button: 1,
+          buttons,
+          clientX: start.x,
+          clientY: start.y
+        }));
+      }
+      element.dispatchEvent(new MouseEvent('auxclick', {
+        bubbles: true,
+        cancelable: true,
+        view: window,
+        button: 1,
+        buttons: 0,
+        clientX: start.x,
+        clientY: start.y
+      }));
+      await settle();
+      element.removeEventListener('auxclick', onAuxiliaryClick, true);
+      mutation.observer.disconnect();
+      const mutations = mutation.read();
+      const ok = auxiliaryClickEvents === 1 && mutations > 0;
+      return JSON.stringify({
+        supported: true,
+        ok,
+        kind: actionType,
+        effect: ok ? 'mutation' : undefined,
+        editable,
+        tagName,
+        inputType,
+        auxiliaryClickEvents,
+        mutations,
+        ...(!ok ? { reason: 'no_observable_effect' } : {})
+      });
+    }
     if (actionType === 'right_click') {
       let contextMenuEvents = 0;
       const onContextMenu = () => { contextMenuEvents += 1; };
@@ -421,6 +492,7 @@ export function parseCuaSemanticPointerResult(
       ...(typeof result.inputType === 'string' ? { inputType: result.inputType } : {}),
       ...(typeof result.clickEvents === 'number' ? { clickEvents: result.clickEvents } : {}),
       ...(typeof result.doubleClickEvents === 'number' ? { doubleClickEvents: result.doubleClickEvents } : {}),
+      ...(typeof result.auxiliaryClickEvents === 'number' ? { auxiliaryClickEvents: result.auxiliaryClickEvents } : {}),
       ...(typeof result.contextMenuEvents === 'number' ? { contextMenuEvents: result.contextMenuEvents } : {}),
       ...(typeof result.inputEvents === 'number' ? { inputEvents: result.inputEvents } : {}),
       ...(typeof result.changeEvents === 'number' ? { changeEvents: result.changeEvents } : {}),

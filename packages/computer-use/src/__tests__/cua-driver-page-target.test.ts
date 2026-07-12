@@ -98,6 +98,21 @@ describe('semantic pointer action script', () => {
     assert.match(click, /no_observable_effect/);
     assert.match(click, /textInputTypes/);
 
+    const middleClick = buildCuaSemanticPointerActionScript({
+      type: 'middle_click',
+      screenPoint: { x: 200, y: 300 },
+    });
+    assert.match(middleClick, /actionType === 'middle_click'/);
+    assert.match(middleClick, /new MouseEvent\('auxclick'/);
+    assert.match(middleClick, /auxiliaryClickEvents === 1 && mutations > 0/);
+
+    const tripleClick = buildCuaSemanticPointerActionScript({
+      type: 'triple_click',
+      screenPoint: { x: 200, y: 300 },
+    });
+    assert.match(tripleClick, /actionType === 'triple_click'/);
+    assert.match(tripleClick, /clickEvents === 3 && mutations > 0/);
+
     const drag = buildCuaSemanticPointerActionScript({
       type: 'left_click_drag',
       startScreenPoint: { x: 10, y: 20 },

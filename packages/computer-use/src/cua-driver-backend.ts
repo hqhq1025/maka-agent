@@ -997,7 +997,9 @@ export function createCuaDriverBackend(opts: CuaDriverBackendOptions): CuDispatc
           if (
             action.type === 'left_click'
             || action.type === 'right_click'
+            || action.type === 'middle_click'
             || action.type === 'double_click'
+            || action.type === 'triple_click'
           ) {
             const semantic = await runElectronSemanticPointer(
               { type: action.type, screenPoint: win.screenPoint },

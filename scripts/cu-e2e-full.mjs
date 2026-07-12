@@ -131,7 +131,10 @@ async function createFixtureWindow(label, slug, bounds, reveal = true) {
         count.value = String(state.count);
       });
       increment.addEventListener('auxclick', (event) => {
-        if (event.button === 1) state.middleClicks += 1;
+        if (event.button === 1) {
+          state.middleClicks += 1;
+          increment.dataset.middleClicks = String(state.middleClicks);
+        }
       });
       document.addEventListener('pointerdown', () => { state.pointerDowns += 1; }, true);
       document.addEventListener('pointerup', () => { state.pointerUps += 1; }, true);
@@ -324,7 +327,7 @@ const report = {
 
 function recordAtomicCase(caseId, input) {
   const pass = input.pass === true;
-  executedAtomicCaseIds.add(caseId);
+  if (pass) executedAtomicCaseIds.add(caseId);
   report.cases.push({
     caseId,
     layer: 'atomic',
@@ -426,7 +429,6 @@ async function runSemanticCase({
   behaviorName,
   behavior,
 }) {
-  executedAtomicCaseIds.add(caseId);
   const before = await readFixtureState(fixture);
   const traceStart = report.traces.length;
   const result = await actAction(action);
@@ -439,6 +441,8 @@ async function runSemanticCase({
   const traces = actionTraceSlice(traceStart);
   const route = traceRoute(traces);
   const fallback = traces.find((event) => event.type === 'fallback');
+  const pass = semanticPass && behaviorPass;
+  if (pass) executedAtomicCaseIds.add(caseId);
   report.cases.push({
     caseId,
     layer: 'atomic',
@@ -458,7 +462,7 @@ async function runSemanticCase({
     durationMs: actionRecord?.durationMs,
     semanticPass,
     behaviorPass,
-    pass: semanticPass && behaviorPass,
+    pass,
   });
   return { result, before, after };
 }
