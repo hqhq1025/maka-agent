@@ -1,7 +1,7 @@
 // Behavior contract for the cursor overlay window controller. Drives it against a
 // FakeCursorOverlayWindow (no Electron) and asserts the Path 18 invariants:
 //  - S14: focusable:false + setIgnoreMouseEvents(true,{forward:true}) armed BEFORE
-//    showInactive; never a .focus(); receive-only preload wired.
+//    showInactive; never a .focus(); presentation-only acknowledgement wired.
 //  - persistence: move() does NOT recreate the window (no teardown-per-move).
 //  - S15: coords are MAIN-computed window-local (screen − bounds.origin).
 //  - S13/S18: teardown is synchronous destroy() on clear/abort/destroyAll/supersede.
@@ -16,6 +16,9 @@ class FakeCursorOverlayWindow {
   calls: Call[] = [];
   sent: Array<{ channel: string; payload: unknown }> = [];
   private readyCb: (() => void) | null = null;
+  private presentationCb:
+    | ((payload: { actionId: string; phase: 'readyForInteraction' | 'finished' }) => void)
+    | null = null;
   destroyed = false;
   constructor(public options: Record<string, unknown>) {}
   private rec(m: string, ...args: unknown[]): void { this.calls.push({ m, args }); }
@@ -28,7 +31,18 @@ class FakeCursorOverlayWindow {
   destroy(): void { this.destroyed = true; this.rec('destroy'); }
   send(channel: string, payload: unknown): void { this.sent.push({ channel, payload }); }
   onReady(cb: () => void): void { this.readyCb = cb; }
+  onPresentationPhase(
+    cb: (payload: { actionId: string; phase: 'readyForInteraction' | 'finished' }) => void,
+  ): void {
+    this.presentationCb = cb;
+  }
   fireReady(): void { this.readyCb?.(); }
+  firePresentation(
+    actionId: string,
+    phase: 'readyForInteraction' | 'finished',
+  ): void {
+    this.presentationCb?.({ actionId, phase });
+  }
 }
 
 const BOUNDS = { x: 100, y: 50, width: 1440, height: 900 };
@@ -47,7 +61,7 @@ function harness() {
   return { controller, created };
 }
 
-test('S14 window options: focusable:false + non-interactive flags + receive-only preload', () => {
+test('S14 window options: focusable:false + non-interactive flags + isolated preload', () => {
   const opts = cursorOverlayWindowOptions(BOUNDS, '/p/preload.cjs') as Record<string, any>;
   assert.equal(opts.focusable, false);
   assert.equal(opts.transparent, true);
@@ -79,7 +93,7 @@ test('ensure(): arms click-through BEFORE showInactive, never focuses', () => {
   assert.ok(!order.includes('focus'), 'never focuses');
 });
 
-test('persistence: move() does NOT recreate the window; sends window-local coords', () => {
+test('persistence: move() does NOT recreate the window; sends window-local coords', async () => {
   const { controller, created } = harness();
   controller.move({ actionId: 'a0', sessionId: 's', screenX: 300, screenY: 250, kind: 'move' });
   controller.move({ actionId: 'a1', sessionId: 's', screenX: 500, screenY: 450, kind: 'click' });
@@ -93,8 +107,8 @@ test('persistence: move() does NOT recreate the window; sends window-local coord
   const moves = w.sent.filter((s) => s.channel === 'overlay:move');
   assert.equal(moves.length, 3);
   // window-local = screen − bounds.origin (100,50)
-  assert.deepEqual(moves[0].payload, { x: 200, y: 200, kind: 'move', pressed: false });
-  assert.deepEqual(moves[1].payload, { x: 400, y: 400, kind: 'click', pressed: false });
+  assert.deepEqual(moves[0].payload, { actionId: 'a0', x: 200, y: 200, kind: 'move', pressed: false });
+  assert.deepEqual(moves[1].payload, { actionId: 'a1', x: 400, y: 400, kind: 'click', pressed: false });
   controller.move({
     actionId: 'a-instant',
     sessionId: 's',
@@ -105,6 +119,7 @@ test('persistence: move() does NOT recreate the window; sends window-local coord
   });
   const instantMove = w.sent.filter((s) => s.channel === 'overlay:move').at(-1);
   assert.deepEqual(instantMove?.payload, {
+    actionId: 'a-instant',
     x: 420,
     y: 420,
     kind: 'click',
@@ -115,7 +130,58 @@ test('persistence: move() does NOT recreate the window; sends window-local coord
   controller.move({ actionId: 'a3', sessionId: 's', screenX: 200, screenY: 150, kind: 'move' });
   const movesAfter = w.sent.filter((s) => s.channel === 'overlay:move');
   assert.equal(movesAfter.length, 5);
-  assert.deepEqual(movesAfter[4].payload, { x: 100, y: 100, kind: 'move', pressed: false });
+  assert.deepEqual(movesAfter[4].payload, { actionId: 'a3', x: 100, y: 100, kind: 'move', pressed: false });
+});
+
+test('presentation fence follows renderer ready/finished phases and ignores stale action ids', async () => {
+  const { controller, created } = harness();
+  const fence = controller.move({
+    actionId: 'live',
+    sessionId: 's',
+    screenX: 300,
+    screenY: 250,
+    kind: 'move',
+  });
+  const observed: string[] = [];
+  fence.readyForInteraction.then(() => observed.push('ready'));
+  fence.finished.then(() => observed.push('finished'));
+  created[0].firePresentation('stale', 'finished');
+  await Promise.resolve();
+  assert.deepEqual(observed, []);
+  created[0].firePresentation('live', 'readyForInteraction');
+  await Promise.resolve();
+  assert.deepEqual(observed, ['ready']);
+  created[0].firePresentation('live', 'finished');
+  await Promise.resolve();
+  assert.deepEqual(observed, ['ready', 'finished']);
+});
+
+test('supersede and teardown release pending presentation fences', async () => {
+  const { controller } = harness();
+  const first = controller.move({
+    actionId: 'first',
+    sessionId: 's',
+    screenX: 300,
+    screenY: 250,
+    kind: 'move',
+  });
+  controller.move({
+    actionId: 'second',
+    sessionId: 's',
+    screenX: 400,
+    screenY: 350,
+    kind: 'move',
+  });
+  await Promise.all([first.readyForInteraction, first.finished]);
+  const second = controller.move({
+    actionId: 'third',
+    sessionId: 's',
+    screenX: 500,
+    screenY: 450,
+    kind: 'click',
+  });
+  controller.destroyAll();
+  await Promise.all([second.readyForInteraction, second.finished]);
 });
 
 test('teardown: clearForSession / abort / destroyAll destroy synchronously; supersede on session change', () => {

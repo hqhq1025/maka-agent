@@ -4,7 +4,7 @@
 // transformed to a logical screen point here in MAIN, then handed to the overlay.
 // Backend-agnostic: fed from buildComputerUseTools' `overlay` seam, above dispatch.
 import type { CuAction, CuPoint } from '@maka/core';
-import type { CuOverlayHook } from '@maka/runtime';
+import type { CuOverlayHook, CuPresentationFence } from '@maka/runtime';
 
 /** The overlay cursor action kinds the hook classifies actions into. */
 export type CursorActionKind = 'move' | 'click' | 'drag' | 'scroll';
@@ -32,9 +32,14 @@ export interface CursorCompleteInput extends CursorMoveInput {
  */
 export interface OverlayCursorSink {
   ensure(sessionId: string): void;
-  move(input: CursorMoveInput): void;
+  move(input: CursorMoveInput): CuPresentationFence | void;
   complete(input: CursorCompleteInput): void;
 }
+
+const RESOLVED_PRESENTATION_FENCE: CuPresentationFence = {
+  readyForInteraction: Promise.resolve(),
+  finished: Promise.resolve(),
+};
 
 interface DisplayLike {
   bounds: { x: number; y: number; width: number; height: number };
@@ -124,14 +129,14 @@ export function createComputerUseOverlayHook(controller: OverlayCursorSink, scre
         // present at its last spot, don't move it.
         controller.ensure(ctx.sessionId);
         if (debug) console.log(`[cu-overlay] ensure (no-coord ${action.type}) session=${ctx.sessionId.slice(0, 8)}`);
-        return;
+        return RESOLVED_PRESENTATION_FENCE;
       }
       const screenPt = declaredPxToScreenPoint(pt, screen.getPrimaryDisplay());
       if (debug) {
         const d = screen.getPrimaryDisplay();
         console.log(`[cu-overlay] move ${action.type} declared=(${pt.x},${pt.y}) → screen=(${Math.round(screenPt.x)},${Math.round(screenPt.y)}) scale=${d.scaleFactor} kind=${kindOf(action)}`);
       }
-      controller.move({
+      return controller.move({
         actionId: ctx.toolCallId,
         sessionId: ctx.sessionId,
         screenX: screenPt.x,
@@ -144,8 +149,8 @@ export function createComputerUseOverlayHook(controller: OverlayCursorSink, scre
       const { action, result } = ctx;
       if (!action) return;
       const pt = endCoordinateOf(action);
-      if (!pt || !result || action.type === 'mouse_move') return;
-      const screenPt = result.resolvedScreenPoint
+      if (!pt || action.type === 'mouse_move') return;
+      const screenPt = result?.resolvedScreenPoint
         ?? declaredPxToScreenPoint(pt, screen.getPrimaryDisplay());
       const kind = kindOf(action);
       controller.complete({
@@ -154,7 +159,7 @@ export function createComputerUseOverlayHook(controller: OverlayCursorSink, scre
         screenX: screenPt.x,
         screenY: screenPt.y,
         kind,
-        pulse: result.outcome.ok && (kind === 'click' || kind === 'drag'),
+        pulse: result?.outcome.ok === true && (kind === 'click' || kind === 'drag'),
       });
     },
   };

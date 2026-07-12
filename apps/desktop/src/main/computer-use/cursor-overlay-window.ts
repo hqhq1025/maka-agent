@@ -21,6 +21,7 @@ import { createRequire } from 'node:module';
 import { basename, dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { BrowserWindowConstructorOptions, Rectangle } from 'electron';
+import type { CuPresentationFence } from '@maka/runtime';
 
 const requireElectron = createRequire(import.meta.url);
 
@@ -43,6 +44,9 @@ export interface CursorOverlayWindowLike {
   send(channel: string, payload: unknown): void;
   /** Fire cb once the page has loaded (webContents 'did-finish-load'). */
   onReady(cb: () => void): void;
+  onPresentationPhase(
+    cb: (payload: { actionId: string; phase: 'readyForInteraction' | 'finished' }) => void,
+  ): void;
 }
 
 export interface CreateCursorOverlayControllerDeps {
@@ -58,7 +62,7 @@ export interface CursorOverlayController {
   /** Lazily create/refresh the overlay for a session (palette from sessionId). */
   ensure(sessionId: string): void;
   /** Move the cursor to a per-action screen coordinate (creates the window if needed). */
-  move(input: CursorMoveInput): void;
+  move(input: CursorMoveInput): CuPresentationFence;
   /** Reconcile the display with the coordinate where backend execution completed. */
   complete(input: CursorCompleteInput): void;
   /** Per-session teardown (the clearComputerUseOverlay(sessionId) bag). */
@@ -133,12 +137,42 @@ export function createCursorOverlayController(
   let bounds: Rectangle = { x: 0, y: 0, width: 0, height: 0 };
   let ready = false;
   let queue: Array<{ channel: string; payload: unknown }> = [];
+  let presentation:
+    | {
+        actionId: string;
+        ready: () => void;
+        finish: () => void;
+        fence: CuPresentationFence;
+      }
+    | undefined;
+
+  function createPresentation(action: string): NonNullable<typeof presentation> {
+    let readyForInteraction!: () => void;
+    let finished!: () => void;
+    const fence: CuPresentationFence = {
+      readyForInteraction: new Promise<void>((resolve) => { readyForInteraction = resolve; }),
+      finished: new Promise<void>((resolve) => { finished = resolve; }),
+    };
+    return {
+      actionId: action,
+      ready: readyForInteraction,
+      finish: finished,
+      fence,
+    };
+  }
+
+  function settlePresentation(): void {
+    presentation?.ready();
+    presentation?.finish();
+    presentation = undefined;
+  }
 
   function teardown(): void {
     const w = win;
     win = null;
     sessionId = null;
     actionId = null;
+    settlePresentation();
     ready = false;
     queue = [];
     if (w && !w.isDestroyed()) w.destroy();
@@ -177,25 +211,44 @@ export function createCursorOverlayController(
       for (const m of queue) w.send(m.channel, m.payload);
       queue = [];
     });
+    w.onPresentationPhase((payload) => {
+      if (!presentation || payload.actionId !== presentation.actionId) return;
+      if (payload.phase === 'readyForInteraction') presentation.ready();
+      else {
+        presentation.ready();
+        presentation.finish();
+      }
+    });
     void w.loadFile(htmlPath).catch(() => {
       /* fast teardown mid-load — ignore */
     });
     w.showInactive();
   }
 
-  function move(input: CursorMoveInput): void {
-    if (typeof input.sessionId !== 'string' || input.sessionId.length === 0) return;
-    if (!Number.isFinite(input.screenX) || !Number.isFinite(input.screenY)) return;
+  function move(input: CursorMoveInput): CuPresentationFence {
+    if (
+      typeof input.sessionId !== 'string'
+      || input.sessionId.length === 0
+      || !Number.isFinite(input.screenX)
+      || !Number.isFinite(input.screenY)
+    ) {
+      return { readyForInteraction: Promise.resolve(), finished: Promise.resolve() };
+    }
     ensure(input.sessionId);
+    settlePresentation();
     actionId = input.actionId;
+    const nextPresentation = createPresentation(input.actionId);
+    presentation = nextPresentation;
     // Screen → window-local so the renderer paints at origin (0,0).
     push('overlay:move', {
+      actionId: input.actionId,
       x: input.screenX - bounds.x,
       y: input.screenY - bounds.y,
       kind: input.kind,
       pressed: input.pressed === true,
       ...(input.instant === true ? { instant: true } : {}),
     });
+    return nextPresentation.fence;
   }
 
   function complete(input: CursorCompleteInput): void {
@@ -247,6 +300,24 @@ function defaultCreateOverlayWindow(options: BrowserWindowConstructorOptions): C
     destroy: () => bw.destroy(),
     send: (channel, payload) => { if (!bw.isDestroyed()) bw.webContents.send(channel, payload); },
     onReady: (cb) => bw.webContents.once('did-finish-load', cb),
+    onPresentationPhase: (cb) => {
+      bw.webContents.on('ipc-message', (_event, channel, payload) => {
+        if (channel !== 'overlay:presentation-phase') return;
+        if (!payload || typeof payload !== 'object') return;
+        const candidate = payload as Record<string, unknown>;
+        if (
+          typeof candidate.actionId !== 'string'
+          || (
+            candidate.phase !== 'readyForInteraction'
+            && candidate.phase !== 'finished'
+          )
+        ) return;
+        cb({
+          actionId: candidate.actionId,
+          phase: candidate.phase,
+        });
+      });
+    },
   };
 }
 

@@ -120,11 +120,11 @@ describe('buildComputerUseTools — the `computer` MakaTool', () => {
   test('passes the full runtime context to the dispatch backend', async () => {
     const backend = fakeBackend();
     await callComputer(backend, { action: 'left_click', coordinate: [5, 6] });
-    assert.deepEqual(backend.lastContext, {
-      sessionId: 's1',
-      turnId: 't1',
-      toolCallId: 'call1',
-    });
+    assert.equal(backend.lastContext?.sessionId, 's1');
+    assert.equal(backend.lastContext?.turnId, 't1');
+    assert.equal(backend.lastContext?.toolCallId, 'call1');
+    assert.equal(backend.lastContext?.operationId, 'call1');
+    assert.ok(Number.isInteger(backend.lastContext?.deadlineUnixMilliseconds));
   });
 
   test('passes the completed action and backend result through the overlay context', async () => {
@@ -154,6 +154,81 @@ describe('buildComputerUseTools — the `computer` MakaTool', () => {
       ctx(),
     );
     assert.deepEqual(events, ['begin', 'end']);
+  });
+
+  test('creates the deadline at dispatch after presentation becomes ready', async () => {
+    const events: string[] = [];
+    let clock = 1000;
+    let ready!: () => void;
+    const readyForInteraction = new Promise<void>((resolve) => { ready = resolve; });
+    const backend = fakeBackend();
+    const [tool] = buildComputerUseTools({
+      backend: {
+        ...backend,
+        async run(action, signal, context) {
+          events.push('dispatch');
+          assert.equal(context.queuedAtUnixMilliseconds, 1000);
+          assert.equal(context.presentationReadyAtUnixMilliseconds, 1400);
+          assert.equal(context.presentationReadySource, 'fence');
+          assert.equal(context.dispatchStartedAtUnixMilliseconds, 1400);
+          assert.equal(context.deadlineUnixMilliseconds, 4400);
+          return backend.run(action, signal, context);
+        },
+      },
+      now: () => clock,
+      operationTimeoutMs: 3000,
+      presentationReadyTimeoutMs: 10_000,
+      overlay: {
+        onActionBegin() {
+          events.push('presentation');
+          return {
+            readyForInteraction,
+            finished: new Promise<void>(() => {}),
+          };
+        },
+      },
+    });
+    const pending = tool.impl(
+      { action: 'left_click', coordinate: [5, 6] } as never,
+      ctx(),
+    );
+    while (events.length === 0) {
+      await new Promise((resolve) => setImmediate(resolve));
+    }
+    assert.deepEqual(events, ['presentation']);
+    clock = 1400;
+    ready();
+    await pending;
+    assert.deepEqual(events, ['presentation', 'dispatch']);
+  });
+
+  test('presentation ready timeout fails open without waiting for finished', async () => {
+    const events: string[] = [];
+    const [tool] = buildComputerUseTools({
+      backend: {
+        async preflight() {
+          return { accessibility: true, screenRecording: true };
+        },
+        async run() {
+          events.push('dispatch');
+          return { outcome: { ok: true, tier: 'ax', verified: true } };
+        },
+      },
+      presentationReadyTimeoutMs: 5,
+      overlay: {
+        onActionBegin() {
+          return {
+            readyForInteraction: new Promise<void>(() => {}),
+            finished: new Promise<void>(() => {}),
+          };
+        },
+      },
+    });
+    await tool.impl(
+      { action: 'left_click', coordinate: [5, 6] } as never,
+      ctx(),
+    );
+    assert.deepEqual(events, ['dispatch']);
   });
 
   test('serializes preflight and dispatch in tool-call arrival order', async () => {

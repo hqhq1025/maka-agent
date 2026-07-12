@@ -163,3 +163,31 @@
   and atomic E2E case.
 - Fixed `wait` so the backend honors the full runtime contract instead of
   silently returning after 10 seconds; added duration and abort regressions.
+- Reproduced the new Codex Computer Use lab end-to-end: 31/31 checks passed,
+  including live read-only app-server/Electron evidence, hermetic Sky wire
+  serialization/deadlines, wrapper TOCTOU protection, and native symbol gates.
+- Added the Maka Computer Use operation coordinator:
+  - operation ID and queue timestamp
+  - renderer `readyForInteraction` / `finished` fences
+  - dispatch-relative 120 second deadline
+  - backend result and completion timestamp on the same context
+  - deadline propagation into cua-driver RPC timeouts
+- Added presentation IPC and safety contracts. The renderer can acknowledge
+  only fixed phases for the live action ID; stale IDs are ignored, teardown
+  releases pending fences, and presentation failure cannot block execution.
+- Verification after the coordinator change:
+  - Runtime Computer Use tests 21/21
+  - Computer Use package tests 77/77
+  - cursor presentation/controller tests 8/8
+  - script/coverage/sequence tests 20/20
+  - Desktop typecheck passed
+- The full action-matrix operation-fence run stopped before input because the
+  current full-screen ChatGPT window won every fixture point. This is an
+  expected wrong-target fail-closed result.
+- Added and passed a presentation-only real-machine smoke that does not require
+  a target application or synthesize input. It proved genuine renderer
+  `readyForInteraction` and `finished` acknowledgements, dispatch-relative
+  deadline creation, and stable frontmost PID/real pointer under the current
+  full-screen environment. The full 63-check action matrix remains to be rerun
+  when an unobscured fixture layout is available; the prior 62/62 action matrix
+  remains the latest full execution baseline.

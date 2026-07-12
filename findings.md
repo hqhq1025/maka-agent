@@ -221,6 +221,31 @@
   - copy the operation lifecycle, deadlines, fresh-state identity, resolved
     target authority, and cursor timing split
   - validate Electron/CDP and native AppKit/AX in separate E2E lanes
+- The reproduction lab at
+  `/Users/haoqing/Documents/Learning/codex-computer-use-lab` now reproduces
+  31/31 checks against the installed app and hermetic fake sockets.
+  It confirms that:
+  - native-pipe requests are serialized with max in-flight = 1
+  - each deadline is generated immediately before the serialized dispatch
+  - action RPCs normally return no fresh state; Skyshot refresh is separate
+  - native execution distinguishes cursor next-interaction timing from full
+    presentation completion
+  - UI settle and the next AX tree revision are explicit native-service stages
+- Maka now mirrors those execution contracts without copying private input
+  code:
+  - one operation context carries queue, presentation-ready, dispatch,
+    deadline, completion, action, and result state
+  - renderer presentation emits fixed `readyForInteraction` and `finished`
+    acknowledgements keyed only by action ID
+  - runtime waits only for ready-for-interaction, never full presentation
+  - a 1 second missing-presentation timeout fails open to native dispatch and
+    is explicitly distinguishable from a real renderer acknowledgement
+  - operation deadlines are created at actual dispatch and constrain every
+    cua-driver RPC in that operation through async-local deadline context
+  - exhausted deadlines fail before a driver tool dispatch
+- The presentation acknowledgement bridge remains non-authoritative: preload
+  can send only `{actionId, phase}` on one fixed channel. It cannot send
+  coordinates, actions, or arbitrary IPC.
 - Broad action audit found a real bug: runtime allowed `wait` up to 60 seconds
   while the backend silently truncated it to 10 seconds and returned success.
   The backend now honors the full duration and aborts promptly.

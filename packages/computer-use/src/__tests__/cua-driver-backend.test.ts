@@ -1470,6 +1470,23 @@ describe('cua-driver backend', () => {
     assert.ok(dead, 'child killed after handshake timeout');
   });
 
+  it('fails before dispatch when the operation deadline is already exhausted', async () => {
+    const { backend, logPath } = makeBackend();
+    await assert.rejects(
+      backend.run(
+        { type: 'screenshot' } as CuAction,
+        new AbortController().signal,
+        {
+          ...DEFAULT_RUN_CONTEXT,
+          deadlineUnixMilliseconds: Date.now() - 1,
+        },
+      ),
+      /timeout/i,
+    );
+    const records = await readRecords(logPath);
+    assert.equal(toolCalls(records, 'get_desktop_state').length, 0);
+  });
+
   it('a set_config RPC error rejects startup (fail closed — no warn-and-continue)', async () => {
     // The old code swallowed this with console.warn and reported startup ok,
     // letting later scope:desktop actions run against an unconfigured scope.

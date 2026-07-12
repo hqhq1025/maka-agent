@@ -20,6 +20,7 @@
 // fields, and every `key` action fail before any key event is posted. Scroll,
 // drag, failed clicks, another session, and another turn never establish ownership.
 import { execFile, spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
+import { AsyncLocalStorage } from 'node:async_hooks';
 import { rmSync } from 'node:fs';
 import { access, mkdir, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -185,6 +186,8 @@ interface PendingRequest {
   resolve: (r: JsonRpcResponse) => void;
   reject: (e: Error) => void;
 }
+
+const operationDeadline = new AsyncLocalStorage<number | undefined>();
 
 /** Line-delimited JSON-RPC 2.0 client over a long-lived cua-driver child. */
 class CuaDriverClient {
@@ -399,7 +402,17 @@ class CuaDriverClient {
     this.assertActive();
     await this.ensureStarted(signal);
     this.assertActive();
-    const timeoutMs = this.opts.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+    const deadlineUnixMilliseconds = operationDeadline.getStore();
+    const remainingMs = deadlineUnixMilliseconds === undefined
+      ? undefined
+      : Math.floor(deadlineUnixMilliseconds - Date.now());
+    if (remainingMs !== undefined && remainingMs <= 0) {
+      throw new Error('timeout');
+    }
+    const timeoutMs = Math.min(
+      this.opts.timeoutMs ?? DEFAULT_TIMEOUT_MS,
+      remainingMs ?? Number.POSITIVE_INFINITY,
+    );
     try {
       const res = await this.request('tools/call', { name, arguments: args }, { timeoutMs, signal });
       if (res.error) throw new Error(`cua-driver ${name}: ${res.error.message}`);
@@ -923,7 +936,8 @@ export function createCuaDriverBackend(opts: CuaDriverBackendOptions): CuDispatc
 
     async run(action, signal, context: CuRunContext): Promise<CuRunResult> {
       const sessionGeneration = sessionGenerations.get(context.sessionId) ?? 0;
-      return withOperationQueue(signal, async () => {
+      return operationDeadline.run(context.deadlineUnixMilliseconds, () =>
+        withOperationQueue(signal, async () => {
         // A new turn invalidates any prior keyboard ownership before this action.
         targetForContext(context);
         // A left-click attempt transfers ownership. Clear the old target before
@@ -1457,7 +1471,8 @@ export function createCuaDriverBackend(opts: CuaDriverBackendOptions): CuDispatc
         default:
           return { outcome: { ok: false, error: 'unsupported_action', message: 'action not mapped to cua-driver' } };
         }
-      });
+        }),
+      );
     },
 
     clearSession(sessionId) {

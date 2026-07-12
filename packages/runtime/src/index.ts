@@ -86,6 +86,8 @@ export type {
   CuRunResult,
   CuOverlayHook,
   CuOverlayHookContext,
+  CuOperationTiming,
+  CuPresentationFence,
 } from './computer-use-tools.js';
 export {
   buildManagedBashTool,

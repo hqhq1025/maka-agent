@@ -736,3 +736,31 @@ Maka adoption:
 6. Expand E2E into separate Electron/CDP and native AppKit/AX lanes, then run
    full atomic coverage, pairwise state transitions, critical triples, and
    seeded replay.
+
+### Reproduced Operation Coordinator
+
+The standalone reproduction lab confirmed the transport and lifecycle against
+the installed Codex App and hermetic fake native pipes. Maka implements the
+portable part of that contract:
+
+```text
+queued
+  -> presentation ready-for-interaction (or explicit fail-open timeout)
+  -> dispatch start + fresh deadline
+  -> serialized cua-driver operation
+  -> verified backend result
+  -> presentation completion
+```
+
+- `CuOperationTiming` is the shared operation envelope.
+- `CuPresentationFence` separates interaction readiness from full visual
+  completion.
+- The renderer emits actual phase acknowledgements from cursor path progress:
+  progress >= 82%, remaining distance <= 24 logical points, or path finished.
+- Pointer actions that snap immediately report readiness before native
+  execution, but report full completion only after backend completion/pulse.
+- The preload acknowledgement surface is intentionally narrow:
+  `overlay:presentation-phase` with `{ actionId, phase }`.
+- Each operation deadline is generated after queue/presentation readiness and
+  before backend dispatch. The remaining budget constrains all cua-driver RPCs
+  within that operation.

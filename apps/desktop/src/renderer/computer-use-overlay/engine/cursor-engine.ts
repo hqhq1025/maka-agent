@@ -95,6 +95,17 @@ export class CursorEngine {
   isVisible(): boolean {
     return this.pos[0] >= -100;
   }
+  motionProgress(): number {
+    if (!this.path) return 1;
+    return Math.min(1, this.dist / Math.max(this.path.length, 1));
+  }
+  motionDistanceRemaining(): number {
+    if (!this.path) return 0;
+    return Math.max(0, this.path.length - this.dist);
+  }
+  hasMotionPath(): boolean {
+    return this.path !== null;
+  }
 
   /** Advance the animation by dt seconds. */
   tick(dt: number): void {

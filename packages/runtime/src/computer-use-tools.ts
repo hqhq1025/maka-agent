@@ -40,6 +40,12 @@ export interface CuRunContext {
   sessionId: string;
   turnId: string;
   toolCallId: string;
+  operationId?: string;
+  queuedAtUnixMilliseconds?: number;
+  dispatchStartedAtUnixMilliseconds?: number;
+  deadlineUnixMilliseconds?: number;
+  presentationReadyAtUnixMilliseconds?: number;
+  presentationReadySource?: 'none' | 'fence' | 'timeout';
 }
 
 /**
@@ -61,6 +67,23 @@ export interface CuOverlayHookContext {
   toolCallId: string;
   action?: CuAction;
   result?: CuRunResult;
+  operation?: CuOperationTiming;
+  presentation?: CuPresentationFence;
+}
+
+export interface CuOperationTiming {
+  operationId: string;
+  queuedAtUnixMilliseconds: number;
+  dispatchStartedAtUnixMilliseconds?: number;
+  deadlineUnixMilliseconds?: number;
+  presentationReadyAtUnixMilliseconds?: number;
+  presentationReadySource?: 'none' | 'fence' | 'timeout';
+  completedAtUnixMilliseconds?: number;
+}
+
+export interface CuPresentationFence {
+  readyForInteraction: Promise<void>;
+  finished: Promise<void>;
 }
 
 /**
@@ -71,7 +94,7 @@ export interface CuOverlayHookContext {
  * so it fires identically regardless of which host dispatch backend runs the action.
  */
 export interface CuOverlayHook {
-  onActionBegin(action: CuAction, ctx: CuOverlayHookContext): void;
+  onActionBegin(action: CuAction, ctx: CuOverlayHookContext): CuPresentationFence | void;
   onActionEnd?(ctx: CuOverlayHookContext): void;
 }
 
@@ -192,8 +215,42 @@ interface ComputerToolResult {
   screenshot?: { base64: string; mimeType: string };
 }
 
-export function buildComputerUseTools(deps: { backend: CuDispatchBackend; overlay?: CuOverlayHook }): MakaTool[] {
+export function buildComputerUseTools(deps: {
+  backend: CuDispatchBackend;
+  overlay?: CuOverlayHook;
+  now?: () => number;
+  operationTimeoutMs?: number;
+  presentationReadyTimeoutMs?: number;
+}): MakaTool[] {
   let invocationQueue = Promise.resolve();
+  const now = deps.now ?? Date.now;
+  const operationTimeoutMs = deps.operationTimeoutMs ?? 120_000;
+  const presentationReadyTimeoutMs = deps.presentationReadyTimeoutMs ?? 1_000;
+
+  async function waitForPresentationReady(
+    fence: CuPresentationFence | undefined,
+    signal: AbortSignal,
+  ): Promise<'none' | 'fence' | 'timeout'> {
+    if (!fence) return 'none';
+    return new Promise<'fence' | 'timeout'>((resolve, reject) => {
+      let settled = false;
+      const finish = (source: 'fence' | 'timeout', error?: unknown) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        signal.removeEventListener('abort', onAbort);
+        if (error) reject(error);
+        else resolve(source);
+      };
+      const timer = setTimeout(() => finish('timeout'), presentationReadyTimeoutMs);
+      const onAbort = () => finish('timeout', signal.reason ?? new Error('aborted'));
+      signal.addEventListener('abort', onAbort, { once: true });
+      fence.readyForInteraction.then(
+        () => finish('fence'),
+        () => finish('fence'),
+      );
+    });
+  }
 
   async function withInvocationQueue<T>(
     signal: AbortSignal,
@@ -235,6 +292,7 @@ export function buildComputerUseTools(deps: { backend: CuDispatchBackend; overla
       toolCallId,
     }): Promise<ComputerToolResult> => {
       if (abortSignal.aborted) return { text: 'computer aborted before start' };
+      const queuedAtUnixMilliseconds = now();
       return withInvocationQueue(abortSignal, async () => {
         // S12: re-check TCC at action-start; cached "granted" is insufficient.
         const tcc = await deps.backend.preflight(abortSignal);
@@ -250,12 +308,44 @@ export function buildComputerUseTools(deps: { backend: CuDispatchBackend; overla
         // Visual seam: drive the agent-cursor overlay at the coordinate authority
         // point (declared px in `action`), backend-agnostic and display-only. Never
         // throws into dispatch — a broken overlay must not break the action.
-        const overlayCtx: CuOverlayHookContext = { sessionId, toolCallId, action };
-        const runCtx: CuRunContext = { sessionId, turnId, toolCallId };
-        try { deps.overlay?.onActionBegin(action, overlayCtx); } catch { /* overlay is best-effort */ }
+        const operation: CuOperationTiming = {
+          operationId: toolCallId,
+          queuedAtUnixMilliseconds,
+        };
+        const overlayCtx: CuOverlayHookContext = {
+          sessionId,
+          toolCallId,
+          action,
+          operation,
+        };
         try {
+          overlayCtx.presentation = deps.overlay?.onActionBegin(action, overlayCtx) ?? undefined;
+        } catch {
+          // Presentation is best-effort and cannot block native dispatch.
+        }
+        try {
+          operation.presentationReadySource = await waitForPresentationReady(
+            overlayCtx.presentation,
+            abortSignal,
+          );
+          operation.presentationReadyAtUnixMilliseconds = now();
+          operation.dispatchStartedAtUnixMilliseconds = now();
+          operation.deadlineUnixMilliseconds =
+            operation.dispatchStartedAtUnixMilliseconds + operationTimeoutMs;
+          const runCtx: CuRunContext = {
+            sessionId,
+            turnId,
+            toolCallId,
+            operationId: operation.operationId,
+            queuedAtUnixMilliseconds: operation.queuedAtUnixMilliseconds,
+            presentationReadyAtUnixMilliseconds: operation.presentationReadyAtUnixMilliseconds,
+            presentationReadySource: operation.presentationReadySource,
+            dispatchStartedAtUnixMilliseconds: operation.dispatchStartedAtUnixMilliseconds,
+            deadlineUnixMilliseconds: operation.deadlineUnixMilliseconds,
+          };
           const result = await deps.backend.run(action, abortSignal, runCtx);
           overlayCtx.result = result;
+          operation.completedAtUnixMilliseconds = now();
           // Carry the screenshot base64 on the raw result (which becomes the ai-sdk
           // tool `output`) so `toModelOutput` below can hand the vision model an image
           // block. Kept OFF `text`: coerceResultContent projects this object to a
@@ -266,6 +356,7 @@ export function buildComputerUseTools(deps: { backend: CuDispatchBackend; overla
             ? { text, screenshot: { base64: result.screenshot.base64, mimeType: result.screenshot.mimeType } }
             : { text };
         } finally {
+          operation.completedAtUnixMilliseconds ??= now();
           try { deps.overlay?.onActionEnd?.(overlayCtx); } catch { /* best-effort */ }
         }
       });

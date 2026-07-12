@@ -22,6 +22,7 @@
     "build:cu-appkit-fixture": "node scripts/build-cu-appkit-fixture.mjs",
     "smoke:cu-appkit-fixture": "node scripts/cu-e2e-appkit-client.mjs smoke",
     "e2e:computer-use": "npm --workspace @maka/core run build && npm --workspace @maka/runtime run build && npm --workspace @maka/computer-use run build && npm --workspace @maka/desktop run build:main && npm --workspace @maka/desktop run build:overlay && node scripts/cu-e2e-launcher.mjs",
+    "e2e:computer-use:presentation": "MAKA_CU_E2E_PRESENTATION_ONLY=1 npm run e2e:computer-use",
     "e2e:computer-use:repeat": "node scripts/cu-e2e-repeat.mjs --runs 10",
     "dev": "npm --workspace @maka/desktop run dev:hmr --",
     "dev:full": "npm run build && npm --workspace @maka/desktop run start",

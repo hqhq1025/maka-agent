@@ -6,6 +6,7 @@
 import { CursorEngine } from '../renderer/computer-use-overlay/engine/cursor-engine.js';
 
 interface MovePayload {
+  actionId: string;
   x: number;
   y: number;
   kind?: 'move' | 'click' | 'drag' | 'scroll';
@@ -20,6 +21,10 @@ declare global {
       onMove(cb: (p: MovePayload) => void): void;
       onComplete(cb: (p: CompletePayload) => void): void;
       onReset(cb: (p: ResetPayload) => void): void;
+      reportPresentationPhase(
+        actionId: string,
+        phase: 'readyForInteraction' | 'finished',
+      ): void;
     };
   }
 }
@@ -41,6 +46,14 @@ window.addEventListener('resize', resize);
 const engine = new CursorEngine();
 let running = false;
 let last = 0;
+let activeActionId: string | null = null;
+let readySent = false;
+let waitForNativeCompletion = false;
+
+function reportPhase(phase: 'readyForInteraction' | 'finished'): void {
+  if (!activeActionId) return;
+  window.cursorOverlay?.reportPresentationPhase(activeActionId, phase);
+}
 
 function loop(now: number): void {
   const dt = Math.min(0.05, (now - last) / 1000);
@@ -50,10 +63,25 @@ function loop(now: number): void {
   ctx.clearRect(0, 0, canvas.width, canvas.height);
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   engine.paint(ctx, 0, 0); // MAIN sends window-local coords, so origin is (0,0)
+  if (
+    !readySent
+    && (
+      !engine.hasMotionPath()
+      || engine.motionProgress() >= 0.82
+      || engine.motionDistanceRemaining() <= 24
+    )
+  ) {
+    readySent = true;
+    reportPhase('readyForInteraction');
+  }
   if (engine.isMoving()) {
     requestAnimationFrame(loop);
   } else {
     running = false; // block on idle — leave the last frame painted
+    if (!waitForNativeCompletion) {
+      reportPhase('finished');
+      activeActionId = null;
+    }
   }
 }
 function kick(): void {
@@ -69,12 +97,18 @@ window.cursorOverlay?.onReset((p) => {
   kick();
 });
 window.cursorOverlay?.onMove((p) => {
+  activeActionId = p.actionId;
+  readySent = false;
+  waitForNativeCompletion = p.instant === true && p.kind !== 'move';
   if (p.instant === true) engine.completeAt(p.x, p.y);
   else engine.moveTo(p.x, p.y);
   engine.pressed = p.pressed === true;
   kick();
 });
 window.cursorOverlay?.onComplete((p) => {
+  if (p.actionId && activeActionId && p.actionId !== activeActionId) return;
+  if (p.actionId) activeActionId = p.actionId;
+  waitForNativeCompletion = false;
   engine.completeAt(p.x, p.y, p.pulse === true);
   kick();
 });

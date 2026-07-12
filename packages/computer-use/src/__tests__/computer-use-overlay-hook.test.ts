@@ -105,6 +105,26 @@ test('failed action completion reconciles without a success pulse', () => {
   assert.equal(completions[0]?.pulse, false);
 });
 
+test('thrown backend action still completes presentation without a pulse', () => {
+  const { controller, completions } = fakeController();
+  const hook = createComputerUseOverlayHook(controller as never, screenAt(2));
+  const action: CuAction = { type: 'left_click', coordinate: { x: 40, y: 30 } };
+  hook.onActionBegin(action, { sessionId: 's', toolCallId: 'thrown' });
+  hook.onActionEnd?.({
+    sessionId: 's',
+    toolCallId: 'thrown',
+    action,
+  });
+  assert.deepEqual(completions[0], {
+    actionId: 'thrown',
+    sessionId: 's',
+    screenX: 20,
+    screenY: 15,
+    kind: 'click',
+    pulse: false,
+  });
+});
+
 test('scroll → kind:scroll, drag → kind:drag, mouse_move → kind:move', () => {
   const { controller, moves } = fakeController();
   const hook = createComputerUseOverlayHook(controller as never, screenAt(1));

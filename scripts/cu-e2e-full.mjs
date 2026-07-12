@@ -61,6 +61,7 @@ async function createFixtureWindow(label, slug, bounds, reveal = true) {
   });
   fixture.setMenuBarVisibility(false);
   fixture.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
+  fixture.setAlwaysOnTop(true, 'floating');
   const html = `<!doctype html>
 <html>
   <head>
@@ -315,6 +316,7 @@ const overlayCapturePromises = [];
 const executedAtomicCaseIds = new Set();
 const beginCaptureByAction = new Map();
 const completeCaptureByAction = new Map();
+const presentationPhasePromises = [];
 const report = {
   version: 3,
   runId: process.env.MAKA_CU_E2E_RUN_ID || `cu-e2e-${Date.now()}`,
@@ -635,12 +637,31 @@ async function run() {
     move(input) {
       const eventAt = Date.now();
       overlayMoves.push({ phase: 'begin', ...input, ts: eventAt });
-      overlay.move(input);
+      const fence = overlay.move(input);
+      if (fence) {
+        presentationPhasePromises.push(
+          fence.readyForInteraction.then(() => {
+            overlayMoves.push({
+              phase: 'readyForInteraction',
+              actionId: input.actionId,
+              ts: Date.now(),
+            });
+          }),
+          fence.finished.then(() => {
+            overlayMoves.push({
+              phase: 'finished',
+              actionId: input.actionId,
+              ts: Date.now(),
+            });
+          }),
+        );
+      }
       const beginCapture = captureOverlayPhase(input, 'begin', eventAt, 20);
       if (beginCapture) beginCaptureByAction.set(input.actionId, beginCapture);
       if (input.kind === 'move') {
         captureOverlayPhase(input, 'move-mid', eventAt, 140);
       }
+      return fence;
     },
     complete(input) {
       const completedAt = Date.now();
@@ -652,9 +673,11 @@ async function run() {
   };
   const hook = createComputerUseOverlayHook(sink, screen);
   const observedResults = new Map();
+  const observedContexts = new Map();
   const observedBackend = {
     preflight: (actionSignal) => backend.preflight(actionSignal),
     run: async (action, actionSignal, context) => {
+      observedContexts.set(context.toolCallId, context);
       const beginCapture = beginCaptureByAction.get(context.toolCallId);
       if (beginCapture) {
         await beginCapture;
@@ -729,9 +752,19 @@ async function run() {
       const startedAt = Date.now();
       if (activeBackend !== backend) {
         const result = await activeBackend.run(action, signal, context);
-        report.actions.push({
-          action,
-          context,
+      report.actions.push({
+        action,
+        context: {
+          sessionId: context.sessionId,
+          turnId: context.turnId,
+          toolCallId: context.toolCallId,
+          operationId: context.operationId,
+          queuedAtUnixMilliseconds: context.queuedAtUnixMilliseconds,
+          presentationReadyAtUnixMilliseconds: context.presentationReadyAtUnixMilliseconds,
+          presentationReadySource: context.presentationReadySource,
+          dispatchStartedAtUnixMilliseconds: context.dispatchStartedAtUnixMilliseconds,
+          deadlineUnixMilliseconds: context.deadlineUnixMilliseconds,
+        },
           startedAt,
           durationMs: Date.now() - startedAt,
           outcome: result.outcome,
@@ -754,15 +787,23 @@ async function run() {
         completeCaptureByAction.delete(context.toolCallId);
       }
       const result = observedResults.get(context.toolCallId);
+      const runContext = observedContexts.get(context.toolCallId);
       observedResults.delete(context.toolCallId);
+      observedContexts.delete(context.toolCallId);
       if (!result) throw new Error(`computer tool produced no observed backend result for ${context.toolCallId}`);
       report.actions.push({
         action,
         modelArgs: modelArgs(action),
         context: {
-          sessionId: context.sessionId,
-          turnId: context.turnId,
-          toolCallId: context.toolCallId,
+          sessionId: runContext?.sessionId ?? context.sessionId,
+          turnId: runContext?.turnId ?? context.turnId,
+          toolCallId: runContext?.toolCallId ?? context.toolCallId,
+          operationId: runContext?.operationId,
+          queuedAtUnixMilliseconds: runContext?.queuedAtUnixMilliseconds,
+          presentationReadyAtUnixMilliseconds: runContext?.presentationReadyAtUnixMilliseconds,
+          presentationReadySource: runContext?.presentationReadySource,
+          dispatchStartedAtUnixMilliseconds: runContext?.dispatchStartedAtUnixMilliseconds,
+          deadlineUnixMilliseconds: runContext?.deadlineUnixMilliseconds,
         },
         startedAt,
         durationMs: Date.now() - startedAt,
@@ -808,6 +849,65 @@ async function run() {
   }
   const scale = frame.widthPx / display.bounds.width;
   check('device/logical scale is finite', Number.isFinite(scale) && scale > 0, `scale=${scale}`);
+
+  if (process.env.MAKA_CU_E2E_PRESENTATION_ONLY === '1') {
+    console.log('\n3. Presentation-only operation fence');
+    const target = {
+      x: Math.round(frame.widthPx * 0.65),
+      y: Math.round(frame.heightPx * 0.35),
+    };
+    const overlayCountBefore = overlayMoves.length;
+    const move = await act({ type: 'mouse_move', coordinate: target });
+    check('presentation-only mouse_move dispatched', move.outcome.ok);
+    const actionRecord = report.actions.at(-1);
+    const actionId = actionRecord?.context?.toolCallId;
+    const deadline = Date.now() + 3_000;
+    while (
+      Date.now() < deadline
+      && !overlayMoves.some(
+        (entry) => entry.actionId === actionId && entry.phase === 'finished',
+      )
+    ) {
+      await sleep(20, signal);
+    }
+    const phases = overlayMoves
+      .slice(overlayCountBefore)
+      .filter((entry) => entry.actionId === actionId);
+    const ready = phases.find((entry) => entry.phase === 'readyForInteraction');
+    const finished = phases.find((entry) => entry.phase === 'finished');
+    const context = actionRecord?.context;
+    const completedAt = actionRecord?.startedAt + actionRecord?.durationMs;
+    check(
+      'renderer acknowledged readyForInteraction before native completion',
+      context?.presentationReadySource === 'fence'
+        && Number.isFinite(ready?.ts)
+        && context.presentationReadyAtUnixMilliseconds <= context.dispatchStartedAtUnixMilliseconds
+        && context.dispatchStartedAtUnixMilliseconds <= completedAt,
+      JSON.stringify({ context, ready }),
+    );
+    check(
+      'renderer acknowledged full presentation completion after interaction readiness',
+      Number.isFinite(ready?.ts)
+        && Number.isFinite(finished?.ts)
+        && ready.ts <= finished.ts,
+      JSON.stringify({ ready, finished }),
+    );
+    check(
+      'presentation-only deadline is dispatch-relative and still live',
+      context?.deadlineUnixMilliseconds
+        === context?.dispatchStartedAtUnixMilliseconds + 120_000
+        && completedAt < context.deadlineUnixMilliseconds,
+      JSON.stringify(context),
+    );
+    safetyMonitor.assertStable('presentation-only operation');
+    const presentationFailures = results.filter((result) => !result.pass);
+    if (presentationFailures.length > 0) {
+      throw new Error(
+        `presentation-only operation failed: ${presentationFailures.map((entry) => entry.name).join(', ')}`,
+      );
+    }
+    return;
+  }
 
   console.log('\n3. Fail-closed keyboard with no target');
   freshBackend = createCuaDriverBackend({
@@ -1473,6 +1573,54 @@ async function run() {
     liveCoverage.coveredActions === liveCoverage.totalActions
       && liveCoverage.branchesCovered,
     JSON.stringify(liveCoverage),
+  );
+  const timedOperations = report.actions.filter(
+    (entry) => Number.isFinite(entry.context?.dispatchStartedAtUnixMilliseconds),
+  );
+  const invalidTimings = timedOperations.filter((entry) => {
+    const queued = entry.context.queuedAtUnixMilliseconds;
+    const readyAt = entry.context.presentationReadyAtUnixMilliseconds;
+    const dispatchAt = entry.context.dispatchStartedAtUnixMilliseconds;
+    const deadline = entry.context.deadlineUnixMilliseconds;
+    const completedAt = entry.startedAt + entry.durationMs;
+    return !(
+      queued <= readyAt
+      && readyAt <= dispatchAt
+      && dispatchAt <= completedAt
+      && completedAt < deadline
+      && entry.context.presentationReadySource !== 'timeout'
+    );
+  });
+  await Promise.allSettled(presentationPhasePromises);
+  const coordinateActionIds = report.actions
+    .filter((entry) => entry.action?.coordinate || entry.action?.startCoordinate)
+    .map((entry) => entry.context?.toolCallId)
+    .filter(Boolean);
+  const readyActionIds = new Set(
+    overlayMoves
+      .filter((entry) => entry.phase === 'readyForInteraction')
+      .map((entry) => entry.actionId),
+  );
+  const finishedActionIds = new Set(
+    overlayMoves
+      .filter((entry) => entry.phase === 'finished')
+      .map((entry) => entry.actionId),
+  );
+  const missingReady = coordinateActionIds.filter((id) => !readyActionIds.has(id));
+  const missingFinished = coordinateActionIds.filter((id) => !finishedActionIds.has(id));
+  report.operationTiming = {
+    total: timedOperations.length,
+    invalid: invalidTimings.map((entry) => entry.context?.toolCallId),
+    missingReady,
+    missingFinished,
+  };
+  check(
+    'operation timing follows queued -> presentation-ready -> dispatch -> completion before deadline',
+    timedOperations.length > 0
+      && invalidTimings.length === 0
+      && missingReady.length === 0
+      && missingFinished.length === 0,
+    JSON.stringify(report.operationTiming),
   );
 
   const failed = results.filter((result) => !result.pass);
