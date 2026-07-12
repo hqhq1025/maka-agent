@@ -1255,6 +1255,15 @@ export function createCuaDriverBackend(opts: CuaDriverBackendOptions): CuDispatc
                 },
               };
             }
+            trace({
+              type: 'dispatch',
+              toolCallId: context.toolCallId,
+              actionType: action.type,
+              tool: 'drag',
+              pid: from.pid,
+              windowId: from.windowId,
+              address: 'px',
+            });
             const r = await actionClient.callTool(
               'drag',
               {
@@ -1412,8 +1421,33 @@ export function createCuaDriverBackend(opts: CuaDriverBackendOptions): CuDispatc
           // Acknowledge success rather than reporting unsupported for a reasonable,
           // side-effect-free action.
           return { outcome: { ok: true, tier: 'coordinate-background' } };
+        case 'cursor_position':
+          return {
+            outcome: {
+              ok: false,
+              error: 'unsupported_action',
+              message: 'real cursor position is intentionally unavailable because Maka never owns or moves the user pointer',
+            },
+          };
+        case 'left_mouse_down':
+        case 'left_mouse_up':
+          return {
+            outcome: {
+              ok: false,
+              error: 'unsupported_action',
+              message: 'split mouse down/up is refused because background pointer ownership cannot be preserved across tool calls',
+            },
+          };
+        case 'hold_key':
+          return {
+            outcome: {
+              ok: false,
+              error: 'unsupported_action',
+              message: 'background hold_key is refused because keyboard delivery cannot be verified without focus races',
+            },
+          };
         default:
-          return { outcome: { ok: false, error: 'unsupported_action', message: `action '${action.type}' not mapped to cua-driver` } };
+          return { outcome: { ok: false, error: 'unsupported_action', message: 'action not mapped to cua-driver' } };
         }
       });
     },
