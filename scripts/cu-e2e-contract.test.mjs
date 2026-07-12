@@ -47,7 +47,9 @@ test('computer-use E2E continuously guards foreground and real pointer state', (
   assert.doesNotMatch(source + launcher, /execFileSync|spawnSync/);
   assert.match(monitor, /originalFrontmostPid/);
   assert.match(monitor, /originalPointerPosition/);
-  assert.match(monitor, /frontmost PID changed/);
+  assert.match(monitor, /NOTICE\\tfrontmost PID changed/);
+  assert.doesNotMatch(monitor, /CHANGE\\tfrontmost PID changed/);
+  assert.match(launcher, /kind === ['"]NOTICE['"]/);
   assert.match(monitor, /real pointer jumped without recent HID input/);
   assert.match(launcher, /cu-e2e-monitor\.swift/);
   assert.match(source, /abortController\.abort\(failureError\)/);
@@ -64,10 +66,11 @@ test('computer-use E2E continuously guards foreground and real pointer state', (
 });
 
 test('computer-use E2E passes run context and tears down only owned windows', () => {
-  assert.match(source, /computerTool\.impl\(modelArgs\(action\), context\)/);
+  assert.match(source, /const sentArgs = modelArgs\(action\)/);
+  assert.match(source, /computerTool\.impl\(sentArgs, context\)/);
+  assert.match(source, /modelArgs:\s*sentArgs/);
   assert.match(source, /backend\.run\(action, actionSignal, context\)/);
   assert.match(source, /observedResults\.set\(context\.toolCallId, result\)/);
-  assert.match(source, /modelArgs:\s*modelArgs\(action\)/);
 
   assert.match(source, /const fixtureWindows = new Set\(\)/);
   assert.match(source, /for \(const fixture of fixtureWindows\)/);

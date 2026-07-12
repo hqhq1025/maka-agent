@@ -163,3 +163,25 @@
   and atomic E2E case.
 - Fixed `wait` so the backend honors the full runtime contract instead of
   silently returning after 10 seconds; added duration and abort regressions.
+- Completed #699 execution-layer Window / Frame Binding:
+  - added full observation/window/display/page identities
+  - required provider actions to echo `frame_id + frame_epoch`
+  - bound model/source/logical/window coordinates before executor dispatch
+  - added canonical action claim/replay protection
+  - removed backend implicit keyboard ownership
+  - added fresh AX/DOM content fingerprints and postcondition observations
+  - added stable fail-closed frame/target/page/user-intervention errors
+  - allowed normal user frontmost-window changes while retaining the real
+    pointer P0 sentinel
+  - wired session/turn/abort cleanup through the runtime frame store
+- Verification:
+  - core: 812/812
+  - runtime frame/tool focused tests: 32/32
+  - computer-use: 87/87
+  - scripts/coverage/sequence: 20/20
+  - Desktop typecheck: passed
+  - cua-driver bundle/provenance gate: passed
+  - real E2E proved a screenshot-bound click reached the exact captured
+    Electron window before a later harness issue was fixed; subsequent full
+    reruns under a full-screen ChatGPT window stopped before input because the
+    fixture was occluded, as required by the fail-closed target gate.

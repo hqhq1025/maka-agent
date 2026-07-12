@@ -3,6 +3,7 @@ import { describe, it } from 'node:test';
 
 import {
   CUA_INSPECT_PREPARED_ELEMENT_SCRIPT,
+  CUA_PAGE_DOCUMENT_FINGERPRINT_SCRIPT,
   buildCuaPrepareElementAtScreenPointScript,
   buildCuaSemanticPointerActionScript,
   parseCuaFocusedPageElement,
@@ -42,6 +43,8 @@ describe('resolveCuaPageTextTarget', () => {
 
     assert.ok(resolved);
     assert.equal(resolved.port, 9333);
+    assert.equal(resolved.pageTargetId, 'b');
+    assert.equal(resolved.pageUrl, 'data:text/html,window-b#maka-b');
     assert.equal(resolved.targetUrlContains, '#maka-b');
   });
 
@@ -122,6 +125,12 @@ describe('semantic pointer action script', () => {
     assert.match(drag, /dispatchEvent\(new Event\('input'/);
     assert.match(drag, /range_value_did_not_persist/);
     assert.match(drag, /unsupported_range_direction/);
+  });
+
+  it('builds a privacy-preserving SHA-256 page freshness fingerprint', () => {
+    assert.match(CUA_PAGE_DOCUMENT_FINGERPRINT_SCRIPT, /crypto\.subtle\.digest\('SHA-256'/);
+    assert.match(CUA_PAGE_DOCUMENT_FINGERPRINT_SCRIPT, /TextEncoder/);
+    assert.doesNotMatch(CUA_PAGE_DOCUMENT_FINGERPRINT_SCRIPT, /2166136261|Math\.imul/);
   });
 
   it('builds read-only element scripts and parses their JSON result', () => {

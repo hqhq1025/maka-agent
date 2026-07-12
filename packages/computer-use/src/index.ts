@@ -21,6 +21,7 @@ export type {
 } from './cua-driver-page-target.js';
 export {
   CUA_INSPECT_PREPARED_ELEMENT_SCRIPT,
+  CUA_PAGE_DOCUMENT_FINGERPRINT_SCRIPT,
   buildCuaPrepareElementAtScreenPointScript,
   buildCuaSemanticPointerActionScript,
   parseCuaFocusedPageElement,
@@ -40,6 +41,8 @@ export type {
 } from './cua-driver-snapshot.js';
 
 export { cuaDriverBinaryPath, resolveCuaDriverBinaryPath } from './cua-driver-path.js';
+export { resolveCuaDisplaySnapshots } from './display-snapshot.js';
+export type { CuaHostDisplay } from './display-snapshot.js';
 
 export { createComputerUseOverlayHook, declaredPxToScreenPoint } from './computer-use-overlay-hook.js';
 export type {

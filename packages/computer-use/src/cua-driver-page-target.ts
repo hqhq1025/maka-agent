@@ -17,6 +17,8 @@ export interface CuaFocusedPageElement {
 
 export interface CuaResolvedPageTextTarget {
   port: number;
+  pageTargetId: string;
+  pageUrl: string;
   targetUrlContains: string;
 }
 
@@ -61,6 +63,28 @@ export const CUA_INSPECT_PREPARED_ELEMENT_SCRIPT = `(() => {
   const element = globalThis.__makaComputerUseTarget;
   if (!element) return JSON.stringify({ editable: false, value: '', tagName: '' });
   return JSON.stringify(globalThis.__makaComputerUseReadElement(element));
+})()`;
+
+export const CUA_PAGE_DOCUMENT_FINGERPRINT_SCRIPT = `(async () => {
+  const values = [location.href, String(performance.timeOrigin)];
+  for (const element of document.querySelectorAll('*')) {
+    values.push(
+      element.tagName,
+      element.id,
+      element.getAttribute?.('role') ?? '',
+      element.getAttribute?.('aria-label') ?? '',
+      'value' in element ? String(element.value ?? '') : '',
+      'checked' in element ? String(element.checked ?? '') : '',
+      'selected' in element ? String(element.selected ?? '') : '',
+      element.childElementCount === 0 ? String(element.textContent ?? '') : ''
+    );
+  }
+  const bytes = new TextEncoder().encode(values.join('\\u0000'));
+  const digest = await crypto.subtle.digest('SHA-256', bytes);
+  const fingerprint = Array.from(new Uint8Array(digest))
+    .map((byte) => byte.toString(16).padStart(2, '0'))
+    .join('');
+  return JSON.stringify({ fingerprint });
 })()`;
 
 const TEXT_INPUT_TYPES = [
@@ -115,8 +139,18 @@ export async function resolveCuaPageTextTarget(
 
   return {
     port: target.port,
+    pageTargetId: pageTargetId(target.webSocketDebuggerUrl),
+    pageUrl: target.url,
     targetUrlContains: uniqueUrlHint(target, targets),
   };
+}
+
+function pageTargetId(webSocketDebuggerUrl: string): string {
+  const marker = '/devtools/page/';
+  const index = webSocketDebuggerUrl.lastIndexOf(marker);
+  return index >= 0
+    ? webSocketDebuggerUrl.slice(index + marker.length)
+    : webSocketDebuggerUrl;
 }
 
 function uniqueUrlHint(

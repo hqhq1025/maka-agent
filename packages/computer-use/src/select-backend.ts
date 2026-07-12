@@ -8,7 +8,13 @@
 // There is ONE backend: cua-driver (Tier-2 coordinate-background, trycua/cua-driver
 // MIT). The runtime's `computer` tool owns the OS-independent Path 18 duties (S12 TCC
 // re-check, S17 typed errors, S18 abort); the backend only marshals dispatch.
-import { buildComputerUseTools, type CuDispatchBackend, type CuOverlayHook } from '@maka/runtime';
+import {
+  buildComputerUseTools,
+  type ComputerUseToolSet,
+  type CuaObservationSnapshot,
+  type CuDispatchBackend,
+  type CuOverlayHook,
+} from '@maka/runtime';
 import { createCuaDriverBackend } from './cua-driver-backend.js';
 import { resolveCuaDriverBinaryPath } from './cua-driver-path.js';
 
@@ -27,9 +33,20 @@ export interface SelectedComputerUseBackend {
   tools: ReturnType<typeof buildComputerUseTools>;
   /** Which backend was chosen, or 'none' when unavailable. */
   backendId: CuBackendId | 'none';
+  clearSession?: (sessionId: string) => void;
 }
 
-const NONE: SelectedComputerUseBackend = { backend: undefined, tools: [], backendId: 'none' };
+function emptyToolSet(): ComputerUseToolSet {
+  return Object.assign([], {
+    clearSession(_sessionId: string) {},
+  });
+}
+
+const NONE: SelectedComputerUseBackend = {
+  backend: undefined,
+  tools: emptyToolSet(),
+  backendId: 'none',
+};
 
 /** The host app bundle id, for cua-driver's TCC responsibility-chain inherit. */
 function resolveHostBundleId(explicit?: string): string {
@@ -47,6 +64,13 @@ export function selectComputerUseBackend(deps?: {
   hostBundleId?: string;
   overlay?: CuOverlayHook;
   compressFrame?: (base64: string, mimeType: string) => { base64: string; mimeType: 'image/png' | 'image/jpeg' };
+  resolveDisplays?: (input: {
+    screenshotWidthPx: number;
+    screenshotHeightPx: number;
+    logicalWidth: number;
+    logicalHeight: number;
+    signal: AbortSignal;
+  }) => Promise<CuaObservationSnapshot['displays']>;
 }): SelectedComputerUseBackend {
   // Fail closed off macOS — the whole capability is AX/ScreenCaptureKit-bound.
   if (process.platform !== 'darwin') return NONE;
@@ -59,8 +83,15 @@ export function selectComputerUseBackend(deps?: {
       binaryPath,
       hostBundleId: resolveHostBundleId(deps?.hostBundleId),
       ...(deps?.compressFrame ? { compressFrame: deps.compressFrame } : {}),
+      ...(deps?.resolveDisplays ? { resolveDisplays: deps.resolveDisplays } : {}),
     });
-    return { backend, tools: buildComputerUseTools({ backend, overlay }), backendId: 'cua-driver' };
+    const tools = buildComputerUseTools({ backend, overlay });
+    return {
+      backend,
+      tools,
+      backendId: 'cua-driver',
+      clearSession: (sessionId) => tools.clearSession(sessionId),
+    };
   } catch (err) {
     // Fail closed → feature unavailable, never crash startup. Log so a genuine
     // construction bug (broken import, throwing resolver) is distinguishable

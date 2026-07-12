@@ -601,9 +601,14 @@ async function run() {
   };
   const hook = createComputerUseOverlayHook(sink, screen);
   const observedResults = new Map();
+  const observedContexts = new Map();
   const observedBackend = {
     preflight: (actionSignal) => backend.preflight(actionSignal),
+    captureObservation: (actionSignal, context) =>
+      backend.captureObservation(actionSignal, context),
+    clearSession: (activeSessionId) => backend.clearSession(activeSessionId),
     run: async (action, actionSignal, context) => {
+      observedContexts.set(context.toolCallId, context);
       const result = await backend.run(action, actionSignal, context);
       observedResults.set(context.toolCallId, result);
       return result;
@@ -615,8 +620,29 @@ async function run() {
   });
   const sessionId = `cu-e2e-${Date.now()}`;
   let actionSequence = 0;
+  let activeFrame;
+
+  function actionConsumesFrame(action) {
+    return ![
+      'screenshot',
+      'wait',
+      'cursor_position',
+      'mouse_move',
+      'zoom',
+    ].includes(action.type);
+  }
 
   function modelArgs(action) {
+    const frameBinding = action.type === 'screenshot'
+      || action.type === 'wait'
+      || action.type === 'cursor_position'
+      ? {}
+      : activeFrame
+        ? {
+            frame_id: activeFrame.frameId,
+            frame_epoch: activeFrame.frameEpoch,
+          }
+        : {};
     switch (action.type) {
       case 'screenshot':
       case 'cursor_position':
@@ -629,24 +655,26 @@ async function run() {
       case 'triple_click':
       case 'left_mouse_down':
       case 'left_mouse_up':
-        return { action: action.type, coordinate: [action.coordinate.x, action.coordinate.y] };
+        return { action: action.type, coordinate: [action.coordinate.x, action.coordinate.y], ...frameBinding };
       case 'left_click_drag':
         return {
           action: action.type,
           start_coordinate: [action.startCoordinate.x, action.startCoordinate.y],
           coordinate: [action.coordinate.x, action.coordinate.y],
+          ...frameBinding,
         };
       case 'type':
       case 'key':
-        return { action: action.type, text: action.text };
+        return { action: action.type, text: action.text, ...frameBinding };
       case 'hold_key':
-        return { action: action.type, text: action.text, duration: action.durationMs / 1000 };
+        return { action: action.type, text: action.text, duration: action.durationMs / 1000, ...frameBinding };
       case 'scroll':
         return {
           action: action.type,
           coordinate: [action.coordinate.x, action.coordinate.y],
           scroll_direction: action.scrollDirection,
           scroll_amount: action.scrollAmount,
+          ...frameBinding,
         };
       case 'wait':
         return { action: action.type, duration: action.durationMs / 1000 };
@@ -654,6 +682,7 @@ async function run() {
         return {
           action: action.type,
           region: [action.region.x1, action.region.y1, action.region.x2, action.region.y2],
+          ...frameBinding,
         };
       default:
         throw new Error(`unsupported E2E action: ${action.type}`);
@@ -690,17 +719,58 @@ async function run() {
         });
         return result;
       }
-      const toolResult = await computerTool.impl(modelArgs(action), context);
-      const result = observedResults.get(context.toolCallId);
+      const sentArgs = modelArgs(action);
+      const toolResult = await computerTool.impl(sentArgs, context);
+      let frameUpdated = false;
+      if (
+        toolResult
+        && typeof toolResult === 'object'
+        && typeof toolResult.frameId === 'string'
+        && typeof toolResult.frameEpoch === 'number'
+      ) {
+        activeFrame = {
+          frameId: toolResult.frameId,
+          frameEpoch: toolResult.frameEpoch,
+        };
+        frameUpdated = true;
+      }
+      const observedResult = observedResults.get(context.toolCallId);
+      if (observedResult && actionConsumesFrame(action) && !frameUpdated) {
+        activeFrame = undefined;
+      }
+      const runContext = observedContexts.get(context.toolCallId);
       observedResults.delete(context.toolCallId);
-      if (!result) throw new Error(`computer tool produced no observed backend result for ${context.toolCallId}`);
+      observedContexts.delete(context.toolCallId);
+      const result = observedResult ?? {
+        outcome: {
+          ok: false,
+          error: String(toolResult?.text ?? '').match(/computer failed: ([a-z_]+)/)?.[1]
+            ?? 'capture_failed',
+          message: String(toolResult?.text ?? 'runtime rejected action before backend dispatch'),
+        },
+      };
       report.actions.push({
         action,
-        modelArgs: modelArgs(action),
+        modelArgs: sentArgs,
         context: {
           sessionId: context.sessionId,
           turnId: context.turnId,
           toolCallId: context.toolCallId,
+          frameId: runContext?.boundAction?.frameId,
+          frameEpoch: runContext?.boundAction?.epoch,
+          actionFingerprint: runContext?.boundAction?.actionFingerprint,
+          target: runContext?.boundAction?.target
+            ? {
+                pid: runContext.boundAction.target.pid,
+                windowId: runContext.boundAction.target.windowId,
+                title: runContext.boundAction.target.title,
+                bounds: runContext.boundAction.target.bounds,
+                zIndex: runContext.boundAction.target.zIndex,
+                page: runContext.boundAction.target.page,
+              }
+            : undefined,
+          sourceCoordinate: runContext?.boundAction?.sourceCoordinate,
+          windowCoordinate: runContext?.boundAction?.windowCoordinate,
         },
         startedAt,
         durationMs: Date.now() - startedAt,
@@ -717,6 +787,15 @@ async function run() {
       });
       return result;
     });
+  }
+
+  async function refreshObservation(label) {
+    const refreshed = await act({ type: 'screenshot' });
+    check(
+      label,
+      refreshed.outcome.ok && Boolean(refreshed.screenshot) && Boolean(activeFrame),
+      JSON.stringify(activeFrame ?? null),
+    );
   }
 
   console.log('1. Safety monitor and preflight');
@@ -879,6 +958,13 @@ async function run() {
     throw new Error('no unobscured fixture layout passed read-only window targeting');
   }
 
+  const boundFrame = await act({ type: 'screenshot' });
+  check(
+    'fixture observation captured after layout stabilization',
+    boundFrame.outcome.ok && Boolean(boundFrame.screenshot) && Boolean(activeFrame),
+    JSON.stringify(activeFrame ?? null),
+  );
+
   const firstTextScreenPoint = await readFixtureScreenPoint(firstWindow, '#target');
   const firstPoint = logicalPointToDeclared(firstTextScreenPoint, display, scale);
   const minHorizontalDistance = Math.abs(firstTextScreenPoint.x - originalPointerPosition.x);
@@ -984,6 +1070,7 @@ async function run() {
   if (!secondInspection.ok) {
     throw new Error('second fixture target is obscured after inactive visibility switch');
   }
+  await refreshObservation('split-window observation captured before cross-window actions');
   const secondTextScreenPoint = await readFixtureScreenPoint(secondWindow, '#target');
   const secondPoint = logicalPointToDeclared(secondTextScreenPoint, display, scale);
 
@@ -1006,6 +1093,7 @@ async function run() {
       && result.outcome.error === 'unsupported_action'
       && !traces.some((event) => event.type === 'dispatch' && event.tool === 'drag'),
   });
+  await refreshObservation('observation refreshed after refused cross-window drag');
   await runAtomicAction({
     caseId: 'cross_window.zoom.refused',
     action: {
@@ -1045,6 +1133,7 @@ async function run() {
       !result.outcome.ok && result.outcome.error === 'unsupported_action',
   });
   requireBackgroundKeyboardRefusal('unverified cmd+a was refused', selectAll);
+  await refreshObservation('observation refreshed after refused key action');
 
   console.log('\n8. Complex pointer task matrix');
   await safetyMonitor.guard('switch fixture visibility back to A', async () => {
@@ -1075,6 +1164,7 @@ async function run() {
   if (!firstInspection.ok) {
     throw new Error('complex fixture targets are obscured after inactive visibility switch');
   }
+  await refreshObservation('single-window observation captured before complex matrix');
   const buttonPoint = logicalPointToDeclared(
     await readFixtureScreenPoint(firstWindow, '#increment'),
     display,
@@ -1297,6 +1387,7 @@ async function run() {
       && traces.filter((event) => event.type === 'dispatch' && event.tool === 'page').length === 1
       && !traces.some((event) => event.type === 'dispatch' && event.tool === 'click'),
   });
+  await refreshObservation('observation refreshed after semantic no-effect failure');
   await runAtomicAction({
     caseId: 'semantic.unsupported.pixel_once',
     action: {
@@ -1319,6 +1410,7 @@ async function run() {
     timeoutMs: 8_000,
     classifyProcess: async () => 'electron',
     resolvePageTextTarget: async () => undefined,
+    allowUnboundActionsForTests: true,
     onTrace: (event) => report.traces.push({ ...event, at: new Date().toISOString() }),
   });
   await runAtomicAction({
@@ -1351,6 +1443,9 @@ async function run() {
         && result.outcome.error === 'unsupported_action'
         && !traces.some((event) => event.type === 'dispatch'),
     });
+    if (actionConsumesFrame(action)) {
+      await refreshObservation(`observation refreshed after ${caseId}`);
+    }
   }
 
   console.log('\n9. Overlay and visual-only movement');

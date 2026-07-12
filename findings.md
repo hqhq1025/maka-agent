@@ -221,6 +221,36 @@
   - copy the operation lifecycle, deadlines, fresh-state identity, resolved
     target authority, and cursor timing split
   - validate Electron/CDP and native AppKit/AX in separate E2E lanes
+
+## Window / Frame Binding
+
+- Root cause of the wrong-window failure: the model acted from one desktop
+  screenshot, but pointer dispatch called `list_windows` again and selected the
+  then-highest z-order window under the bare coordinate. Observation identity
+  and dispatch identity were unrelated.
+- #699 now owns the execution-layer fix only. Model/provider harnesses and
+  `realRunEnabled` scenario policy remain outside this PR.
+- Every screenshot now creates a session/turn-scoped observation containing:
+  - unique `frameId` and monotonic epoch
+  - screenshot dimensions and capture time
+  - display logical/source bounds and scale
+  - layer-0 window PID/window ID/title/app/bounds/z-order
+  - privacy-safe AX content fingerprints
+  - exact Electron `cdpPort + pageTargetId + pageUrl` and DOM fingerprint
+- Coordinate actions must return the latest `frame_id + frame_epoch`. Runtime
+  binds the normalized action to the screenshot-time target and transform,
+  claims a canonical action fingerprint, and passes only the bound action to
+  the executor.
+- Dispatch no longer chooses a target. Fresh WindowServer/CDP/AX state is used
+  only to validate the bound target. Missing, moved, reused, occluded, changed,
+  replayed, or user-mutated targets fail closed without pixel/foreground
+  fallback.
+- Successful stateful actions consume the old frame, require a fresh
+  postcondition observation, and advance the epoch. A verified action whose
+  postcondition cannot be captured becomes `capture_failed`.
+- Keyboard ownership is runtime-owned and contains
+  `session + turn + frame/epoch + bound target`. The backend has no implicit
+  focus/last-click ownership state.
 - Broad action audit found a real bug: runtime allowed `wait` up to 60 seconds
   while the backend silently truncated it to 10 seconds and returned success.
   The backend now honors the full duration and aborts promptly.

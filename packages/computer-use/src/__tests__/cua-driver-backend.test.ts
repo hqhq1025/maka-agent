@@ -18,7 +18,12 @@ import { randomUUID } from 'node:crypto';
 import { after, before, describe, it } from 'node:test';
 
 import type { CuAction } from '@maka/core';
-import type { CuRunContext, CuRunResult } from '@maka/runtime';
+import type {
+  CuaBoundAction,
+  CuaObservationSnapshot,
+  CuRunContext,
+  CuRunResult,
+} from '@maka/runtime';
 import type { CuaResolvedPageTextTarget } from '../cua-driver-page-target.js';
 import { createCuaDriverBackend } from '../cua-driver-backend.js';
 
@@ -28,6 +33,68 @@ const DEFAULT_RUN_CONTEXT: CuRunContext = {
   turnId: 'test-turn',
   toolCallId: 'test-tool',
 };
+
+function boundAction(
+  input: Partial<CuaBoundAction> = {},
+): CuaBoundAction {
+  return {
+    frameId: 'frame-1',
+    epoch: 0,
+    actionFingerprint: 'click',
+    fingerprint: 'bound-click',
+    display: {
+      displayId: 'primary',
+      logicalBounds: { x: 0, y: 0, width: 1512, height: 982 },
+      sourceBoundsPx: { x: 0, y: 0, width: 3024, height: 1964 },
+      scaleFactor: 2,
+    },
+    target: {
+      pid: 4242,
+      windowId: 77,
+      bounds: { x: 100, y: 100, width: 600, height: 400 },
+      sourceBoundsPx: { x: 200, y: 200, width: 1200, height: 800 },
+      zIndex: 5,
+    },
+    sourceCoordinate: { x: 600, y: 400 },
+    displayLogicalCoordinate: { x: 300, y: 200 },
+    windowCoordinate: { x: 400, y: 200 },
+    ...input,
+  };
+}
+
+function boundTypeAction(
+  page?: CuaResolvedPageTextTarget,
+  windowId = 77,
+): CuaBoundAction {
+  return boundAction({
+    actionFingerprint: 'type',
+    fingerprint: `bound-type-${windowId}`,
+    target: {
+      pid: 4242,
+      windowId,
+      bounds: windowId === 77
+        ? { x: 100, y: 100, width: 600, height: 400 }
+        : { x: 100, y: 600, width: 300, height: 300 },
+      sourceBoundsPx: windowId === 77
+        ? { x: 200, y: 200, width: 1200, height: 800 }
+        : { x: 200, y: 1200, width: 600, height: 600 },
+      zIndex: windowId === 77 ? 5 : 3,
+      ...(page
+        ? {
+            page: {
+              cdpPort: page.port,
+              pageTargetId: page.pageTargetId,
+              pageUrl: page.pageUrl,
+              targetUrlContains: page.targetUrlContains,
+            },
+          }
+        : {}),
+    },
+    sourceCoordinate: windowId === 77 ? { x: 600, y: 400 } : { x: 400, y: 1400 },
+    displayLogicalCoordinate: windowId === 77 ? { x: 300, y: 200 } : { x: 200, y: 700 },
+    windowCoordinate: windowId === 77 ? { x: 400, y: 200 } : { x: 200, y: 200 },
+  });
+}
 
 // A CommonJS mock cua-driver. No backticks / ${} inside → embedded via
 // String.raw so \n survives as a literal escape in the written file.
@@ -251,6 +318,18 @@ type TestBackend = Omit<ReturnType<typeof createCuaDriverBackend>, 'run'> & {
   run(action: CuAction, signal: AbortSignal, context?: CuRunContext): Promise<CuRunResult>;
 };
 
+function testPageTarget(
+  input: Partial<CuaResolvedPageTextTarget> = {},
+): CuaResolvedPageTextTarget {
+  return {
+    port: 9333,
+    pageTargetId: 'window-a',
+    pageUrl: 'data:text/html,window-a',
+    targetUrlContains: 'data:text/html,window-a',
+    ...input,
+  };
+}
+
 function delay(ms: number): Promise<void> {
   return new Promise((res) => setTimeout(res, ms));
 }
@@ -319,6 +398,7 @@ function makeBackend(opts: {
   pageFieldValue?: string;
   pageReadbackValue?: string;
   semanticPointerResult?: Record<string, unknown>;
+  displays?: CuaObservationSnapshot['displays'];
   snapshotDelayMs?: number;
   compressFrame?: (b: string, m: string) => { base64: string; mimeType: 'image/png' | 'image/jpeg' };
 } = {}): { backend: TestBackend; logPath: string } {
@@ -348,10 +428,15 @@ function makeBackend(opts: {
     ...(opts.handshakeTimeoutMs !== undefined ? { handshakeTimeoutMs: opts.handshakeTimeoutMs } : {}),
     classifyProcess: async () => opts.processKind ?? 'native',
     resolvePageTextTarget: async () => opts.pageTarget,
+    ...(opts.displays
+      ? { resolveDisplays: async () => opts.displays! }
+      : {}),
+    allowUnboundActionsForTests: true,
   });
   const backend: TestBackend = {
     preflight: (signal) => rawBackend.preflight(signal),
     inspectWindowAt: (point, signal) => rawBackend.inspectWindowAt(point, signal),
+    captureObservation: (signal, context) => rawBackend.captureObservation(signal, context),
     run: (action, signal, context = DEFAULT_RUN_CONTEXT) => rawBackend.run(action, signal, context),
     clearSession: (sessionId) => rawBackend.clearSession(sessionId),
     dispose: () => rawBackend.dispose(),
@@ -509,6 +594,212 @@ describe('cua-driver backend', () => {
     assert.equal(click!.y, 200);
     assert.equal(click!.scope, undefined, 'must NOT use scope:desktop (that warps the real cursor)');
     assert.equal(click!.delivery_mode, undefined, 'must NOT force foreground on click (default Background = no warp / no z-order change)');
+  });
+
+  it('bound click dispatches only to the screenshot-time target window', async () => {
+    const { backend, logPath } = makeBackend({ emptyAx: true });
+    const result = await backend.run(
+      { type: 'left_click', coordinate: { x: 600, y: 400 } } as CuAction,
+      new AbortController().signal,
+      {
+        ...DEFAULT_RUN_CONTEXT,
+        boundAction: boundAction(),
+      },
+    );
+    assert.equal(result.outcome.ok, true);
+    const clicks = toolCalls(await readRecords(logPath), 'click');
+    assert.equal(clicks.length, 1);
+    assert.equal(clicks[0]?.pid, 4242);
+    assert.equal(clicks[0]?.window_id, 77);
+    assert.equal(clicks[0]?.scope, undefined);
+  });
+
+  it('rejects an occluded bound target and performs no click fallback', async () => {
+    const { backend, logPath } = makeBackend({ emptyAx: true });
+    const result = await backend.run(
+      { type: 'left_click', coordinate: { x: 2000, y: 400 } } as CuAction,
+      new AbortController().signal,
+      {
+        ...DEFAULT_RUN_CONTEXT,
+        boundAction: boundAction({
+          target: {
+            pid: 5001,
+            windowId: 91,
+            bounds: { x: 900, y: 100, width: 400, height: 300 },
+            sourceBoundsPx: { x: 1800, y: 200, width: 800, height: 600 },
+            zIndex: 2,
+          },
+          sourceCoordinate: { x: 2000, y: 400 },
+          displayLogicalCoordinate: { x: 1000, y: 200 },
+          windowCoordinate: { x: 200, y: 200 },
+        }),
+      },
+    );
+    assert.equal(result.outcome.ok, false);
+    if (!result.outcome.ok) assert.equal(result.outcome.error, 'target_occluded');
+    assert.equal(toolCalls(await readRecords(logPath), 'click').length, 0);
+  });
+
+  it('rejects changed window identity before dispatch', async () => {
+    const { backend, logPath } = makeBackend({ emptyAx: true });
+    const result = await backend.run(
+      { type: 'left_click', coordinate: { x: 600, y: 400 } } as CuAction,
+      new AbortController().signal,
+      {
+        ...DEFAULT_RUN_CONTEXT,
+        boundAction: boundAction({
+          target: {
+            pid: 4242,
+            windowId: 77,
+            title: 'Old title',
+            bounds: { x: 100, y: 100, width: 600, height: 400 },
+            sourceBoundsPx: { x: 200, y: 200, width: 1200, height: 800 },
+            zIndex: 5,
+          },
+        }),
+      },
+    );
+    assert.equal(result.outcome.ok, false);
+    if (!result.outcome.ok) assert.equal(result.outcome.error, 'target_changed');
+    assert.equal(toolCalls(await readRecords(logPath), 'click').length, 0);
+  });
+
+  it('rejects a missing bound target before dispatch', async () => {
+    const { backend, logPath } = makeBackend({ emptyAx: true });
+    const result = await backend.run(
+      { type: 'left_click', coordinate: { x: 600, y: 400 } } as CuAction,
+      new AbortController().signal,
+      {
+        ...DEFAULT_RUN_CONTEXT,
+        boundAction: boundAction({
+          target: {
+            pid: 9999,
+            windowId: 999,
+            bounds: { x: 100, y: 100, width: 600, height: 400 },
+            sourceBoundsPx: { x: 200, y: 200, width: 1200, height: 800 },
+            zIndex: 5,
+          },
+        }),
+      },
+    );
+    assert.equal(result.outcome.ok, false);
+    if (!result.outcome.ok) assert.equal(result.outcome.error, 'target_missing');
+    assert.equal(toolCalls(await readRecords(logPath), 'click').length, 0);
+  });
+
+  it('rejects a reused window id whose owner identity changed', async () => {
+    const { backend, logPath } = makeBackend({ emptyAx: true });
+    const result = await backend.run(
+      { type: 'left_click', coordinate: { x: 600, y: 400 } } as CuAction,
+      new AbortController().signal,
+      {
+        ...DEFAULT_RUN_CONTEXT,
+        boundAction: boundAction({
+          target: {
+            pid: 4242,
+            windowId: 77,
+            appName: 'Replacement',
+            title: 'Replacement Window',
+            bounds: { x: 100, y: 100, width: 600, height: 400 },
+            sourceBoundsPx: { x: 200, y: 200, width: 1200, height: 800 },
+            zIndex: 5,
+          },
+        }),
+      },
+    );
+    assert.equal(result.outcome.ok, false);
+    if (!result.outcome.ok) assert.equal(result.outcome.error, 'target_changed');
+    assert.equal(toolCalls(await readRecords(logPath), 'click').length, 0);
+  });
+
+  it('rejects changed display transform before dispatch', async () => {
+    const { backend, logPath } = makeBackend({
+      emptyAx: true,
+      displays: [{
+        displayId: 'primary',
+        logicalBounds: { x: 0, y: 0, width: 1512, height: 982 },
+        sourceBoundsPx: { x: 0, y: 0, width: 3024, height: 1964 },
+        scaleFactor: 2,
+      }],
+    });
+    const result = await backend.run(
+      { type: 'left_click', coordinate: { x: 600, y: 400 } } as CuAction,
+      new AbortController().signal,
+      {
+        ...DEFAULT_RUN_CONTEXT,
+        boundAction: boundAction({
+          display: {
+            displayId: 'primary',
+            logicalBounds: { x: 0, y: 0, width: 1512, height: 982 },
+            sourceBoundsPx: { x: 0, y: 0, width: 3024, height: 1964 },
+            scaleFactor: 1,
+          },
+        }),
+      },
+    );
+    assert.equal(result.outcome.ok, false);
+    if (!result.outcome.ok) assert.equal(result.outcome.error, 'target_changed');
+    assert.equal(toolCalls(await readRecords(logPath), 'click').length, 0);
+  });
+
+  it('rejects changed target content as user intervention before dispatch', async () => {
+    const { backend, logPath } = makeBackend({ emptyAx: true });
+    const result = await backend.run(
+      { type: 'left_click', coordinate: { x: 600, y: 400 } } as CuAction,
+      new AbortController().signal,
+      {
+        ...DEFAULT_RUN_CONTEXT,
+        boundAction: boundAction({
+          target: {
+            pid: 4242,
+            windowId: 77,
+            bounds: { x: 100, y: 100, width: 600, height: 400 },
+            sourceBoundsPx: { x: 200, y: 200, width: 1200, height: 800 },
+            zIndex: 5,
+            contentFingerprint: 'stale-content',
+          },
+        }),
+      },
+    );
+    assert.equal(result.outcome.ok, false);
+    if (!result.outcome.ok) assert.equal(result.outcome.error, 'user_intervened');
+    assert.equal(toolCalls(await readRecords(logPath), 'click').length, 0);
+  });
+
+  it('rejects changed Electron page identity without pixel fallback', async () => {
+    const pageTarget = testPageTarget();
+    const { backend, logPath } = makeBackend({
+      processKind: 'electron',
+      pageTarget,
+      emptyAx: true,
+    });
+    const result = await backend.run(
+      { type: 'left_click', coordinate: { x: 600, y: 400 } } as CuAction,
+      new AbortController().signal,
+      {
+        ...DEFAULT_RUN_CONTEXT,
+        boundAction: boundAction({
+          target: {
+            pid: 4242,
+            windowId: 77,
+            bounds: { x: 100, y: 100, width: 600, height: 400 },
+            sourceBoundsPx: { x: 200, y: 200, width: 1200, height: 800 },
+            zIndex: 5,
+            page: {
+              cdpPort: 9333,
+              pageTargetId: 'stale-target',
+              pageUrl: 'data:text/html,window-a',
+              targetUrlContains: 'data:text/html,window-a',
+            },
+          },
+        }),
+      },
+    );
+    assert.equal(result.outcome.ok, false);
+    if (!result.outcome.ok) assert.equal(result.outcome.error, 'page_target_changed');
+    const records = await readRecords(logPath);
+    assert.equal(toolCalls(records, 'page').length, 0);
+    assert.equal(toolCalls(records, 'click').length, 0);
   });
 
   it('click prefers a fresh AX element token for an actionable control', async () => {
@@ -971,12 +1262,12 @@ describe('cua-driver backend', () => {
   it('type after an editable native click uses AXValue and verifies a fresh snapshot', async () => {
     const { backend, logPath } = makeBackend();
     const sig = new AbortController().signal;
-    // Establish the target: click win 77 (device 600,400 → screen 300,200 ∈ win 77).
-    const click = await backend.run({ type: 'left_click', coordinate: { x: 600, y: 400 } } as CuAction, sig);
-    assert.equal(click.outcome.ok, true);
-
-    const typed = await backend.run({ type: 'type', text: 'hello world' } as CuAction, sig);
-    assert.equal(typed.outcome.ok, true, 'type succeeds once a target is established');
+    const typed = await backend.run(
+      { type: 'type', text: 'hello world' } as CuAction,
+      sig,
+      { ...DEFAULT_RUN_CONTEXT, boundAction: boundTypeAction() },
+    );
+    assert.equal(typed.outcome.ok, true, 'type succeeds for an explicit bound editable target');
 
     const records = await readRecords(logPath);
     const call = toolCall(records, 'set_value');
@@ -992,39 +1283,25 @@ describe('cua-driver backend', () => {
     assert.ok(!methodTrace(records).includes('tools/call:list_apps'), 'must never resolve a frontmost pid to type into');
   });
 
-  it('parallel click then type waits for the new click target instead of using the old window', async () => {
-    const { backend, logPath } = makeBackend({ delayTool: 'click', delayMs: 120 });
+  it('parallel bound type calls stay isolated to their explicit target windows', async () => {
+    const { backend, logPath } = makeBackend({ delayTool: 'set_value', delayMs: 120 });
     const sig = new AbortController().signal;
-    const context = { sessionId: 'session-a', turnId: 'turn-1', toolCallId: 'old-click' };
-    await backend.run(
-      { type: 'left_click', coordinate: { x: 600, y: 400 } } as CuAction,
+    const first = backend.run(
+      { type: 'type', text: 'first' } as CuAction,
       sig,
-      context,
+      { ...DEFAULT_RUN_CONTEXT, toolCallId: 'first', boundAction: boundTypeAction(undefined, 77) },
     );
-
-    const clickNew = backend.run(
-      { type: 'left_click', coordinate: { x: 400, y: 1400 } } as CuAction,
+    const second = backend.run(
+      { type: 'type', text: 'second' } as CuAction,
       sig,
-      { ...context, toolCallId: 'new-click' },
+      { ...DEFAULT_RUN_CONTEXT, toolCallId: 'second', boundAction: boundTypeAction(undefined, 88) },
     );
-    await waitForRecord(
-      logPath,
-      (record) => record.kind === 'recv'
-        && record.params?.name === 'click'
-        && record.params?.arguments?.window_id === 88,
-    );
-    const typeNew = backend.run(
-      { type: 'type', text: 'new-window' } as CuAction,
-      sig,
-      { ...context, toolCallId: 'type-new' },
-    );
-    const [clicked, typed] = await Promise.all([clickNew, typeNew]);
-    assert.equal(clicked.outcome.ok, true);
-    assert.equal(typed.outcome.ok, true);
+    const [firstResult, secondResult] = await Promise.all([first, second]);
+    assert.equal(firstResult.outcome.ok, true);
+    assert.equal(secondResult.outcome.ok, true);
 
     const setCalls = toolCalls(await readRecords(logPath), 'set_value');
-    assert.equal(setCalls.length, 1);
-    assert.equal(setCalls[0]!.window_id, 88);
+    assert.deepEqual(setCalls.map((call) => call.window_id), [77, 88]);
   });
 
   it('type with no AX-addressable editable field fails before any keyboard dispatch', async () => {
@@ -1082,10 +1359,7 @@ describe('cua-driver backend', () => {
   });
 
   it('Electron text uses a uniquely resolved cua-driver page target and DOM readback', async () => {
-    const pageTarget: CuaResolvedPageTextTarget = {
-      port: 9333,
-      targetUrlContains: 'data:text/html,window-a',
-    };
+    const pageTarget = testPageTarget();
     const { backend, logPath } = makeBackend({
       processKind: 'electron',
       pageTarget,
@@ -1100,9 +1374,11 @@ describe('cua-driver backend', () => {
       },
     });
     const sig = new AbortController().signal;
-    await backend.run({ type: 'left_click', coordinate: { x: 600, y: 400 } } as CuAction, sig);
-
-    const typed = await backend.run({ type: 'type', text: 'semantic text' } as CuAction, sig);
+    const typed = await backend.run(
+      { type: 'type', text: 'semantic text' } as CuAction,
+      sig,
+      { ...DEFAULT_RUN_CONTEXT, boundAction: boundTypeAction(pageTarget) },
+    );
     assert.deepEqual(typed.outcome, {
       ok: true,
       tier: 'semantic-background',
@@ -1112,7 +1388,7 @@ describe('cua-driver backend', () => {
     const records = await readRecords(logPath);
     const page = toolCall(records, 'page');
     const pageCalls = toolCalls(records, 'page');
-    assert.equal(pageCalls.length, 4);
+    assert.equal(pageCalls.length, 3);
     assert.equal(pageCalls[0]!.action, 'execute_javascript');
     assert.match(String(pageCalls[0]!.javascript), /elementFromPoint/);
     assert.ok(page);
@@ -1124,7 +1400,7 @@ describe('cua-driver backend', () => {
       cdp_port: 9333,
       target_url_contains: 'data:text/html,window-a',
     });
-    assert.deepEqual(pageCalls[2], {
+    assert.deepEqual(pageCalls[1], {
       pid: 4242,
       window_id: 77,
       action: 'insert_text',
@@ -1132,17 +1408,14 @@ describe('cua-driver backend', () => {
       cdp_port: 9333,
       target_url_contains: 'data:text/html,window-a',
     });
-    assert.equal(pageCalls[3]!.action, 'execute_javascript');
-    assert.match(String(pageCalls[3]!.javascript), /__makaComputerUseReadElement/);
+    assert.equal(pageCalls[2]!.action, 'execute_javascript');
+    assert.match(String(pageCalls[2]!.javascript), /__makaComputerUseReadElement/);
     assert.equal(toolCalls(records, 'type_text').length, 0);
     assert.equal(toolCalls(records, 'press_key').length, 0);
   });
 
   it('Electron semantic pointer actions use page and skip pixel dispatch', async () => {
-    const pageTarget: CuaResolvedPageTextTarget = {
-      port: 9333,
-      targetUrlContains: 'data:text/html,window-a',
-    };
+    const pageTarget = testPageTarget();
     const click = makeBackend({
       processKind: 'electron',
       pageTarget,
@@ -1244,10 +1517,7 @@ describe('cua-driver backend', () => {
   });
 
   it('Electron semantic non-text inputs never establish usable text ownership', async () => {
-    const pageTarget: CuaResolvedPageTextTarget = {
-      port: 9333,
-      targetUrlContains: 'data:text/html,window-a',
-    };
+    const pageTarget = testPageTarget();
     const { backend, logPath } = makeBackend({
       processKind: 'electron',
       pageTarget,
@@ -1273,10 +1543,7 @@ describe('cua-driver backend', () => {
   });
 
   it('semantic pointer unsupported falls back to pixel; semantic failure does not double-dispatch', async () => {
-    const pageTarget: CuaResolvedPageTextTarget = {
-      port: 9333,
-      targetUrlContains: 'data:text/html,window-a',
-    };
+    const pageTarget = testPageTarget();
     const unsupported = makeBackend({
       processKind: 'electron',
       pageTarget,
@@ -1316,10 +1583,7 @@ describe('cua-driver backend', () => {
   });
 
   it('Electron page text refuses non-empty fields and mismatched readback', async () => {
-    const nonEmptyTarget: CuaResolvedPageTextTarget = {
-      port: 9333,
-      targetUrlContains: 'data:text/html,window-a',
-    };
+    const nonEmptyTarget = testPageTarget();
     const nonEmpty = makeBackend({
       processKind: 'electron',
       pageTarget: nonEmptyTarget,
@@ -1335,19 +1599,18 @@ describe('cua-driver backend', () => {
       },
     });
     const sig = new AbortController().signal;
-    await nonEmpty.backend.run({ type: 'left_click', coordinate: { x: 600, y: 400 } } as CuAction, sig);
-    const refused = await nonEmpty.backend.run({ type: 'type', text: 'overwrite' } as CuAction, sig);
+    const refused = await nonEmpty.backend.run(
+      { type: 'type', text: 'overwrite' } as CuAction,
+      sig,
+      { ...DEFAULT_RUN_CONTEXT, boundAction: boundTypeAction(nonEmptyTarget) },
+    );
     assert.equal(refused.outcome.ok, false);
     const nonEmptyPageCalls = toolCalls(await readRecords(nonEmpty.logPath), 'page');
     assert.deepEqual(nonEmptyPageCalls.map((call) => call.action), [
       'execute_javascript',
-      'execute_javascript',
     ]);
 
-    const mismatchTarget: CuaResolvedPageTextTarget = {
-      port: 9333,
-      targetUrlContains: 'data:text/html,window-a',
-    };
+    const mismatchTarget = testPageTarget();
     const mismatch = makeBackend({
       processKind: 'electron',
       pageTarget: mismatchTarget,
@@ -1362,8 +1625,11 @@ describe('cua-driver backend', () => {
         clickEvents: 1,
       },
     });
-    await mismatch.backend.run({ type: 'left_click', coordinate: { x: 600, y: 400 } } as CuAction, sig);
-    const failed = await mismatch.backend.run({ type: 'type', text: 'missing' } as CuAction, sig);
+    const failed = await mismatch.backend.run(
+      { type: 'type', text: 'missing' } as CuAction,
+      sig,
+      { ...DEFAULT_RUN_CONTEXT, boundAction: boundTypeAction(mismatchTarget) },
+    );
     assert.equal(failed.outcome.ok, false);
     if (!failed.outcome.ok) {
       assert.equal(failed.outcome.error, 'capture_failed');
@@ -1372,13 +1638,12 @@ describe('cua-driver backend', () => {
     const mismatchPageCalls = toolCalls(await readRecords(mismatch.logPath), 'page');
     assert.deepEqual(mismatchPageCalls.map((call) => call.action), [
       'execute_javascript',
-      'execute_javascript',
       'insert_text',
       'execute_javascript',
     ]);
   });
 
-  it('abort mid-call rejects and the next call restarts on a fresh child', async () => {
+  it('abort mid-call fails typed and the next call restarts on a fresh child', async () => {
     const { backend, logPath } = makeBackend({ hangOnceTool: 'get_desktop_state' });
     const controller = new AbortController();
     const p = backend.run({ type: 'screenshot' } as CuAction, controller.signal);
@@ -1388,7 +1653,9 @@ describe('cua-driver backend', () => {
     );
 
     controller.abort();
-    await assert.rejects(p, /abort/i);
+    const aborted = await p;
+    assert.equal(aborted.outcome.ok, false);
+    if (!aborted.outcome.ok) assert.equal(aborted.outcome.error, 'aborted');
 
     const retry = await backend.run(
       { type: 'screenshot' } as CuAction,
@@ -1396,8 +1663,10 @@ describe('cua-driver backend', () => {
     );
     assert.equal(retry.outcome.ok, true);
     const starts = (await readRecords(logPath)).filter((record) => record.kind === 'start');
-    assert.equal(starts.length, 2);
-    assert.notEqual(starts[0]!.pid, starts[1]!.pid);
+    const captureStarts = starts.filter((record) =>
+      String(record.home).includes('maka-cua-capture'));
+    assert.equal(captureStarts.length, 2);
+    assert.notEqual(captureStarts[0]!.pid, captureStarts[1]!.pid);
   });
 
   it('aborting an in-flight action does not reject another session queued behind it', async () => {
@@ -1451,6 +1720,7 @@ describe('cua-driver backend', () => {
     const { backend, logPath } = makeBackend({ hangTool: 'set_config', handshakeTimeoutMs: 250 });
     await assert.rejects(backend.preflight(new AbortController().signal), /timeout/i);
 
+    await waitForRecord(logPath, (record) => record.kind === 'start');
     const records = await readRecords(logPath);
     const start = records.find((r) => r.kind === 'start');
     assert.ok(start, 'mock started');

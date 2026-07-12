@@ -9,13 +9,26 @@
 import { z } from 'zod';
 import {
   CU_ACTION_TYPES,
+  isComputerUseErrorCode,
   type CuAction,
   type CuPoint,
   type ComputerUseActionOutcome,
   type ComputerUseDispatchEvidence,
+  type ComputerUseErrorCode,
 } from '@maka/core';
 import { redactSecrets } from '@maka/core/redaction';
 import type { MakaTool } from './tool-runtime.js';
+import {
+  bindCuaAction,
+  bindCuaActionToObservation,
+  CuaFrameState,
+  fingerprintCuaAction,
+  type CuaBoundAction,
+  type CuaActionRejectionReason,
+  type CuaObservation,
+  type CuaObservationSnapshot,
+  type CuaWindowIdentity,
+} from './cua-frame-state.js';
 
 const COMPUTER_USE_CATEGORY = 'computer_use';
 
@@ -29,6 +42,9 @@ export interface CuScreenshot {
 
 export interface CuRunResult {
   outcome: ComputerUseActionOutcome;
+  observation?: CuaObservationSnapshot;
+  resolvedTarget?: CuaWindowIdentity;
+  resolvedTargetEditable?: boolean;
   /** Present for `screenshot`, and (by convention) after a mutating action so
    *  the model can SEE the result — the authoritative verification (S17). */
   screenshot?: CuScreenshot;
@@ -38,6 +54,7 @@ export interface CuRunContext {
   sessionId: string;
   turnId: string;
   toolCallId: string;
+  boundAction?: CuaBoundAction;
 }
 
 /**
@@ -51,6 +68,11 @@ export interface CuDispatchBackend {
   preflight(signal: AbortSignal): Promise<{ accessibility: boolean; screenRecording: boolean }>;
   /** Execute one normalized action; capture a fresh frame where applicable. */
   run(action: CuAction, signal: AbortSignal, context: CuRunContext): Promise<CuRunResult>;
+  captureObservation?(
+    signal: AbortSignal,
+    context: CuRunContext,
+  ): Promise<Pick<CuRunResult, 'screenshot' | 'observation'>>;
+  clearSession?(sessionId: string): void;
 }
 
 /** Context the overlay hook needs to key its per-action cursor + per-session teardown. */
@@ -81,6 +103,8 @@ const computerParams = z.object({
   scroll_amount: z.number().int().min(0).max(100).optional(),
   duration: z.number().min(0).max(60).optional(),
   region: z.tuple([z.number(), z.number(), z.number(), z.number()]).optional(),
+  frame_id: z.string().min(1).optional(),
+  frame_epoch: z.number().int().min(0).optional(),
 });
 type ComputerParams = z.infer<typeof computerParams>;
 
@@ -185,11 +209,121 @@ function summarize(action: CuAction, result: CuRunResult): string {
  */
 interface ComputerToolResult {
   text: string;
+  error?: ComputerUseErrorCode;
   screenshot?: { base64: string; mimeType: string };
+  frameId?: string;
+  frameEpoch?: number;
 }
 
-export function buildComputerUseTools(deps: { backend: CuDispatchBackend; overlay?: CuOverlayHook }): MakaTool[] {
+export interface ComputerUseToolSet extends Array<MakaTool> {
+  clearSession(sessionId: string): void;
+}
+
+export function buildComputerUseTools(
+  deps: { backend: CuDispatchBackend; overlay?: CuOverlayHook },
+): ComputerUseToolSet {
   let invocationQueue = Promise.resolve();
+  interface SessionFrameRecord {
+    turnId: string;
+    state: CuaFrameState;
+    keyboardOwner?: {
+      turnId: string;
+      boundClick: CuaBoundAction;
+      frameId: string;
+      epoch: number;
+    };
+  }
+  const frameStates = new Map<string, SessionFrameRecord>();
+
+  function sessionFrameState(sessionId: string, turnId: string) {
+    const current = frameStates.get(sessionId);
+    if (current?.turnId === turnId) return current;
+    deps.backend.clearSession?.(sessionId);
+    const next: SessionFrameRecord = { turnId, state: new CuaFrameState() };
+    frameStates.set(sessionId, next);
+    return next;
+  }
+
+  type BindingFailureReason =
+    | CuaActionRejectionReason
+    | 'target_missing'
+    | 'target_changed'
+    | 'capture_failed';
+  type BindingResult = CuaBoundAction | { rejection: BindingFailureReason };
+
+  function bindingFailure(reason: BindingFailureReason): ComputerToolResult {
+    const error: ComputerUseErrorCode = isComputerUseErrorCode(reason)
+      ? reason
+      : 'stale_frame';
+    return { text: `computer failed: ${error}`, error };
+  }
+
+  function requiresFrameBinding(action: CuAction): boolean {
+    return action.type !== 'screenshot'
+      && action.type !== 'wait'
+      && action.type !== 'cursor_position';
+  }
+
+  function consumesObservation(action: CuAction): boolean {
+    return ![
+      'screenshot',
+      'wait',
+      'cursor_position',
+      'mouse_move',
+      'zoom',
+    ].includes(action.type);
+  }
+
+  function bindActionForFrame(
+    frameState: ReturnType<typeof sessionFrameState>,
+    action: CuAction,
+    args: ComputerParams,
+  ): BindingResult {
+    const actionFingerprint = fingerprintCuaAction(action);
+    if (
+      args.frame_id !== undefined
+      && args.frame_epoch !== undefined
+      && frameState.state.isConsumed(
+        { frameId: args.frame_id, epoch: args.frame_epoch },
+        actionFingerprint,
+      )
+    ) {
+      return { rejection: 'duplicate_action' };
+    }
+    const observation = frameState.state.activeObservation();
+    if (!observation) return { rejection: 'no_active_frame' };
+    if (args.frame_epoch !== observation.epoch) {
+      return { rejection: 'stale_epoch' };
+    }
+    if (args.frame_id !== observation.frameId) {
+      return { rejection: 'stale_frame' };
+    }
+    if (action.type === 'type') {
+      const owner = frameState.keyboardOwner;
+      if (
+        !owner
+        || owner.turnId !== frameState.turnId
+        || owner.frameId !== observation.frameId
+        || owner.epoch !== observation.epoch
+      ) {
+        return { rejection: 'target_changed' };
+      }
+      return {
+        ...bindCuaAction(observation, actionFingerprint),
+        target: owner.boundClick.target,
+        display: owner.boundClick.display,
+        sourceCoordinate: owner.boundClick.sourceCoordinate,
+        displayLogicalCoordinate: owner.boundClick.displayLogicalCoordinate,
+        windowCoordinate: owner.boundClick.windowCoordinate,
+      };
+    }
+    const bound = bindCuaActionToObservation(observation, action);
+    return bound ?? { rejection: 'target_missing' };
+  }
+
+  function frameSummary(frame: CuaObservation): string {
+    return `frame_id=${frame.frameId}; frame_epoch=${frame.epoch}`;
+  }
 
   async function withInvocationQueue<T>(
     signal: AbortSignal,
@@ -221,6 +355,9 @@ export function buildComputerUseTools(deps: { backend: CuDispatchBackend; overla
       + 'them to the real screen). Prefer this over shelling out to cliclick/screencapture for host GUI control. Text: after clicking an '
       + 'empty native AX text field, type may fill it only when a fresh AX read-back confirms the value. Electron/unknown targets, '
       + 'non-empty fields, and all key chords are refused because background key events race with the user\'s focus. '
+      + 'Every coordinate, type, key, scroll, drag, and zoom action MUST echo the latest screenshot result\'s frame_id and '
+      + 'frame_epoch. If an action returns a new frame_id/frame_epoch, use that new frame for the next action; never replay an '
+      + 'old bound action. The runtime creates and claims the action fingerprint before native dispatch. '
       + 'Never used for web pages inside Maka (use the browser tools for those).',
     parameters: computerParams,
     categoryHint: COMPUTER_USE_CATEGORY as MakaTool['categoryHint'],
@@ -238,6 +375,21 @@ export function buildComputerUseTools(deps: { backend: CuDispatchBackend; overla
           return { text: 'computer failed: permission_missing — Accessibility not granted (System Settings → Privacy & Security → Accessibility)' };
         }
         const action = adaptToCuAction(args);
+        const sessionFrame = sessionFrameState(sessionId, turnId);
+        let boundAction: CuaBoundAction | undefined;
+        if (requiresFrameBinding(action)) {
+          if (
+            args.frame_id === undefined
+            || args.frame_epoch === undefined
+          ) {
+            return bindingFailure('no_active_frame');
+          }
+          const binding = bindActionForFrame(sessionFrame, action, args);
+          if ('rejection' in binding) return bindingFailure(binding.rejection);
+          const claim = sessionFrame.state.claimAction(binding);
+          if (!claim.ok) return bindingFailure(claim.reason);
+          boundAction = binding;
+        }
         // A capture-bearing action additionally needs Screen Recording (S12).
         const capturing = action.type === 'screenshot' || action.type === 'zoom';
         if (capturing && !tcc.screenRecording) {
@@ -247,20 +399,92 @@ export function buildComputerUseTools(deps: { backend: CuDispatchBackend; overla
         // point (declared px in `action`), backend-agnostic and display-only. Never
         // throws into dispatch — a broken overlay must not break the action.
         const overlayCtx = { sessionId, toolCallId };
-        const runCtx: CuRunContext = { sessionId, turnId, toolCallId };
+        const runCtx: CuRunContext = {
+          sessionId,
+          turnId,
+          toolCallId,
+          ...(boundAction ? { boundAction } : {}),
+        };
         try { deps.overlay?.onActionBegin(action, overlayCtx); } catch { /* overlay is best-effort */ }
+        let boundActionConsumed = false;
         try {
           const result = await deps.backend.run(action, abortSignal, runCtx);
+          let nextFrame: CuaObservation | undefined;
+          if (action.type === 'screenshot') {
+            if (!result.observation) {
+              return bindingFailure('capture_failed');
+            }
+            deps.backend.clearSession?.(sessionId);
+            sessionFrame.keyboardOwner = undefined;
+            nextFrame = sessionFrame.state.observe(result.observation);
+          } else if (boundAction && consumesObservation(action)) {
+            const confirmation = sessionFrame.state.confirmAction(boundAction);
+            boundActionConsumed = confirmation.ok;
+            sessionFrame.keyboardOwner = undefined;
+            if (!confirmation.ok) return bindingFailure(confirmation.reason);
+            if (result.outcome.ok) {
+              if (!deps.backend.captureObservation) {
+                result.outcome = {
+                  ok: false,
+                  error: 'capture_failed',
+                  message: 'backend cannot provide a fresh postcondition observation',
+                  evidence: result.outcome.evidence,
+                };
+              } else try {
+                const postcondition = await deps.backend.captureObservation(
+                  abortSignal,
+                  runCtx,
+                );
+                result.observation = postcondition.observation;
+                result.screenshot = postcondition.screenshot;
+                if (postcondition.observation) {
+                  nextFrame = sessionFrame.state.observe(postcondition.observation);
+                }
+              } catch {
+                result.outcome = {
+                  ok: false,
+                  error: 'capture_failed',
+                  message: 'fresh postcondition observation failed',
+                  evidence: result.outcome.evidence,
+                };
+              }
+            }
+            if (
+              action.type === 'left_click'
+              && result.outcome.ok
+              && result.resolvedTarget
+              && result.resolvedTargetEditable === true
+              && nextFrame
+            ) {
+              sessionFrame.keyboardOwner = {
+                turnId,
+                boundClick: boundAction,
+                frameId: nextFrame.frameId,
+                epoch: nextFrame.epoch,
+              };
+            }
+          }
           // Carry the screenshot base64 on the raw result (which becomes the ai-sdk
           // tool `output`) so `toModelOutput` below can hand the vision model an image
           // block. Kept OFF `text`: coerceResultContent projects this object to a
           // text-only session-log entry (no `kind` ⇒ only `text` survives), so the
           // bounded frame never bloats history.
-          const text = summarize(action, result);
+          const text = `${summarize(action, result)}${nextFrame ? `; ${frameSummary(nextFrame)}` : ''}`;
           return result.screenshot
-            ? { text, screenshot: { base64: result.screenshot.base64, mimeType: result.screenshot.mimeType } }
-            : { text };
+            ? {
+                text,
+                screenshot: { base64: result.screenshot.base64, mimeType: result.screenshot.mimeType },
+                ...(nextFrame ? { frameId: nextFrame.frameId, frameEpoch: nextFrame.epoch } : {}),
+              }
+            : {
+                text,
+                ...(nextFrame ? { frameId: nextFrame.frameId, frameEpoch: nextFrame.epoch } : {}),
+              };
         } finally {
+          if (boundAction && consumesObservation(action) && !boundActionConsumed) {
+            sessionFrame.state.confirmAction(boundAction);
+            sessionFrame.keyboardOwner = undefined;
+          }
           try { deps.overlay?.onActionEnd?.(overlayCtx); } catch { /* best-effort */ }
         }
       });
@@ -288,5 +512,10 @@ export function buildComputerUseTools(deps: { backend: CuDispatchBackend; overla
       };
     },
   };
-  return [tool];
+  const tools = [tool] as ComputerUseToolSet;
+  tools.clearSession = (sessionId: string) => {
+    frameStates.delete(sessionId);
+    deps.backend.clearSession?.(sessionId);
+  };
+  return tools;
 }

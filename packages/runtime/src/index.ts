@@ -79,7 +79,12 @@ export type {
   MakaToolContext as BuiltinMakaToolContext,
 } from './builtin-tools.js';
 export { buildComputerUseTools, adaptToCuAction } from './computer-use-tools.js';
-export { bindCuaAction, CuaFrameState } from './cua-frame-state.js';
+export {
+  bindCuaAction,
+  bindCuaActionToObservation,
+  fingerprintCuaAction,
+  CuaFrameState,
+} from './cua-frame-state.js';
 export type {
   CuaActionClaimResult,
   CuaActionConfirmationResult,
@@ -87,6 +92,12 @@ export type {
   CuaBoundAction,
   CuaFrameIdentity,
   CuaFrameIdFactory,
+  CuaDisplaySnapshot,
+  CuaObservation,
+  CuaObservationSnapshot,
+  CuaPageIdentity,
+  CuaRect,
+  CuaWindowIdentity,
 } from './cua-frame-state.js';
 export type {
   CuDispatchBackend,
@@ -95,6 +106,7 @@ export type {
   CuRunResult,
   CuOverlayHook,
   CuOverlayHookContext,
+  ComputerUseToolSet,
 } from './computer-use-tools.js';
 export {
   buildManagedBashTool,

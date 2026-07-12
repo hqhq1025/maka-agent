@@ -33,6 +33,7 @@ while Date().timeIntervalSince(stableSince) < 0.5 {
 let originalFrontmostPid = candidateFrontmostPid
 let originalPointerPosition = candidatePointerPosition
 var previousPointerPosition = originalPointerPosition
+var previousFrontmostPid = originalFrontmostPid
 print("READY\t\(originalFrontmostPid)\t\(originalPointerPosition.x)\t\(originalPointerPosition.y)")
 
 func secondsSincePhysicalPointerInput() -> Double {
@@ -52,9 +53,9 @@ while true {
     let currentFrontmostPid = NSWorkspace.shared.frontmostApplication?.processIdentifier ?? -1
     let currentPointerPosition = NSEvent.mouseLocation
 
-    if currentFrontmostPid != originalFrontmostPid {
-      print("CHANGE\tfrontmost PID changed: \(originalFrontmostPid) -> \(currentFrontmostPid)")
-      exit(2)
+    if currentFrontmostPid != previousFrontmostPid {
+      print("NOTICE\tfrontmost PID changed: \(previousFrontmostPid) -> \(currentFrontmostPid)")
+      previousFrontmostPid = currentFrontmostPid
     }
 
     let pointerStep = hypot(

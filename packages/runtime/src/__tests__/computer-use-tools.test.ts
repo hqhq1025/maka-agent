@@ -10,6 +10,27 @@ import {
 } from '../computer-use-tools.js';
 import type { MakaToolContext } from '../tool-runtime.js';
 
+const observation = {
+  capturedAt: 1,
+  screenshotWidthPx: 1000,
+  screenshotHeightPx: 600,
+  displays: [{
+    displayId: 'main',
+    logicalBounds: { x: 0, y: 0, width: 1000, height: 600 },
+    sourceBoundsPx: { x: 0, y: 0, width: 1000, height: 600 },
+    scaleFactor: 1,
+  }],
+  windows: [{
+    pid: 42,
+    windowId: 7,
+    appName: 'Fixture',
+    title: 'Fixture A',
+    bounds: { x: 100, y: 100, width: 400, height: 300 },
+    sourceBoundsPx: { x: 100, y: 100, width: 400, height: 300 },
+    zIndex: 5,
+  }],
+};
+
 function ctx(signal?: AbortSignal): MakaToolContext {
   return {
     sessionId: 's1',
@@ -43,7 +64,34 @@ function fakeBackend(over: Partial<{
     async run(action, _signal, context) {
       b.last = action;
       b.lastContext = context;
-      return over.result ?? { outcome: { ok: true, tier: 'ax', verified: true } };
+      if (action.type === 'screenshot') {
+        return over.result ?? {
+          outcome: { ok: true, tier: 'coordinate-background' },
+          observation,
+          screenshot: {
+            base64: 'aW1hZ2U=',
+            mimeType: 'image/png',
+            widthPx: 1000,
+            heightPx: 600,
+          },
+        };
+      }
+      return over.result ?? {
+        outcome: { ok: true, tier: 'ax', verified: true },
+        resolvedTarget: context.boundAction?.target,
+        resolvedTargetEditable: action.type === 'left_click',
+      };
+    },
+    async captureObservation() {
+      return {
+        observation,
+        screenshot: {
+          base64: 'aW1hZ2U=',
+          mimeType: 'image/png',
+          widthPx: 1000,
+          heightPx: 600,
+        },
+      };
     },
   };
   return b;
@@ -112,14 +160,103 @@ describe('buildComputerUseTools — the `computer` MakaTool', () => {
 
   test('dispatches the adapted action to the backend and summarizes success + tier', async () => {
     const backend = fakeBackend();
-    const r = await callComputer(backend, { action: 'left_click', coordinate: [5, 6], text: 'ctrl' });
-    assert.deepEqual(backend.last, { type: 'left_click', coordinate: { x: 5, y: 6 }, text: 'ctrl' });
+    const [tool] = buildComputerUseTools({ backend });
+    const first = await tool.impl(
+      { action: 'screenshot' } as never,
+      ctx(),
+    ) as { frameId: string; frameEpoch: number };
+    const r = await tool.impl({
+      action: 'left_click',
+      coordinate: [150, 150],
+      text: 'ctrl',
+      frame_id: first.frameId,
+      frame_epoch: first.frameEpoch,
+    } as never, ctx()) as { text: string };
+    assert.deepEqual(backend.last, { type: 'left_click', coordinate: { x: 150, y: 150 }, text: 'ctrl' });
     assert.match(r.text, /computer\.left_click ok via ax/);
+  });
+
+  test('rejects coordinate actions without a bound screenshot frame', async () => {
+    const backend = fakeBackend();
+    const r = await callComputer(backend, {
+      action: 'left_click',
+      coordinate: [150, 150],
+    });
+    assert.match(r.text, /no_active_frame/);
+    assert.equal(backend.last, undefined);
+  });
+
+  test('binds screenshot coordinates to the captured target and rejects replay', async () => {
+    const backend = fakeBackend();
+    const [tool] = buildComputerUseTools({ backend });
+    const screenshot = await tool.impl(
+      { action: 'screenshot' } as never,
+      ctx(),
+    ) as { frameId: string; frameEpoch: number };
+    const action = {
+      action: 'left_click',
+      coordinate: [150, 150],
+      frame_id: screenshot.frameId,
+      frame_epoch: screenshot.frameEpoch,
+    };
+    await tool.impl(action as never, ctx());
+    assert.equal(backend.lastContext?.boundAction?.target?.pid, 42);
+    assert.equal(backend.lastContext?.boundAction?.target?.windowId, 7);
+    assert.deepEqual(backend.lastContext?.boundAction?.windowCoordinate, { x: 50, y: 50 });
+    const replay = await tool.impl(action as never, ctx()) as { text: string };
+    assert.match(replay.text, /duplicate_action/);
+  });
+
+  test('drops verified success when a fresh postcondition cannot be captured', async () => {
+    const base = fakeBackend();
+    const backend: CuDispatchBackend = {
+      ...base,
+      captureObservation: async () => {
+        throw new Error('capture failed');
+      },
+    };
+    const [tool] = buildComputerUseTools({ backend });
+    const screenshot = await tool.impl(
+      { action: 'screenshot' } as never,
+      ctx(),
+    ) as { frameId: string; frameEpoch: number };
+    const result = await tool.impl({
+      action: 'left_click',
+      coordinate: [150, 150],
+      frame_id: screenshot.frameId,
+      frame_epoch: screenshot.frameEpoch,
+    } as never, ctx()) as { text: string };
+    assert.match(result.text, /capture_failed/);
+    const stale = await tool.impl({
+      action: 'left_click',
+      coordinate: [150, 150],
+      frame_id: screenshot.frameId,
+      frame_epoch: screenshot.frameEpoch,
+    } as never, ctx()) as { text: string };
+    assert.match(stale.text, /duplicate_action/);
+  });
+
+  test('clearSession revokes the active frame and duplicate state immediately', async () => {
+    const backend = fakeBackend();
+    const tools = buildComputerUseTools({ backend });
+    const [tool] = tools;
+    const screenshot = await tool.impl(
+      { action: 'screenshot' } as never,
+      ctx(),
+    ) as { frameId: string; frameEpoch: number };
+    tools.clearSession('s1');
+    const result = await tool.impl({
+      action: 'left_click',
+      coordinate: [150, 150],
+      frame_id: screenshot.frameId,
+      frame_epoch: screenshot.frameEpoch,
+    } as never, ctx()) as { text: string };
+    assert.match(result.text, /no_active_frame/);
   });
 
   test('passes the full runtime context to the dispatch backend', async () => {
     const backend = fakeBackend();
-    await callComputer(backend, { action: 'left_click', coordinate: [5, 6] });
+    await callComputer(backend, { action: 'wait', duration: 0 });
     assert.deepEqual(backend.lastContext, {
       sessionId: 's1',
       turnId: 't1',
@@ -150,11 +287,11 @@ describe('buildComputerUseTools — the `computer` MakaTool', () => {
     };
     const [tool] = buildComputerUseTools({ backend });
     const first = tool.impl(
-      { action: 'left_click', coordinate: [5, 6] } as never,
+      { action: 'wait', duration: 0 } as never,
       { ...ctx(), toolCallId: 'call-click' },
     );
     const second = tool.impl(
-      { action: 'type', text: 'after-click' } as never,
+      { action: 'wait', duration: 0 } as never,
       { ...ctx(), toolCallId: 'call-type' },
     );
     await Promise.resolve();
@@ -166,23 +303,23 @@ describe('buildComputerUseTools — the `computer` MakaTool', () => {
     assert.deepEqual(events, [
       'preflight:1:start',
       'preflight:1:end',
-      'run:left_click',
+      'run:wait',
       'preflight:2:start',
       'preflight:2:end',
-      'run:type',
+      'run:wait',
     ]);
   });
 
   test('S17: surfaces the typed backend failure code without leaking raw driver text', async () => {
     const backend = fakeBackend({ result: { outcome: { ok: false, error: 'capture_failed', message: 'AXPress err -25202', completedSubSteps: 0 } } });
-    const r = await callComputer(backend, { action: 'left_click', coordinate: [1, 1] });
+    const r = await callComputer(backend, { action: 'wait', duration: 0 });
     assert.match(r.text, /failed: capture_failed/);
     assert.doesNotMatch(r.text, /AXPress err -25202/);
   });
 
   test('an unverified dispatch tells the model to re-screenshot (no silent success)', async () => {
     const backend = fakeBackend({ result: { outcome: { ok: true, tier: 'ax', verified: false } } });
-    const r = await callComputer(backend, { action: 'left_click', coordinate: [1, 1] });
+    const r = await callComputer(backend, { action: 'wait', duration: 0 });
     assert.match(r.text, /verified=false/);
     assert.match(r.text, /re-screenshot/);
   });
@@ -205,7 +342,7 @@ describe('buildComputerUseTools — the `computer` MakaTool', () => {
         },
       },
     });
-    const r = await callComputer(backend, { action: 'left_click', coordinate: [1, 1] });
+    const r = await callComputer(backend, { action: 'wait', duration: 0 });
     assert.match(r.text, /path=cgevent/);
     assert.match(r.text, /effect=unverifiable/);
     assert.match(r.text, /escalation=foreground\(disallowed\)/);

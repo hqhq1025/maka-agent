@@ -62,6 +62,10 @@ function startSafetyMonitor() {
       readyResolve(baseline);
       return;
     }
+    if (kind === 'NOTICE') {
+      console.error(`[cu-e2e-monitor] ${fields.join('\t')}`);
+      return;
+    }
     if (kind === 'CHANGE' || kind === 'ERROR') {
       fail(new Error(fields.join('\t') || 'safety monitor reported an unknown failure'));
       return;

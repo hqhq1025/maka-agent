@@ -168,7 +168,11 @@ import {
   persistSynthesisCacheBlocksToArtifacts,
 } from './synthesis-cache-artifacts.js';
 import { buildBrowserTools } from './browser/browser-tools.js';
-import { selectComputerUseBackend, createComputerUseOverlayHook } from '@maka/computer-use';
+import {
+  createComputerUseOverlayHook,
+  resolveCuaDisplaySnapshots,
+  selectComputerUseBackend,
+} from '@maka/computer-use';
 import { createCursorOverlayController } from './computer-use/cursor-overlay-window.js';
 import { releaseBrowserSession } from './browser/session.js';
 import { createMainWindowController } from './main-window.js';
@@ -543,6 +547,16 @@ const browserTools: MakaTool[] = buildBrowserTools();
 const computerUseOverlay = createCursorOverlayController();
 const computerUse = selectComputerUseBackend({
   overlay: createComputerUseOverlayHook(computerUseOverlay, screen),
+  resolveDisplays: async ({ screenshotWidthPx, screenshotHeightPx }) => {
+    const displays = screen.getAllDisplays();
+    const primary = screen.getPrimaryDisplay();
+    return resolveCuaDisplaySnapshots({
+      displays,
+      primaryDisplayId: primary.id,
+      screenshotWidthPx,
+      screenshotHeightPx,
+    });
+  },
   // Compress large frames to JPEG at NATIVE resolution (coordinates unchanged) so a
   // Retina full-display capture doesn't blow past the frame cap / provider limit.
   compressFrame: (base64) => {
@@ -1804,7 +1818,7 @@ async function streamEvents(
         emitSessionsChanged('turn-status-change', sessionId);
         // Turn ended (complete/abort/error) → remove this session's agent cursor.
         computerUseOverlay.clearForSession(sessionId);
-        computerUse.backend?.clearSession?.(sessionId);
+        computerUse.clearSession?.(sessionId);
       }
     }
     if (!finalAppendBroadcasted) {
@@ -1836,7 +1850,7 @@ async function streamEvents(
     emitSessionsChanged('status-change', sessionId);
     emitSessionsChanged('turn-status-change', sessionId);
     computerUseOverlay.clearForSession(sessionId);
-    computerUse.backend?.clearSession?.(sessionId);
+    computerUse.clearSession?.(sessionId);
     if (!finalAppendBroadcasted) {
       emitSessionsChanged('message-appended', sessionId);
       finalAppendBroadcasted = true;
@@ -2163,7 +2177,7 @@ async function maybeRunComputerUseE2e(): Promise<void> {
         }
       }
       computerUseOverlay.clearForSession(session.id);
-      computerUse.backend?.clearSession?.(session.id);
+      computerUse.clearSession?.(session.id);
       const toolsStr = [...toolCounts.entries()].map(([n, c]) => `${n}×${c}`).join(', ') || 'none';
       summary.push(`${i + 1}. computer×${cuActions} | all: ${toolsStr}`);
     } catch (error) {
