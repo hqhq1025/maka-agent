@@ -29,6 +29,8 @@ export interface CuScreenshot {
 
 export interface CuRunResult {
   outcome: ComputerUseActionOutcome;
+  /** Final logical screen point resolved by the backend for pointer actions. */
+  resolvedScreenPoint?: CuPoint;
   /** Present for `screenshot`, and (by convention) after a mutating action so
    *  the model can SEE the result — the authoritative verification (S17). */
   screenshot?: CuScreenshot;

@@ -1,7 +1,7 @@
 /**
  * Cursor overlay window (main-process half) — the Maka-owned, Codex-style agent
  * cursor. A transparent, always-on-top, click-through BrowserWindow that hosts a
- * Canvas running the ported CursorEngine (Dubins glide + spring). MAIN drives it
+ * Canvas running the Maka cursor engine. MAIN drives it
  * with per-action coordinates; the window persists across actions and repositions
  * the cursor live over a one-way `overlay:move` channel (no teardown-per-move).
  *
@@ -194,6 +194,7 @@ export function createCursorOverlayController(
       y: input.screenY - bounds.y,
       kind: input.kind,
       pressed: input.pressed === true,
+      ...(input.instant === true ? { instant: true } : {}),
     });
   }
 
