@@ -155,7 +155,7 @@ test('cursor bloom is centered on the arrow hotspot', () => {
   assert.deepEqual(gradients[0]?.slice(0, 5), [320, 240, 0, 320, 240]);
 });
 
-test('path planner bounds detours for short moves', () => {
+test('production direct path has no detour for short moves', () => {
   const cases = [
     [100, 100, 120, 120],
     [100, 100, 150, 100],
@@ -163,17 +163,19 @@ test('path planner bounds detours for short moves', () => {
   ] as const;
   for (const [x0, y0, x1, y1] of cases) {
     const direct = Math.hypot(x1 - x0, y1 - y0);
-    const path = planPath(
+    const path = planDirectPath(
       x0,
       y0,
-      0,
       x1,
       y1,
-      REST_HEADING + Math.PI,
       REST_HEADING,
-      Math.max(8, direct / 2.5),
     );
-    assert.ok(path.length <= Math.max(direct * 1.45, direct + 36) + 0.01);
+    assert.ok(Math.abs(path.length - direct) < 0.01);
+    for (const ratio of [0.25, 0.5, 0.75]) {
+      const point = path.sample(path.length * ratio);
+      assert.ok(Math.abs(point.x - (x0 + (x1 - x0) * ratio)) < 0.01);
+      assert.ok(Math.abs(point.y - (y0 + (y1 - y0) * ratio)) < 0.01);
+    }
   }
 });
 
