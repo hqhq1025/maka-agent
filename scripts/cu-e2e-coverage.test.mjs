@@ -5,6 +5,8 @@ import ts from 'typescript';
 
 import {
   CU_E2E_ACTION_CONTRACTS,
+  CU_E2E_CASE_LANES,
+  CU_E2E_REQUIRED_BRANCH_CASES,
   CU_E2E_SEQUENCE_CASES,
   coverageSummary,
   sequenceSummary,
@@ -39,6 +41,13 @@ test('every CuAction has an explicit E2E support contract and atomic case', asyn
       `${action} has an invalid support classification`,
     );
     assert.ok(contract.atomicCases.length > 0, `${action} must require at least one atomic E2E case`);
+    for (const caseId of contract.atomicCases) {
+      assert.match(
+        CU_E2E_CASE_LANES[caseId] ?? '',
+        /^(electron-live|visual-live|appkit-live|backend-contract)$/,
+        `${caseId} must declare a valid E2E lane`,
+      );
+    }
   }
 });
 
@@ -50,6 +59,29 @@ test('atomic coverage reports the exact missing cases per action', () => {
   assert.equal(summary.actions.middle_click.covered, false);
   assert.deepEqual(summary.actions.middle_click.missingCases, ['button.middle_click']);
   assert.equal(summary.coveredActions, summary.totalActions - 1);
+});
+
+test('lane-scoped coverage does not overclaim backend-contract cases as live', () => {
+  const liveCases = Object.entries(CU_E2E_CASE_LANES)
+    .filter(([, lane]) => lane === 'electron-live' || lane === 'visual-live')
+    .map(([caseId]) => caseId);
+  const summary = coverageSummary(liveCases, {
+    requiredLanes: ['electron-live', 'visual-live'],
+  });
+  assert.equal(summary.coveredActions, summary.totalActions);
+  assert.equal(summary.branchesCovered, true);
+  assert.deepEqual(summary.requiredLanes, ['electron-live', 'visual-live']);
+});
+
+test('coverage requires semantic fallback branches independently of action coverage', () => {
+  const actionCases = Object.values(CU_E2E_ACTION_CONTRACTS)
+    .flatMap((contract) => contract.atomicCases);
+  const summary = coverageSummary(actionCases, {
+    requiredLanes: ['electron-live'],
+  });
+  assert.equal(summary.coveredActions, summary.totalActions);
+  assert.deepEqual(summary.missingBranchCases, CU_E2E_REQUIRED_BRANCH_CASES);
+  assert.equal(summary.branchesCovered, false);
 });
 
 test('sequence contracts have unique ids and explicit multi-action oracles', () => {

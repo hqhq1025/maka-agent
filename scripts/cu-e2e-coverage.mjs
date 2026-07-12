@@ -133,21 +133,78 @@ export const CU_E2E_SEQUENCE_CASES = Object.freeze([
   },
 ]);
 
-export function coverageSummary(executedCaseIds) {
+export const CU_E2E_CASE_LANES = Object.freeze({
+  'desktop.screenshot': 'electron-live',
+  'cursor_position.unsupported': 'backend-contract',
+  'cursor.mouse_move': 'visual-live',
+  'textarea.left_click': 'electron-live',
+  'button.left_click': 'electron-live',
+  'checkbox.left_click': 'electron-live',
+  'empty_desktop.left_click.refused': 'backend-contract',
+  'button.right_click': 'electron-live',
+  'button.middle_click': 'electron-live',
+  'button.double_click': 'electron-live',
+  'button.triple_click': 'electron-live',
+  'left_mouse_down.unsupported': 'backend-contract',
+  'left_mouse_up.unsupported': 'backend-contract',
+  'range.left_click_drag': 'electron-live',
+  'cross_window.left_click_drag.refused': 'electron-live',
+  'type.no_target.refused': 'electron-live',
+  'textarea.type': 'electron-live',
+  'non_text.type.refused': 'electron-live',
+  'key.chord.refused': 'electron-live',
+  'hold_key.unsupported': 'backend-contract',
+  'scroll.down': 'electron-live',
+  'scroll.up': 'electron-live',
+  'scroll.right': 'electron-live',
+  'scroll.left': 'electron-live',
+  'empty_desktop.scroll.refused': 'backend-contract',
+  'wait.duration': 'electron-live',
+  'window.zoom': 'electron-live',
+  'cross_window.zoom.refused': 'electron-live',
+  'semantic.page_unavailable.pixel_once': 'electron-live',
+  'semantic.unsupported.pixel_once': 'electron-live',
+  'semantic.noeffect.terminal_fail': 'electron-live',
+});
+
+export const CU_E2E_REQUIRED_BRANCH_CASES = Object.freeze([
+  'semantic.page_unavailable.pixel_once',
+  'semantic.unsupported.pixel_once',
+  'semantic.noeffect.terminal_fail',
+]);
+
+export function coverageSummary(
+  executedCaseIds,
+  { requiredLanes } = {},
+) {
   const executed = new Set(executedCaseIds);
+  const required = requiredLanes ? new Set(requiredLanes) : undefined;
   const actions = Object.fromEntries(
     Object.entries(CU_E2E_ACTION_CONTRACTS).map(([action, contract]) => {
-      const missingCases = contract.atomicCases.filter((caseId) => !executed.has(caseId));
+      const requiredCases = contract.atomicCases.filter(
+        (caseId) => !required || required.has(CU_E2E_CASE_LANES[caseId]),
+      );
+      const missingCases = requiredCases.filter((caseId) => !executed.has(caseId));
       return [action, {
         support: contract.support,
-        requiredCases: contract.atomicCases,
+        requiredCases,
         missingCases,
         covered: missingCases.length === 0,
       }];
     }),
   );
+  const requiredBranchCases = CU_E2E_REQUIRED_BRANCH_CASES.filter(
+    (caseId) => !required || required.has(CU_E2E_CASE_LANES[caseId]),
+  );
+  const missingBranchCases = requiredBranchCases.filter(
+    (caseId) => !executed.has(caseId),
+  );
   return {
     actions,
+    requiredBranchCases,
+    missingBranchCases,
+    branchesCovered: missingBranchCases.length === 0,
+    requiredLanes: required ? [...required] : null,
     coveredActions: Object.values(actions).filter((entry) => entry.covered).length,
     totalActions: Object.keys(actions).length,
   };

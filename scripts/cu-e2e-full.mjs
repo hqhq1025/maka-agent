@@ -16,6 +16,7 @@ import { execFile } from 'node:child_process';
 import { mkdir, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { coverageSummary } from './cu-e2e-coverage.mjs';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const { createCuaDriverBackend, createComputerUseOverlayHook } = await import(
@@ -83,7 +84,7 @@ async function createFixtureWindow(label, slug, bounds, reveal = true) {
       button { width: 120px; height: 40px; }
       input[type="range"] { width: min(180px, 100%); }
       #scrollbox { overflow: auto; border: 1px solid #999; height: 100%; }
-      #scroll-content { height: 1200px; padding: 12px; background: linear-gradient(#fff, #dbeafe); }
+      #scroll-content { width: 1600px; height: 1200px; padding: 12px; background: linear-gradient(#fff, #dbeafe); }
       @media (max-height: 120px) {
         body { padding: 6px; }
         main {
@@ -106,6 +107,7 @@ async function createFixtureWindow(label, slug, bounds, reveal = true) {
       <textarea id="target" aria-label="Maka Computer Use E2E ${label} input"></textarea>
       <div class="controls">
         <button id="increment">Increment</button>
+        <button id="noop">No-op</button>
         <output id="count">0</output>
         <label><input id="enabled" type="checkbox"> Enabled</label>
       </div>
@@ -116,11 +118,24 @@ async function createFixtureWindow(label, slug, bounds, reveal = true) {
       <div id="scrollbox"><div id="scroll-content">Scrollable ${label}</div></div>
     </main>
     <script>
-      const state = { count: 0, contextMenus: 0 };
+      const state = {
+        count: 0,
+        contextMenus: 0,
+        middleClicks: 0,
+        pointerDowns: 0,
+        pointerUps: 0,
+        pointerMoves: 0
+      };
       increment.addEventListener('click', () => {
         state.count += 1;
         count.value = String(state.count);
       });
+      increment.addEventListener('auxclick', (event) => {
+        if (event.button === 1) state.middleClicks += 1;
+      });
+      document.addEventListener('pointerdown', () => { state.pointerDowns += 1; }, true);
+      document.addEventListener('pointerup', () => { state.pointerUps += 1; }, true);
+      document.addEventListener('pointermove', () => { state.pointerMoves += 1; }, true);
       level.addEventListener('input', () => { document.querySelector('#level-value').value = level.value; });
       document.addEventListener('contextmenu', (event) => {
         event.preventDefault();
@@ -132,7 +147,12 @@ async function createFixtureWindow(label, slug, bounds, reveal = true) {
         enabled: enabled.checked,
         level: Number(level.value),
         scrollTop: scrollbox.scrollTop,
+        scrollLeft: scrollbox.scrollLeft,
         contextMenus: state.contextMenus,
+        middleClicks: state.middleClicks,
+        pointerDowns: state.pointerDowns,
+        pointerUps: state.pointerUps,
+        pointerMoves: state.pointerMoves,
         activeId: document.activeElement?.id || ''
       });
     </script>
@@ -288,8 +308,9 @@ const fixtureWindows = new Set();
 const results = [];
 const overlayMoves = [];
 const overlayCapturePromises = [];
+const executedAtomicCaseIds = new Set();
 const report = {
-  version: 2,
+  version: 3,
   runId: process.env.MAKA_CU_E2E_RUN_ID || `cu-e2e-${Date.now()}`,
   startedAt: new Date().toISOString(),
   cdpPort: Number(process.env.MAKA_CU_E2E_CDP_PORT || 0),
@@ -332,6 +353,26 @@ function captureOverlayCompletion(input, completedAt) {
     });
   })();
   overlayCapturePromises.push(capture);
+}
+
+function recordAtomicCase(caseId, input) {
+  const pass = input.pass === true;
+  executedAtomicCaseIds.add(caseId);
+  report.cases.push({
+    caseId,
+    layer: 'atomic',
+    actionId: input.actionId,
+    actionType: input.actionType,
+    route: input.route ?? [],
+    outcome: input.outcome,
+    before: input.before,
+    after: input.after,
+    oracle: input.oracle,
+    durationMs: input.durationMs,
+    pass,
+  });
+  check(caseId, pass, input.detail ?? JSON.stringify(input.outcome ?? null));
+  return pass;
 }
 
 function check(name, pass, detail = '') {
@@ -397,6 +438,18 @@ function numericDelta(before, after, key) {
   return Number(after?.[key] ?? 0) - Number(before?.[key] ?? 0);
 }
 
+function actionTraceSlice(start) {
+  return report.traces.slice(start);
+}
+
+function traceRoute(traces) {
+  return traces
+    .filter((event) => event.type === 'dispatch' || event.type === 'fallback')
+    .map((event) => event.type === 'dispatch'
+      ? `${event.address}:${event.tool}`
+      : `${event.from}->${event.to}`);
+}
+
 async function runSemanticCase({
   caseId,
   fixture,
@@ -406,6 +459,7 @@ async function runSemanticCase({
   behaviorName,
   behavior,
 }) {
+  executedAtomicCaseIds.add(caseId);
   const before = await readFixtureState(fixture);
   const traceStart = report.traces.length;
   const result = await actAction(action);
@@ -415,15 +469,12 @@ async function runSemanticCase({
   const after = await readFixtureState(fixture);
   const behaviorPass = Boolean(behavior(before, after));
   check(behaviorName, behaviorPass, JSON.stringify({ before, after }));
-  const traces = report.traces.slice(traceStart);
-  const route = traces
-    .filter((event) => event.type === 'dispatch' || event.type === 'fallback')
-    .map((event) => event.type === 'dispatch'
-      ? `${event.address}:${event.tool}`
-      : `${event.from}->${event.to}`);
+  const traces = actionTraceSlice(traceStart);
+  const route = traceRoute(traces);
   const fallback = traces.find((event) => event.type === 'fallback');
   report.cases.push({
     caseId,
+    layer: 'atomic',
     actionId: actionRecord?.context?.toolCallId,
     before,
     after,
@@ -443,6 +494,45 @@ async function runSemanticCase({
     pass: semanticPass && behaviorPass,
   });
   return { result, before, after };
+}
+
+async function runAtomicAction({
+  caseId,
+  action,
+  actAction,
+  activeBackend,
+  readState,
+  settleMs = 100,
+  oracle,
+}) {
+  const before = readState ? await readState() : undefined;
+  const traceStart = report.traces.length;
+  const result = await actAction(action, activeBackend);
+  const actionRecord = report.actions.at(-1);
+  if (settleMs > 0) await sleep(settleMs);
+  const after = readState ? await readState() : undefined;
+  const traces = actionTraceSlice(traceStart);
+  const route = traceRoute(traces);
+  const pass = Boolean(await oracle({
+    result,
+    before,
+    after,
+    traces,
+    route,
+    actionRecord,
+  }));
+  recordAtomicCase(caseId, {
+    actionId: actionRecord?.context?.toolCallId,
+    actionType: action.type,
+    route,
+    outcome: result.outcome,
+    before,
+    after,
+    durationMs: actionRecord?.durationMs,
+    oracle: caseId,
+    pass,
+  });
+  return { result, before, after, traces, route };
 }
 
 function requireLatestTargetPid(name, expectedPid) {
@@ -676,7 +766,13 @@ async function run() {
   }
 
   console.log('\n2. Screenshot and coordinate space');
-  const screenshot = await act({ type: 'screenshot' });
+  const { result: screenshot } = await runAtomicAction({
+    caseId: 'desktop.screenshot',
+    action: { type: 'screenshot' },
+    actAction: act,
+    settleMs: 0,
+    oracle: ({ result }) => result.outcome.ok && Boolean(result.screenshot),
+  });
   const frame = screenshot.screenshot;
   check('desktop screenshot captured', screenshot.outcome.ok && Boolean(frame), frame ? `${frame.widthPx}x${frame.heightPx}` : 'no frame');
   if (!frame || frame.widthPx <= 0 || frame.heightPx <= 0) {
@@ -691,10 +787,15 @@ async function run() {
     hostBundleId: 'com.maka.desktop',
     timeoutMs: 8_000,
   });
-  const noTarget = await act(
-    { type: 'type', text: 'MUST-NOT-LAND' },
-    freshBackend,
-  );
+  const { result: noTarget } = await runAtomicAction({
+    caseId: 'type.no_target.refused',
+    action: { type: 'type', text: 'MUST-NOT-LAND' },
+    actAction: act,
+    activeBackend: freshBackend,
+    settleMs: 0,
+    oracle: ({ result }) =>
+      !result.outcome.ok && result.outcome.error === 'unsupported_action',
+  });
   check(
     'type without prior target is refused',
     !noTarget.outcome.ok && noTarget.outcome.error === 'unsupported_action',
@@ -826,11 +927,27 @@ async function run() {
   }
 
   console.log('\n5. Semantic background text on first window');
-  const firstClick = await act({ type: 'left_click', coordinate: firstPoint });
-  requireSemanticSuccess('first semantic background click dispatched', firstClick);
+  const { result: firstClick } = await runSemanticCase({
+    caseId: 'textarea.left_click',
+    fixture: firstWindow,
+    action: { type: 'left_click', coordinate: firstPoint },
+    actAction: act,
+    signal,
+    behaviorName: 'first textarea received semantic focus',
+    behavior: (_before, after) => after.activeId === 'target',
+  });
   requireLatestTargetPid('first click resolved to the fixture process', process.pid);
   const firstMarker = 'MAKA-CUA-FIRST';
-  const firstType = await act({ type: 'type', text: firstMarker });
+  const { result: firstType } = await runAtomicAction({
+    caseId: 'textarea.type',
+    action: { type: 'type', text: firstMarker },
+    actAction: act,
+    readState: () => readFixtureState(firstWindow),
+    oracle: ({ result, before, after }) =>
+      result.outcome.ok
+      && before?.text === ''
+      && after?.text === firstMarker,
+  });
   requireSuccess('first semantic background type dispatched', firstType);
   await safetyMonitor.guard('first fixture read-back settle', () => sleep(300, signal));
   await stateCheck('first marker landed in first document', firstWindow, (state) => state.text === firstMarker);
@@ -902,6 +1019,45 @@ async function run() {
   }
   const secondTextScreenPoint = await readFixtureScreenPoint(secondWindow, '#target');
   const secondPoint = logicalPointToDeclared(secondTextScreenPoint, display, scale);
+
+  const firstSplitPoint = logicalPointToDeclared(
+    await readFixtureScreenPoint(firstWindow, '#target'),
+    display,
+    scale,
+  );
+  await runAtomicAction({
+    caseId: 'cross_window.left_click_drag.refused',
+    action: {
+      type: 'left_click_drag',
+      startCoordinate: firstSplitPoint,
+      coordinate: secondPoint,
+    },
+    actAction: act,
+    settleMs: 0,
+    oracle: ({ result, traces }) =>
+      !result.outcome.ok
+      && result.outcome.error === 'unsupported_action'
+      && !traces.some((event) => event.type === 'dispatch' && event.tool === 'drag'),
+  });
+  await runAtomicAction({
+    caseId: 'cross_window.zoom.refused',
+    action: {
+      type: 'zoom',
+      region: {
+        x1: firstSplitPoint.x,
+        y1: firstSplitPoint.y,
+        x2: secondPoint.x,
+        y2: secondPoint.y,
+      },
+    },
+    actAction: act,
+    settleMs: 0,
+    oracle: ({ result, traces }) =>
+      !result.outcome.ok
+      && result.outcome.error === 'unsupported_action'
+      && !traces.some((event) => event.type === 'dispatch' && event.tool === 'zoom'),
+  });
+
   const secondClick = await act({ type: 'left_click', coordinate: secondPoint });
   requireSemanticSuccess('second semantic background click dispatched', secondClick);
   requireLatestTargetPid('second click resolved to the fixture process', process.pid);
@@ -913,7 +1069,14 @@ async function run() {
   await stateCheck('first marker remained isolated', firstWindow, (state) => state.text === firstMarker);
 
   console.log('\n7. Unverified key chords fail closed');
-  const selectAll = await act({ type: 'key', text: 'cmd+a' });
+  const { result: selectAll } = await runAtomicAction({
+    caseId: 'key.chord.refused',
+    action: { type: 'key', text: 'cmd+a' },
+    actAction: act,
+    settleMs: 0,
+    oracle: ({ result }) =>
+      !result.outcome.ok && result.outcome.error === 'unsupported_action',
+  });
   requireBackgroundKeyboardRefusal('unverified cmd+a was refused', selectAll);
 
   console.log('\n8. Complex pointer task matrix');
@@ -927,6 +1090,7 @@ async function run() {
   const firstInspection = await inspectFixtureTargets({
     probes: [
       { fixture: firstWindow, label: 'A', selector: '#increment' },
+      { fixture: firstWindow, label: 'A', selector: '#noop' },
       { fixture: firstWindow, label: 'A', selector: '#enabled' },
       { fixture: firstWindow, label: 'A', selector: '#level' },
       { fixture: firstWindow, label: 'A', selector: '#scrollbox' },
@@ -958,6 +1122,17 @@ async function run() {
     behaviorName: 'button count incremented once',
     behavior: (before, after) => after.count - before.count === 1,
   });
+  await runAtomicAction({
+    caseId: 'non_text.type.refused',
+    action: { type: 'type', text: 'MUST-NOT-LAND' },
+    actAction: act,
+    readState: () => readFixtureState(firstWindow),
+    settleMs: 0,
+    oracle: ({ result, before, after }) =>
+      !result.outcome.ok
+      && result.outcome.error === 'unsupported_action'
+      && after?.text === before?.text,
+  });
 
   const checkboxPoint = logicalPointToDeclared(
     await readFixtureScreenPoint(firstWindow, '#enabled'),
@@ -979,17 +1154,61 @@ async function run() {
     display,
     scale,
   );
-  observeAction(
-    'scrollbox scroll dispatched',
-    await act({
+  await firstWindow.webContents.executeJavaScript(
+    'scrollbox.scrollTo({ left: 0, top: 0, behavior: "instant" })',
+  );
+  await runAtomicAction({
+    caseId: 'scroll.down',
+    action: {
       type: 'scroll',
       coordinate: scrollPoint,
       scrollDirection: 'down',
       scrollAmount: 6,
-    }),
-  );
-  await sleep(100, signal);
-  await stateCheck('scrollbox moved down', firstWindow, (state) => state.scrollTop > 0);
+    },
+    actAction: act,
+    readState: () => readFixtureState(firstWindow),
+    oracle: ({ result, before, after }) =>
+      result.outcome.ok && Number(after?.scrollTop) > Number(before?.scrollTop),
+  });
+  await runAtomicAction({
+    caseId: 'scroll.up',
+    action: {
+      type: 'scroll',
+      coordinate: scrollPoint,
+      scrollDirection: 'up',
+      scrollAmount: 3,
+    },
+    actAction: act,
+    readState: () => readFixtureState(firstWindow),
+    oracle: ({ result, before, after }) =>
+      result.outcome.ok && Number(after?.scrollTop) < Number(before?.scrollTop),
+  });
+  await runAtomicAction({
+    caseId: 'scroll.right',
+    action: {
+      type: 'scroll',
+      coordinate: scrollPoint,
+      scrollDirection: 'right',
+      scrollAmount: 6,
+    },
+    actAction: act,
+    readState: () => readFixtureState(firstWindow),
+    oracle: ({ result, before, after }) =>
+      result.outcome.ok && Number(after?.scrollLeft) > Number(before?.scrollLeft),
+  });
+  await runAtomicAction({
+    caseId: 'scroll.left',
+    action: {
+      type: 'scroll',
+      coordinate: scrollPoint,
+      scrollDirection: 'left',
+      scrollAmount: 3,
+    },
+    actAction: act,
+    readState: () => readFixtureState(firstWindow),
+    oracle: ({ result, before, after }) =>
+      result.outcome.ok && Number(after?.scrollLeft) < Number(before?.scrollLeft),
+  });
 
   const sliderRect = await readFixtureScreenRect(firstWindow, '#level');
   const sliderStart = logicalPointToDeclared(
@@ -1032,6 +1251,15 @@ async function run() {
     behavior: (before, after) => after.contextMenus - before.contextMenus === 1,
   });
 
+  await runAtomicAction({
+    caseId: 'button.middle_click',
+    action: { type: 'middle_click', coordinate: buttonPoint },
+    actAction: act,
+    readState: () => readFixtureState(firstWindow),
+    oracle: ({ result, before, after }) =>
+      result.outcome.ok && after?.middleClicks - before?.middleClicks === 1,
+  });
+
   await runSemanticCase({
     caseId: 'button.double_click',
     fixture: firstWindow,
@@ -1041,6 +1269,122 @@ async function run() {
     behaviorName: 'button double click added two activations',
     behavior: (before, after) => after.count - before.count === 2,
   });
+
+  await runAtomicAction({
+    caseId: 'button.triple_click',
+    action: { type: 'triple_click', coordinate: buttonPoint },
+    actAction: act,
+    readState: () => readFixtureState(firstWindow),
+    oracle: ({ result, before, after }) =>
+      result.outcome.ok && after?.count - before?.count === 3,
+  });
+
+  const zoomRect = await readFixtureScreenRect(firstWindow, '#scrollbox');
+  const zoomTopLeft = logicalPointToDeclared(
+    { x: zoomRect.x + 4, y: zoomRect.y + 4 },
+    display,
+    scale,
+  );
+  const zoomBottomRight = logicalPointToDeclared(
+    {
+      x: zoomRect.x + Math.max(8, zoomRect.width - 4),
+      y: zoomRect.y + Math.max(8, zoomRect.height - 4),
+    },
+    display,
+    scale,
+  );
+  await runAtomicAction({
+    caseId: 'window.zoom',
+    action: {
+      type: 'zoom',
+      region: {
+        x1: zoomTopLeft.x,
+        y1: zoomTopLeft.y,
+        x2: zoomBottomRight.x,
+        y2: zoomBottomRight.y,
+      },
+    },
+    actAction: act,
+    settleMs: 0,
+    oracle: ({ result }) =>
+      result.outcome.ok
+      && Boolean(result.screenshot)
+      && Number(result.screenshot?.widthPx) > 0
+      && Number(result.screenshot?.heightPx) > 0,
+  });
+
+  const noopPoint = logicalPointToDeclared(
+    await readFixtureScreenPoint(firstWindow, '#noop'),
+    display,
+    scale,
+  );
+  await runAtomicAction({
+    caseId: 'semantic.noeffect.terminal_fail',
+    action: { type: 'left_click', coordinate: noopPoint },
+    actAction: act,
+    readState: () => readFixtureState(firstWindow),
+    oracle: ({ result, before, after, traces }) =>
+      !result.outcome.ok
+      && result.outcome.error === 'capture_failed'
+      && after?.count === before?.count
+      && traces.filter((event) => event.type === 'dispatch' && event.tool === 'page').length === 1
+      && !traces.some((event) => event.type === 'dispatch' && event.tool === 'click'),
+  });
+  await runAtomicAction({
+    caseId: 'semantic.unsupported.pixel_once',
+    action: {
+      type: 'left_click_drag',
+      startCoordinate: noopPoint,
+      coordinate: { x: noopPoint.x + 4, y: noopPoint.y },
+    },
+    actAction: act,
+    readState: () => readFixtureState(firstWindow),
+    oracle: ({ result, traces }) =>
+      result.outcome.ok
+      && traces.filter((event) => event.type === 'dispatch' && event.tool === 'page').length === 1
+      && traces.filter((event) => event.type === 'dispatch' && event.tool === 'drag').length === 1
+      && traces.filter((event) => event.type === 'fallback').length === 1,
+  });
+
+  const pageUnavailableBackend = createCuaDriverBackend({
+    binaryPath,
+    hostBundleId: 'com.maka.desktop',
+    timeoutMs: 8_000,
+    classifyProcess: async () => 'electron',
+    resolvePageTextTarget: async () => undefined,
+    onTrace: (event) => report.traces.push({ ...event, at: new Date().toISOString() }),
+  });
+  await runAtomicAction({
+    caseId: 'semantic.page_unavailable.pixel_once',
+    action: { type: 'left_click', coordinate: buttonPoint },
+    actAction: act,
+    activeBackend: pageUnavailableBackend,
+    readState: () => readFixtureState(firstWindow),
+    oracle: ({ result, before, after, traces }) =>
+      result.outcome.ok
+      && after?.count - before?.count === 1
+      && traces.filter((event) => event.type === 'fallback').length === 1
+      && traces.filter((event) => event.type === 'dispatch' && event.tool === 'click').length === 1,
+  });
+  pageUnavailableBackend.dispose();
+
+  for (const [caseId, action] of [
+    ['cursor_position.unsupported', { type: 'cursor_position' }],
+    ['left_mouse_down.unsupported', { type: 'left_mouse_down', coordinate: buttonPoint }],
+    ['left_mouse_up.unsupported', { type: 'left_mouse_up', coordinate: buttonPoint }],
+    ['hold_key.unsupported', { type: 'hold_key', text: 'shift', durationMs: 250 }],
+  ]) {
+    await runAtomicAction({
+      caseId,
+      action,
+      actAction: act,
+      settleMs: 0,
+      oracle: ({ result, traces }) =>
+        !result.outcome.ok
+        && result.outcome.error === 'unsupported_action'
+        && !traces.some((event) => event.type === 'dispatch'),
+    });
+  }
 
   console.log('\n9. Overlay and visual-only movement');
   const overlayCountBefore = overlayMoves.length;
@@ -1059,13 +1403,40 @@ async function run() {
     );
   }
   safetyMonitor.assertStable('overlay movement');
+  recordAtomicCase('cursor.mouse_move', {
+    actionId: report.actions.at(-1)?.context?.toolCallId,
+    actionType: 'mouse_move',
+    outcome: move.outcome,
+    before: { overlayCount: overlayCountBefore },
+    after: { overlayCount: overlayMoves.length },
+    oracle: 'overlay receives a logical move without a real pointer warp',
+    pass: move.outcome.ok && newOverlayMoves.some((event) => event.kind === 'move'),
+  });
 
   console.log('\n10. Post-action screenshot and wait');
   const postScreenshot = await act({ type: 'screenshot' });
   check('post-action screenshot captured', postScreenshot.outcome.ok && Boolean(postScreenshot.screenshot));
   const waitStartedAt = Date.now();
-  const wait = await act({ type: 'wait', durationMs: 500 });
+  const { result: wait } = await runAtomicAction({
+    caseId: 'wait.duration',
+    action: { type: 'wait', durationMs: 500 },
+    actAction: act,
+    settleMs: 0,
+    oracle: ({ result, actionRecord }) =>
+      result.outcome.ok && Number(actionRecord?.durationMs) >= 450,
+  });
   check('wait completed', wait.outcome.ok && Date.now() - waitStartedAt >= 450);
+
+  const liveCoverage = coverageSummary(executedAtomicCaseIds, {
+    requiredLanes: ['electron-live', 'visual-live'],
+  });
+  report.coverage = liveCoverage;
+  check(
+    'electron and visual atomic coverage is complete',
+    liveCoverage.coveredActions === liveCoverage.totalActions
+      && liveCoverage.branchesCovered,
+    JSON.stringify(liveCoverage),
+  );
 
   const failed = results.filter((result) => !result.pass);
   console.log('\n=======================================================');

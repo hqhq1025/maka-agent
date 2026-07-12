@@ -782,6 +782,25 @@ describe('cua-driver backend', () => {
     assert.ok(!trace.some((m) => m.startsWith('tools/call:click') || m.startsWith('tools/call:move')), 'mouse_move must not inject real input');
   });
 
+  it('explicitly refuses cursor position, split pointer phases, and hold_key without driver dispatch', async () => {
+    const { backend, logPath } = makeBackend();
+    const signal = new AbortController().signal;
+    for (const action of [
+      { type: 'cursor_position' },
+      { type: 'left_mouse_down', coordinate: { x: 600, y: 400 } },
+      { type: 'left_mouse_up', coordinate: { x: 600, y: 400 } },
+      { type: 'hold_key', text: 'shift', durationMs: 250 },
+    ] as CuAction[]) {
+      const result = await backend.run(action, signal);
+      assert.equal(result.outcome.ok, false);
+      if (result.outcome.ok === false) assert.equal(result.outcome.error, 'unsupported_action');
+    }
+    const calls = (await readRecords(logPath))
+      .filter((record) => record.kind === 'recv' && record.method === 'tools/call')
+      .map((record) => record.params?.name);
+    assert.deepEqual(calls, []);
+  });
+
   it('wait honors the requested duration instead of silently truncating at 10 seconds', async () => {
     const { backend } = makeBackend();
     const startedAt = Date.now();
