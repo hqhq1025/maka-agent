@@ -140,7 +140,9 @@ export function createComputerUseOverlayHook(controller: OverlayCursorSink, scre
         instant: action.type !== 'mouse_move',
       });
     },
-    onActionEnd(action, result, ctx) {
+    onActionEnd(ctx) {
+      const { action, result } = ctx;
+      if (!action) return;
       const pt = endCoordinateOf(action);
       if (!pt || !result || action.type === 'mouse_move') return;
       const screenPt = result.resolvedScreenPoint

@@ -59,6 +59,8 @@ export interface CuDispatchBackend {
 export interface CuOverlayHookContext {
   sessionId: string;
   toolCallId: string;
+  action?: CuAction;
+  result?: CuRunResult;
 }
 
 /**
@@ -70,7 +72,7 @@ export interface CuOverlayHookContext {
  */
 export interface CuOverlayHook {
   onActionBegin(action: CuAction, ctx: CuOverlayHookContext): void;
-  onActionEnd?(action: CuAction, result: CuRunResult | undefined, ctx: CuOverlayHookContext): void;
+  onActionEnd?(ctx: CuOverlayHookContext): void;
 }
 
 const coordinate = z.tuple([z.number(), z.number()]);
@@ -248,12 +250,12 @@ export function buildComputerUseTools(deps: { backend: CuDispatchBackend; overla
         // Visual seam: drive the agent-cursor overlay at the coordinate authority
         // point (declared px in `action`), backend-agnostic and display-only. Never
         // throws into dispatch — a broken overlay must not break the action.
-        const overlayCtx = { sessionId, toolCallId };
+        const overlayCtx: CuOverlayHookContext = { sessionId, toolCallId, action };
         const runCtx: CuRunContext = { sessionId, turnId, toolCallId };
         try { deps.overlay?.onActionBegin(action, overlayCtx); } catch { /* overlay is best-effort */ }
-        let result: CuRunResult | undefined;
         try {
-          result = await deps.backend.run(action, abortSignal, runCtx);
+          const result = await deps.backend.run(action, abortSignal, runCtx);
+          overlayCtx.result = result;
           // Carry the screenshot base64 on the raw result (which becomes the ai-sdk
           // tool `output`) so `toModelOutput` below can hand the vision model an image
           // block. Kept OFF `text`: coerceResultContent projects this object to a
@@ -264,7 +266,7 @@ export function buildComputerUseTools(deps: { backend: CuDispatchBackend; overla
             ? { text, screenshot: { base64: result.screenshot.base64, mimeType: result.screenshot.mimeType } }
             : { text };
         } finally {
-          try { deps.overlay?.onActionEnd?.(action, result, overlayCtx); } catch { /* best-effort */ }
+          try { deps.overlay?.onActionEnd?.(overlayCtx); } catch { /* best-effort */ }
         }
       });
     },

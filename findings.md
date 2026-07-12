@@ -153,11 +153,13 @@
   - Its Electron path could execute on the first page target.
   - A supplied URL hint also silently fell back when absent.
 - Root correction:
-  - source commit `adef3e87405986cc82df52ae59aef4c32e08a082`
+  - source commit `35fa565846ec60747603fa3e7b94160f796c5ecf`
   - upstream proposal `trycua/cua#2166`
   - compatibility release
-    `hqhq1025/cua@cua-driver-rs-v0.7.1-maka.1`
-  - exact ports, unique URL hints, and checked `1..=65535` port parsing
+    `hqhq1025/cua@cua-driver-rs-v0.7.1-maka.2`
+  - exact ports, unique URL hints, checked `1..=65535` port parsing,
+    targeted CDP session reuse, no JavaScript replay after dispatch failure,
+    and cross-platform targeted JS routing
 - cua-driver remains the sole execution engine:
   - Maka only discovers a PID-owned listening CDP port and unique page identity.
   - semantic pointer actions, input preparation/readback, `Input.insertText`,
@@ -185,7 +187,53 @@
     - range drag: 96/102/127 ms
     - right click: 74/80/85 ms
     - double click: 74/78/98 ms
+- Continued-driver evidence:
+  - `maka.2` source `35fa5658` passed core page 3/3, core CDP 2/2,
+    macOS CDP 6/6, release checks, bundle/provenance checks, and a full
+    two-window 39/39 real-machine E2E
+  - the earlier 10/10 repeat remains the deterministic stress baseline; cursor
+    motion and model-loop behavior are intentionally verified on the stacked
+    follow-up branch rather than added to #699
 - Remaining release gap:
   - this repository has no production Electron packaging, Developer ID
     signing, notarization, or post-package app verification workflow
   - the compatibility Mach-O is ad-hoc signed and byte/provenance pinned
+
+## Local Codex Computer Use Reference
+
+- Verified local architecture:
+  - orchestration host: `/Applications/ChatGPT.app`
+  - native executor: `~/.codex/computer-use/Codex Computer Use.app`
+  - service process: `SkyComputerUseService`
+  - model runtime: bundled `cua_node/bin/node_repl`
+  - model API package: bundled `@oai/sky@0.4.20`
+  - IPC: length-prefixed JSON-RPC over `computeruse.sock`
+  - API version: `CodexComputerUseIPC-2`
+- The Codex macOS API is app/window scoped and begins from fresh screenshot +
+  accessibility state. It also exposes semantic `set_value`, `select_text`, and
+  secondary AX actions rather than forcing every task through coordinates.
+- The native cursor has distinct "next interaction timing" and full completion
+  callbacks plus operation/presentation/fence identifiers. This explains why a
+  free-running overlay after backend completion feels wrong even when the final
+  coordinate is numerically correct.
+- Direct adoption decision:
+  - do not replace cua-driver in #699
+  - copy the operation lifecycle, deadlines, fresh-state identity, resolved
+    target authority, and cursor timing split
+  - validate Electron/CDP and native AppKit/AX in separate E2E lanes
+- Broad action audit found a real bug: runtime allowed `wait` up to 60 seconds
+  while the backend silently truncated it to 10 seconds and returned success.
+  The backend now honors the full duration and aborts promptly.
+
+## PR Split Decision
+
+- Keep #699 reviewable as a backend-validity PR. Scripted actions are the
+  deterministic oracle for transport, targeting, dispatch evidence, and DOM
+  effect readback; they are not presented as model-autonomy evidence.
+- Move the real Maka model loop into a second PR. That PR must use Maka's
+  SessionManager + ai-sdk backend + configured model and report model latency,
+  emitted tool arguments, backend latency, display lag, and final state
+  separately.
+- Move cursor phase reconciliation and path-shape changes into the second PR.
+  Backend execution remains immediate; presentation follows backend completion.
+- Saved follow-up branch: `codex/cu-model-loop-ux`.

@@ -62,6 +62,21 @@ const STDERR_TAIL_CAP = 4096;
 // crisp PNGs (simple screens) pass through untouched.
 const COMPRESS_FRAME_THRESHOLD = 1.5 * 1024 * 1024;
 
+function waitForDuration(durationMs: number, signal: AbortSignal): Promise<void> {
+  if (signal.aborted) return Promise.reject(signal.reason ?? new Error('aborted'));
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      signal.removeEventListener('abort', onAbort);
+      resolve();
+    }, durationMs);
+    const onAbort = () => {
+      clearTimeout(timer);
+      reject(signal.reason ?? new Error('aborted'));
+    };
+    signal.addEventListener('abort', onAbort, { once: true });
+  });
+}
+
 export interface CuaDriverBackendOptions {
   /** Absolute path to the bundled `cua-driver` binary. */
   binaryPath: string;
@@ -982,7 +997,9 @@ export function createCuaDriverBackend(opts: CuaDriverBackendOptions): CuDispatc
           if (
             action.type === 'left_click'
             || action.type === 'right_click'
+            || action.type === 'middle_click'
             || action.type === 'double_click'
+            || action.type === 'triple_click'
           ) {
             const semantic = await runElectronSemanticPointer(
               { type: action.type, screenPoint: win.screenPoint },
@@ -1243,6 +1260,15 @@ export function createCuaDriverBackend(opts: CuaDriverBackendOptions): CuDispatc
                 },
               };
             }
+            trace({
+              type: 'dispatch',
+              toolCallId: context.toolCallId,
+              actionType: action.type,
+              tool: 'drag',
+              pid: from.pid,
+              windowId: from.windowId,
+              address: 'px',
+            });
             const r = await actionClient.callTool(
               'drag',
               {
@@ -1395,7 +1421,7 @@ export function createCuaDriverBackend(opts: CuaDriverBackendOptions): CuDispatc
           };
         }
         case 'wait':
-          await new Promise((res) => setTimeout(res, Math.min(action.durationMs, 10_000)));
+          await waitForDuration(action.durationMs, signal);
           return { outcome: { ok: true, tier: 'coordinate-background' } };
         case 'mouse_move':
           // By design we never move the REAL cursor; the overlay hook has already
@@ -1403,8 +1429,33 @@ export function createCuaDriverBackend(opts: CuaDriverBackendOptions): CuDispatc
           // Acknowledge success rather than reporting unsupported for a reasonable,
           // side-effect-free action.
           return { outcome: { ok: true, tier: 'coordinate-background' } };
+        case 'cursor_position':
+          return {
+            outcome: {
+              ok: false,
+              error: 'unsupported_action',
+              message: 'real cursor position is intentionally unavailable because Maka never owns or moves the user pointer',
+            },
+          };
+        case 'left_mouse_down':
+        case 'left_mouse_up':
+          return {
+            outcome: {
+              ok: false,
+              error: 'unsupported_action',
+              message: 'split mouse down/up is refused because background pointer ownership cannot be preserved across tool calls',
+            },
+          };
+        case 'hold_key':
+          return {
+            outcome: {
+              ok: false,
+              error: 'unsupported_action',
+              message: 'background hold_key is refused because keyboard delivery cannot be verified without focus races',
+            },
+          };
         default:
-          return { outcome: { ok: false, error: 'unsupported_action', message: `action '${action.type}' not mapped to cua-driver` } };
+          return { outcome: { ok: false, error: 'unsupported_action', message: 'action not mapped to cua-driver' } };
         }
       });
     },

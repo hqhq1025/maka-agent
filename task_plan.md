@@ -6,6 +6,21 @@ Complete PR #699 by retaining cua-driver as the sole executor while replacing
 the desktop-coordinate-first adapter with an app/window-scoped, fresh-snapshot,
 AX-first background ladder modeled after Codex/Sky.
 
+## PR Boundary Decision
+
+- PR #699 owns deterministic backend correctness only:
+  - exact PID/window/page targeting
+  - cua-driver-only execution and readback
+  - effect verification and fail-closed fallback rules
+  - driver provenance and deterministic real-machine regression coverage
+- Model-in-loop behavior is a separate follow-up PR:
+  - screenshot-to-tool-call model latency and coordinate quality
+  - model retry/observation strategy
+  - visual cursor begin/completion phase synchronization
+  - cursor path aesthetics and display lag
+- The follow-up starts from branch `codex/cu-model-loop-ux`.
+- PR #699 must not delay backend execution to accommodate the visual overlay.
+
 ## Phases
 
 - [x] Recover the prior Claude Code design and real-machine E2E history.
@@ -55,7 +70,7 @@ AX-first background ladder modeled after Codex/Sky.
 | Early E2E pointer monitor false positives | Absolute pointer equality could not distinguish normal HID input from synthetic cursor movement | Added a pre-spawn Swift monitor that uses HID event recency and fails only on non-HID pointer jumps or frontmost PID changes |
 | Latest-main merge conflict | `packages/cli/src/runtime-bootstrap.ts` contained both new Goal/shell-run wiring and the feature branch's opt-in Computer Use wiring | Preserved Goal tools, shell-run subscriptions/readback, `MAKA_CLI_COMPUTER_USE=1`, listener cleanup, and cua-driver disposal in merge commit `675e0395` |
 | Post-merge Desktop typecheck could not resolve new `@maka/ui` exports | Latest main added `streamdown` and new UI exports, but local `node_modules`/dist still reflected the old graph | Ran `npm install`, rebuilt core/runtime/UI, then re-ran the full verification chain |
-| Multi-window semantic JS executed against the wrong renderer | cua-driver v0.7.1 ignored `cdp_port` / `target_url_contains` for `execute_javascript`, then selected the first page target | Patched cua-driver, proposed upstream PR #2166, and pinned `v0.7.1-maka.1` |
+| Multi-window semantic JS executed against the wrong renderer | cua-driver v0.7.1 ignored `cdp_port` / `target_url_contains` for `execute_javascript`, then selected the first page target | Adopted upstream PR #2166 through `35fa5658`, including targeted session reuse, no replay after dispatch, cross-platform routing, and pinned `v0.7.1-maka.2` |
 | Explicit URL hints could still hit the first page | cua-driver's `pick_target` silently fell back when a hint did not match | Explicit hints now require exactly one match and otherwise fail closed |
 | E2E intermittently targeted another overlapping window | inactive windows do not own every visible pixel, and overlapping same-app z-order was nondeterministic | Added read-only target inspection, dynamic safe layouts, and non-overlapping A/B stages before input |
 | Semantic RPC success overstated business effect | the first prototype counted events dispatched by its own script | Success now requires focus, native state change, DOM mutation, consumed context menu, or persistent range value |

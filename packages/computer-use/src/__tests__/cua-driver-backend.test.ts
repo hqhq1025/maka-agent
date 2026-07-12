@@ -784,6 +784,49 @@ describe('cua-driver backend', () => {
     assert.ok(!trace.some((m) => m.startsWith('tools/call:click') || m.startsWith('tools/call:move')), 'mouse_move must not inject real input');
   });
 
+  it('explicitly refuses cursor position, split pointer phases, and hold_key without driver dispatch', async () => {
+    const { backend, logPath } = makeBackend();
+    const signal = new AbortController().signal;
+    for (const action of [
+      { type: 'cursor_position' },
+      { type: 'left_mouse_down', coordinate: { x: 600, y: 400 } },
+      { type: 'left_mouse_up', coordinate: { x: 600, y: 400 } },
+      { type: 'hold_key', text: 'shift', durationMs: 250 },
+    ] as CuAction[]) {
+      const result = await backend.run(action, signal);
+      assert.equal(result.outcome.ok, false);
+      if (result.outcome.ok === false) assert.equal(result.outcome.error, 'unsupported_action');
+    }
+    const calls = (await readRecords(logPath))
+      .filter((record) => record.kind === 'recv' && record.method === 'tools/call')
+      .map((record) => record.params?.name);
+    assert.deepEqual(calls, []);
+  });
+
+  it('wait honors the requested duration instead of silently truncating at 10 seconds', async () => {
+    const { backend } = makeBackend();
+    const startedAt = Date.now();
+    const result = await backend.run(
+      { type: 'wait', durationMs: 120 } as CuAction,
+      new AbortController().signal,
+    );
+    assert.equal(result.outcome.ok, true);
+    assert.ok(Date.now() - startedAt >= 110);
+  });
+
+  it('wait aborts promptly and never reports early success', async () => {
+    const { backend } = makeBackend();
+    const controller = new AbortController();
+    const startedAt = Date.now();
+    const pending = backend.run(
+      { type: 'wait', durationMs: 60_000 } as CuAction,
+      controller.signal,
+    );
+    setTimeout(() => controller.abort(new Error('test abort')), 25);
+    await assert.rejects(pending, /test abort|aborted/i);
+    assert.ok(Date.now() - startedAt < 1_000);
+  });
+
   it('keyboard with NO prior click fails closed — never guesses a target, never injects', async () => {
     const { backend, logPath } = makeBackend();
     const sig = new AbortController().signal;
@@ -1162,6 +1205,45 @@ describe('cua-driver backend', () => {
     const dragRecords = await readRecords(drag.logPath);
     assert.equal(toolCalls(dragRecords, 'page').length, 1);
     assert.equal(toolCalls(dragRecords, 'drag').length, 0);
+
+    for (const [type, semanticPointerResult] of [
+      [
+        'middle_click',
+        {
+          supported: true,
+          ok: true,
+          kind: 'middle_click',
+          effect: 'mutation',
+          auxiliaryClickEvents: 1,
+          mutations: 1,
+        },
+      ],
+      [
+        'triple_click',
+        {
+          supported: true,
+          ok: true,
+          kind: 'triple_click',
+          effect: 'mutation',
+          clickEvents: 3,
+          mutations: 3,
+        },
+      ],
+    ] as const) {
+      const semantic = makeBackend({
+        processKind: 'electron',
+        pageTarget,
+        semanticPointerResult,
+      });
+      const semanticResult = await semantic.backend.run(
+        { type, coordinate: { x: 600, y: 400 } } as CuAction,
+        new AbortController().signal,
+      );
+      assert.equal(semanticResult.outcome.ok, true);
+      const semanticRecords = await readRecords(semantic.logPath);
+      assert.equal(toolCalls(semanticRecords, 'page').length, 1);
+      assert.equal(toolCalls(semanticRecords, 'click').length, 0);
+    }
   });
 
   it('Electron semantic non-text inputs never establish usable text ownership', async () => {

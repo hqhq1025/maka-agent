@@ -666,11 +666,73 @@ relaxing that safety boundary:
 
 Artifact provenance:
 
-- source `hqhq1025/cua@adef3e87405986cc82df52ae59aef4c32e08a082`
+- source `hqhq1025/cua@35fa565846ec60747603fa3e7b94160f796c5ecf`
 - upstream proposal `trycua/cua#2166`
-- release `cua-driver-rs-v0.7.1-maka.1`
+- release `cua-driver-rs-v0.7.1-maka.2`
 - executable version `0.7.1`
 - architectures arm64 + x86_64
 
 Production packaging/signing/notarization remains separate work because this
 repository still has no macOS package job.
+
+## 2026-07-12 Addendum: Local Codex Computer Use Reverse Engineering
+
+The local Codex installation provides a stronger reference than product copy.
+The following facts were verified read-only on this Mac:
+
+- ChatGPT/Codex is the orchestration host, but desktop input is owned by a
+  separately signed and notarized `LSUIElement` application:
+  `~/.codex/computer-use/Codex Computer Use.app`.
+- The native service bundle identifier is `com.openai.sky.CUAService`; its
+  executable is `SkyComputerUseService`.
+- Model-authored Computer Use code runs in isolated
+  `/Applications/ChatGPT.app/Contents/Resources/cua_node/bin/node_repl`
+  processes and imports bundled `@oai/sky` version `0.4.20`.
+- macOS client requests use
+  `~/Library/Group Containers/2DC432GLL2.com.openai.sky.CUAService/IPC/computeruse.sock`.
+  The transport is a four-byte little-endian length prefix followed by JSON-RPC
+  2.0, with API version `CodexComputerUseIPC-2`.
+- Each request carries a deadline and Codex turn metadata. Requests are
+  serialized by the client transport.
+- The macOS model-facing API requires an app identifier and exposes
+  `get_app_state`, click, drag, scroll, type, key, set-value, select-text, and
+  secondary accessibility actions. `get_app_state` returns a bounded screenshot
+  plus accessibility text.
+- The native binary contains separate cursor timing callbacks for:
+  - reaching the next safe interaction time
+  - finishing the full cursor move
+  - updating the visible cursor location
+  - deciding whether the UI must settle before the next screenshot
+- The presentation bridge uses presentation IDs, operation IDs, and fence
+  payloads. Cursor presentation and native execution therefore share an
+  operation lifecycle instead of running as unrelated timelines.
+
+Engineering interpretation:
+
+- Codex does not make Electron directly own TCC, AX traversal, screenshots, and
+  input dispatch. The native service owns that authority behind a stable IPC
+  contract.
+- Cursor animation is not allowed to free-run after an action has completed.
+  The system distinguishes "ready for the next interaction" from "animation
+  fully complete".
+- Fresh state is part of the action contract. A target is selected from a
+  current screenshot/accessibility snapshot, then the action carries that app,
+  window, element, or screenshot identity.
+- Operation deadlines and serial transport are first-class; silent duration
+  truncation is not acceptable.
+
+Maka adoption:
+
+1. Keep cua-driver as the sole native executor for the current backend PR.
+2. Add a shared operation envelope:
+   `operationId + session/turn + deadline + snapshot/target revision`.
+3. Return the backend-resolved target with the action result and use it as the
+   presentation hotspot.
+4. Give the visual cursor two timing signals:
+   `nextInteractionReady` and `presentationComplete`.
+   Backend dispatch must not wait for the latter.
+5. Require a fresh capture/AX/page identity before stateful input and record the
+   identity in E2E reports.
+6. Expand E2E into separate Electron/CDP and native AppKit/AX lanes, then run
+   full atomic coverage, pairwise state transitions, critical triples, and
+   seeded replay.

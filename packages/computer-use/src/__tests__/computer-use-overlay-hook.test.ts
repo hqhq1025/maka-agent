@@ -69,14 +69,14 @@ test('backend completion reconciles the exact coordinate after begin', () => {
 
   hook.onActionBegin(action, ctx);
   assert.equal(completions.length, 0);
-  hook.onActionEnd?.(
+  hook.onActionEnd?.({
+    ...ctx,
     action,
-    {
+    result: {
       outcome: { ok: true, tier: 'semantic-background', verified: true },
       resolvedScreenPoint: { x: 201, y: 151 },
     },
-    ctx,
-  );
+  });
 
   assert.equal(moves.length, 1);
   assert.deepEqual(completions[0], {
@@ -94,9 +94,14 @@ test('failed action completion reconciles without a success pulse', () => {
   const hook = createComputerUseOverlayHook(controller as never, screenAt(1));
   const action: CuAction = { type: 'left_click', coordinate: { x: 40, y: 30 } };
   hook.onActionBegin(action, { sessionId: 's', toolCallId: 'failed' });
-  hook.onActionEnd?.(action, {
-    outcome: { ok: false, error: 'capture_failed', message: 'no effect' },
-  }, { sessionId: 's', toolCallId: 'failed' });
+  hook.onActionEnd?.({
+    sessionId: 's',
+    toolCallId: 'failed',
+    action,
+    result: {
+      outcome: { ok: false, error: 'capture_failed', message: 'no effect' },
+    },
+  });
   assert.equal(completions[0]?.pulse, false);
 });
 

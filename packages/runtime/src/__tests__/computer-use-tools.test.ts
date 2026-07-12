@@ -127,48 +127,33 @@ describe('buildComputerUseTools — the `computer` MakaTool', () => {
     });
   });
 
-  test('does not wait for overlay animation and completes it only after backend result', async () => {
+  test('passes the completed action and backend result through the overlay context', async () => {
     const events: string[] = [];
-    let finishBackend!: () => void;
-    const backendDone = new Promise<void>((resolve) => {
-      finishBackend = resolve;
+    const backend = fakeBackend({
+      result: {
+        outcome: { ok: true, tier: 'semantic-background', verified: true },
+        resolvedScreenPoint: { x: 7, y: 8 },
+      },
     });
-    const backend: CuDispatchBackend = {
-      async preflight() {
-        return { accessibility: true, screenRecording: true };
+    const [tool] = buildComputerUseTools({
+      backend,
+      overlay: {
+        onActionBegin(action, context) {
+          assert.equal(context.action, action);
+          events.push('begin');
+        },
+        onActionEnd(context) {
+          assert.equal(context.action?.type, 'left_click');
+          assert.deepEqual(context.result?.resolvedScreenPoint, { x: 7, y: 8 });
+          events.push('end');
+        },
       },
-      async run() {
-        events.push('backend:start');
-        await backendDone;
-        events.push('backend:end');
-        return { outcome: { ok: true, tier: 'semantic-background', verified: true } };
-      },
-    };
-    const overlay = {
-      onActionBegin() {
-        events.push('overlay:begin');
-      },
-      onActionEnd() {
-        events.push('overlay:complete');
-      },
-    };
-    const [tool] = buildComputerUseTools({ backend, overlay });
-    const pending = tool.impl(
+    });
+    await tool.impl(
       { action: 'left_click', coordinate: [5, 6] } as never,
       ctx(),
     );
-    await Promise.resolve();
-    await Promise.resolve();
-    assert.deepEqual(events, ['overlay:begin', 'backend:start']);
-
-    finishBackend();
-    await pending;
-    assert.deepEqual(events, [
-      'overlay:begin',
-      'backend:start',
-      'backend:end',
-      'overlay:complete',
-    ]);
+    assert.deepEqual(events, ['begin', 'end']);
   });
 
   test('serializes preflight and dispatch in tool-call arrival order', async () => {
