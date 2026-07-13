@@ -1,5 +1,6 @@
 import {
   buildComputerUseTools,
+  type CuOverlayHook,
   type ComputerUseToolSet,
   type CuDispatchBackend,
 } from '@maka/runtime';
@@ -62,6 +63,7 @@ export function selectComputerUseBackend(deps?: {
     base64: string,
     mimeType: string,
   ) => { base64: string; mimeType: 'image/png' | 'image/jpeg' };
+  overlay?: CuOverlayHook;
 }): SelectedComputerUseBackend {
   if (process.platform !== 'darwin') return NONE;
   if (!deps?.binaryPath || !deps.expectedBinarySha256) return NONE;
@@ -83,7 +85,10 @@ export function selectComputerUseBackend(deps?: {
     });
     return {
       backend,
-      tools: buildComputerUseTools({ backend }),
+      tools: buildComputerUseTools({
+        backend,
+        ...(deps.overlay ? { overlay: deps.overlay } : {}),
+      }),
       backendId: 'cua-driver',
     };
   } catch {
