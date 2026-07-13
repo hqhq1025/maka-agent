@@ -56,6 +56,27 @@ dispatch while the user is actively providing physical input.
 - physical intervention recovery with the same re-observe sequence;
 - one verified AX dispatch and zero pixel dispatch in both mutation runs.
 
+### Kimi and MiniMax protocol paths
+
+No live Kimi or MiniMax credential is configured on this machine. Their
+product paths were therefore validated as `hermetic-protocol`, not
+`real-runtime`.
+
+Both `kimi-coding-plan` and `minimax-coding-plan` completed:
+
+```text
+getAIModel
+  -> Anthropic-compatible streaming protocol
+  -> AiSdkBackend
+  -> ToolRuntime
+  -> maka_computer
+  -> list_apps -> observe -> set_value -> final response
+```
+
+The server fixtures verify each provider's exact URL prefix, API-key header,
+model ID, streaming `tool_use`, tool-result reinjection, and final semantic
+state.
+
 ## Dynamic Structure Finding
 
 The model observed one stale target. An independent AX setup action inserted a
@@ -86,6 +107,10 @@ The independent Runtime fix:
   observation ID;
 - blocks the next identical ambiguity retry before native execution;
 - does not cache recoverable `user_intervened` or `target_missing` outcomes.
+
+The real evidence sanitizer also previously hard-coded an OpenAI producer.
+Reports now preserve an explicit producer and provider while retaining the
+same privacy projection.
 
 ## Evidence Privacy
 
