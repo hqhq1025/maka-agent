@@ -37,6 +37,15 @@ import { truncateToolOutput } from './tool-output.js';
 import { stableHash } from './request-shape.js';
 import type { RunTraceLike } from './run-trace.js';
 
+export type ToolModelOutputPart =
+  | { type: 'text'; text: string }
+  | { type: 'image-data'; data: string; mediaType: string };
+
+export interface ToolModelOutput {
+  type: 'content';
+  value: ToolModelOutputPart[];
+}
+
 export interface MakaTool<P = any, R = unknown> {
   /** Canonical (Claude-SDK-style) name. Pi adapter translates to canonical. */
   name: string;
@@ -65,6 +74,12 @@ export interface MakaTool<P = any, R = unknown> {
   });
   /** Real tool implementation. Called only after permission allows. */
   impl: (args: P, ctx: MakaToolContext) => Promise<R> | R;
+  /** Optional provider-visible content mapping, used for screenshot image parts. */
+  toModelOutput?: (options: {
+    toolCallId: string;
+    input: unknown;
+    output: unknown;
+  }) => ToolModelOutput;
 }
 
 export interface MakaToolContext {
