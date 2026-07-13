@@ -130,4 +130,11 @@ describe('Computer Use host health', () => {
       await rm(directory, { recursive: true, force: true });
     }
   });
+
+  it('wires a one-second physical-input quiet window', async () => {
+    const source = await import('node:fs/promises').then(({ readFile }) =>
+      readFile(join(process.cwd(), 'src/main/main.ts'), 'utf8'));
+    assert.match(source, /physicalInputRecentlyActive/);
+    assert.match(source, /powerMonitor\.getSystemIdleTime\(\) < 1/);
+  });
 });

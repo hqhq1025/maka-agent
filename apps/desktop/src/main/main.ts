@@ -1,4 +1,4 @@
-import { app, ipcMain, nativeImage, safeStorage, shell } from 'electron';
+import { app, ipcMain, nativeImage, powerMonitor, safeStorage, shell } from 'electron';
 import { randomUUID } from 'node:crypto';
 import { mkdir, readFile, realpath, stat, writeFile } from 'node:fs/promises';
 import { basename, isAbsolute, join, relative, resolve, sep } from 'node:path';
@@ -567,6 +567,7 @@ const computerUseHost = createComputerUseHost({
       return { base64, mimeType: 'image/png' };
     }
   },
+  physicalInputRecentlyActive: () => powerMonitor.getSystemIdleTime() < 1,
   overlay: createComputerUseOverlayHook(computerUseOverlay),
 });
 const computerUse = computerUseHost.selected;
