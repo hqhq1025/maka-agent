@@ -287,7 +287,10 @@ describe('buildComputerUseTools — the `maka_computer` MakaTool', () => {
       presentationReadyTimeoutMs: 10_000,
     });
     const [tool] = tools;
-    const observed = await tool.impl({ action: 'observe' } as never, ctx()) as {
+    const observed = await tool.impl({
+      action: 'observe',
+      app: 'Fixture',
+    } as never, ctx()) as {
       modelText?: string;
     };
     const observationId = JSON.parse(observed.modelText ?? '{}').observation_id;
@@ -356,7 +359,10 @@ describe('buildComputerUseTools — the `maka_computer` MakaTool', () => {
         },
       },
     });
-    const observed = await tool.impl({ action: 'observe' } as never, ctx()) as {
+    const observed = await tool.impl({
+      action: 'observe',
+      app: 'Fixture',
+    } as never, ctx()) as {
       modelText?: string;
     };
     const observationId = JSON.parse(observed.modelText ?? '{}').observation_id;
@@ -398,7 +404,10 @@ describe('buildComputerUseTools — the `maka_computer` MakaTool', () => {
       },
     });
     const [tool] = tools;
-    const observed = await tool.impl({ action: 'observe' } as never, ctx()) as {
+    const observed = await tool.impl({
+      action: 'observe',
+      app: 'Fixture',
+    } as never, ctx()) as {
       modelText?: string;
     };
     const observationId = JSON.parse(observed.modelText ?? '{}').observation_id;

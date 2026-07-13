@@ -1,4 +1,3 @@
-import { execFile } from 'node:child_process';
 import { readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, relative, resolve } from 'node:path';
@@ -36,12 +35,6 @@ const concurrentProceedPath = join(
   'concurrent-proceed.json',
 );
 
-const exec = (file, args) => new Promise((resolve, reject) => {
-  execFile(file, args, { encoding: 'utf8' }, (error, stdout, stderr) => {
-    if (error) reject(new Error(`${file} failed: ${stderr || error.message}`));
-    else resolve(stdout.trim());
-  });
-});
 const delay = (milliseconds) =>
   new Promise((resolve) => setTimeout(resolve, milliseconds));
 const waitForJson = async (path, label, timeoutMs = 10_000) => {
@@ -242,13 +235,6 @@ const coordinateForElement = (observed, element) => {
     ),
   ];
 };
-const screenCoordinateForElement = (element) => {
-  if (!element.frame) throw new Error('element has no screen frame');
-  return {
-    x: Math.round(element.frame.x + element.frame.width / 2),
-    y: Math.round(element.frame.y + element.frame.height / 2),
-  };
-};
 const validateFixtureIdentity = async (fixture, state) => {
   if (
     state.synthetic !== true
@@ -263,29 +249,6 @@ const validateFixtureIdentity = async (fixture, state) => {
     || (concurrentUserMode && baseline.frontmostPID === fixture.pid)
   ) {
     throw new Error('synthetic fixture provenance mismatch');
-  }
-};
-const fixtureCoordinateMutation = async (observed, label) => {
-  const target = findOccurrence(observed.model, label);
-  const coordinate = screenCoordinateForElement(target.selected);
-  const winner = await backend.inspectWindowAt(
-    coordinate,
-    new AbortController().signal,
-  );
-  if (!winner || winner.pid !== observed.model.pid || winner.windowId !== observed.model.window_id) {
-    throw new Error(`fixture mutation point is not owned by the fixture: ${label}`);
-  }
-  const result = await backend.run(
-    { type: 'left_click', coordinate },
-    new AbortController().signal,
-    {
-      sessionId: 'fixture-mutation',
-      turnId: 'mutation',
-      toolCallId: `mutate-${label}`,
-    },
-  );
-  if (!result.outcome.ok) {
-    throw new Error(`fixture mutation failed: ${result.outcome.message}`);
   }
 };
 const writeReport = async (report) => {
@@ -353,49 +316,26 @@ try {
   }
   const oop = findOccurrence(observed.model, 'CUA Lab OOP Button');
   const oopCoordinate = coordinateForElement(observed, oop.selected);
-  let clickFailure;
-  let clicked;
-  try {
-    clicked = await call({
-      action: 'left_click',
-      observation_id: observed.model.observation_id,
-      coordinate: oopCoordinate,
-    }, 'click-oop', 'turn-oop');
-  } catch (error) {
-    clickFailure = error instanceof Error ? error.message : String(error);
-    if (!concurrentUserMode) throw error;
-  }
+  const clicked = await call({
+    action: 'left_click',
+    observation_id: observed.model.observation_id,
+    coordinate: oopCoordinate,
+  }, 'click-oop', 'turn-oop');
   await delay(250);
   const afterClick = await readState();
   const dispatch = traces.find(
     (event) => event.type === 'dispatch' && event.toolCallId === 'click-oop',
   );
   const runResult = idFlow.findLast((event) => event.phase === 'runResult');
-  const occluded = concurrentUserMode
-    && runResult?.ok === false
-    && runResult.error === 'target_occluded';
-  const hidden = concurrentUserMode
-    && /invalidApp: no visible window matched/.test(clickFailure ?? '');
-  const clickSucceeded = !clickFailure
-    && !clicked?.error
-    && afterClick.oop.clickCount === initial.oop.clickCount + 1;
-  const clickEvidenceInvalid = clickSucceeded && (
-    afterClick.oop.lastEventTrusted !== true
-    || afterClick.oop.webContentPID <= 0
-    || afterClick.oop.webContentPID === afterClick.oop.hostPID
-    || afterClick.oop.hostLocalMouseDownCount <= initial.oop.hostLocalMouseDownCount
-    || afterClick.oop.hostLocalMouseUpCount <= initial.oop.hostLocalMouseUpCount
-    || afterClick.oop.hostLocalMouseDownCount - initial.oop.hostLocalMouseDownCount
-      !== afterClick.oop.hostLocalMouseUpCount - initial.oop.hostLocalMouseUpCount
-    || dispatch?.address !== 'px'
-  );
   if (
-    (!clickSucceeded && !occluded && !hidden)
-    || ((occluded || hidden) && afterClick.oop.clickCount !== initial.oop.clickCount)
-    || clickEvidenceInvalid
+    clicked.error !== 'unsupported_action'
+    || runResult?.error !== 'unsupported_action'
+    || dispatch
+    || afterClick.oop.clickCount !== initial.oop.clickCount
+    || afterClick.oop.hostLocalMouseDownCount !== initial.oop.hostLocalMouseDownCount
+    || afterClick.oop.hostLocalMouseUpCount !== initial.oop.hostLocalMouseUpCount
   ) {
-    throw new Error(`OOP coordinate oracle did not prove trusted pixel dispatch: ${JSON.stringify({
-      clickFailure,
+    throw new Error(`OOP coordinate oracle did not fail closed: ${JSON.stringify({
       clickedError: clicked?.error,
       clickedText: clicked?.text,
       coordinate: oopCoordinate,
@@ -406,19 +346,13 @@ try {
   }
   report.cases.push({
     id: concurrentUserMode
-      ? 'concurrent-user-background-coordinate'
-      : 'oop-webcontent-coordinate-click',
+      ? 'concurrent-user-coordinate-disabled'
+      : 'oop-coordinate-disabled',
     ok: true,
-    outcome: hidden
-      ? 'fail_closed_hidden'
-      : occluded
-        ? 'fail_closed_occluded'
-        : 'background_dispatch_succeeded',
-    dispatchAddress: dispatch?.address,
+    outcome: 'fail_closed_unsupported',
     coordinate: oopCoordinate,
     oracle: {
       clickCount: [initial.oop.clickCount, afterClick.oop.clickCount],
-      lastEventTrusted: clickSucceeded ? afterClick.oop.lastEventTrusted : undefined,
       hostPID: afterClick.oop.hostPID,
       webContentPID: afterClick.oop.webContentPID,
       hostMouseDown: [
@@ -435,7 +369,7 @@ try {
   if (concurrentUserMode) {
     report.ok = true;
     report.claimBoundary =
-      'concurrent mode proves no focus takeover; success still requires a visible, unoccluded target';
+      'concurrent mode proves coordinate compatibility input remains disabled with zero dispatch and zero mutation';
     report.evidence = {
       invalidations,
       traceTypes: traces.map((event) => event.type),

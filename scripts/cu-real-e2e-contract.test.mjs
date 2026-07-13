@@ -26,7 +26,7 @@ test('launcher owns bounded cleanup, frontmost restoration, and sleep prevention
   assert.match(launcher, /restoreFrontmost\(originalFrontmost\)/);
 });
 
-test('concurrent mode allows user input without allowing fixture focus takeover', () => {
+test('concurrent mode allows user input while compatibility dispatch stays disabled', () => {
   assert.match(packageJson, /e2e:computer-use-concurrent/);
   assert.match(launcher, /--concurrent-user/);
   assert.match(launcher, /MAKA_CU_REAL_E2E_MODE/);
@@ -38,9 +38,9 @@ test('concurrent mode allows user input without allowing fixture focus takeover'
   assert.match(monitor, /synthetic fixture became frontmost during concurrent E2E/);
   assert.match(monitor, /!concurrentUserMode && displacement > 4/);
   assert.match(monitor, /!concurrentUserMode && receivedPhysicalInput/);
-  assert.match(harness, /fail_closed_occluded/);
-  assert.match(harness, /fail_closed_hidden/);
-  assert.match(harness, /background_dispatch_succeeded/);
+  assert.match(harness, /concurrent-user-coordinate-disabled/);
+  assert.match(harness, /fail_closed_unsupported/);
+  assert.match(harness, /zero dispatch and zero mutation/);
   assert.match(harness, /appId: `pid:\$\{baseline\.fixturePID\}`/);
   assert.match(harness, /invalid concurrent execution baseline/);
 });
@@ -63,10 +63,12 @@ test('harness validates exact synthetic provenance before real actions', () => {
   assert.match(harness, /baseline\.canonicalAppPath !== expectedAppPath/);
 });
 
-test('truth claims require pixel OOP evidence and fresh-refetch ambiguity evidence', () => {
-  assert.match(harness, /afterClick\.oop\.lastEventTrusted !== true/);
-  assert.match(harness, /afterClick\.oop\.webContentPID === afterClick\.oop\.hostPID/);
-  assert.match(harness, /dispatch\?\.address !== 'px'/);
+test('truth claims require compatibility input rejection and fresh-refetch ambiguity evidence', () => {
+  assert.match(harness, /clicked\.error !== 'unsupported_action'/);
+  assert.match(harness, /runResult\?\.error !== 'unsupported_action'/);
+  assert.match(harness, /afterClick\.oop\.hostLocalMouseDownCount !== initial\.oop\.hostLocalMouseDownCount/);
+  assert.match(harness, /afterClick\.oop\.hostLocalMouseUpCount !== initial\.oop\.hostLocalMouseUpCount/);
+  assert.doesNotMatch(harness, /allowCompatibilityInputDispatch/);
   assert.match(harness, /duplicateFlow\?\.error !== 'stale_frame'/);
   assert.match(harness, /ambiguous semantic action did not fail closed in backend refetch/);
   assert.match(harness, /stale-missing, process restart, and canonical live-process identity require native or driver follow-up/);
