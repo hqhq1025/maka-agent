@@ -5,6 +5,7 @@ import {
   type CuDispatchBackend,
 } from '@maka/runtime';
 import { createCuaDriverBackend } from './cua-driver-backend.js';
+import type { CuaDriverBackendOptions } from './cua-driver-backend.js';
 import type { CuaDriverRoleSnapshot } from './cua-driver-release.js';
 
 export type CuBackendId = 'cua-driver';
@@ -64,11 +65,15 @@ export function selectComputerUseBackend(deps?: {
     mimeType: string,
   ) => { base64: string; mimeType: 'image/png' | 'image/jpeg' };
   overlay?: CuOverlayHook;
+  createBackend?: (
+    options: CuaDriverBackendOptions,
+  ) => DisposableBackend;
 }): SelectedComputerUseBackend {
   if (process.platform !== 'darwin') return NONE;
   if (!deps?.binaryPath || !deps.expectedBinarySha256) return NONE;
   try {
-    const backend = createCuaDriverBackend({
+    let tools: ComputerUseToolSet | undefined;
+    const backend = (deps.createBackend ?? createCuaDriverBackend)({
       binaryPath: deps.binaryPath,
       hostBundleId: resolveHostBundleId(deps?.hostBundleId),
       expectedBinarySha256: deps.expectedBinarySha256,
@@ -82,13 +87,17 @@ export function selectComputerUseBackend(deps?: {
         ? { expectedProtocolVersion: deps.expectedProtocolVersion }
         : {}),
       ...(deps?.compressFrame ? { compressFrame: deps.compressFrame } : {}),
+      onSessionInvalidated: ({ sessionId }) => {
+        tools?.sessionEvents.reobserveRequired(sessionId);
+      },
+    });
+    tools = buildComputerUseTools({
+      backend,
+      ...(deps.overlay ? { overlay: deps.overlay } : {}),
     });
     return {
       backend,
-      tools: buildComputerUseTools({
-        backend,
-        ...(deps.overlay ? { overlay: deps.overlay } : {}),
-      }),
+      tools,
       backendId: 'cua-driver',
     };
   } catch {
