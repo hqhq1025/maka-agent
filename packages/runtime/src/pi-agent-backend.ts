@@ -11,7 +11,7 @@ import type {
 } from '@maka/core';
 import type { BackendSendInput, PermissionDecision } from '@maka/core/backend-types';
 import { redactSecrets } from '@maka/core/redaction';
-import type { ToolCategory } from '@maka/core/permission';
+import { isToolCategory, type ToolCategory } from '@maka/core/permission';
 
 import type { AgentBackend } from '@maka/core/backend-types';
 import type { AppendMessageFn } from './ai-sdk-backend.js';
@@ -601,18 +601,4 @@ function redactUnknown(value: unknown): unknown {
   } catch {
     return '[无法序列化的参数]';
   }
-}
-
-function isToolCategory(value: unknown): value is ToolCategory {
-  return value === 'read' ||
-    value === 'web_read' ||
-    value === 'file_write' ||
-    value === 'fs_destructive' ||
-    value === 'shell_safe' ||
-    value === 'shell_unsafe' ||
-    value === 'git_destructive' ||
-    value === 'network_send' ||
-    value === 'privileged' ||
-    value === 'custom_tool' ||
-    value === 'subagent';
 }

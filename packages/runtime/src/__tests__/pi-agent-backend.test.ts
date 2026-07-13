@@ -214,6 +214,47 @@ describe('PiAgentBackend skeleton', () => {
     assert.equal(third.value?.type === 'tool_result' ? third.value.isError : false, true);
   });
 
+  test('preserves the computer_use category and redacts Computer Use permission args', async () => {
+    const backend = new PiAgentBackend({
+      sessionId: 'session-1',
+      header: header({ permissionMode: 'ask' }),
+      appendMessage: async () => {},
+      permissionEngine: new PermissionEngine({ newId: nextId('permission'), now: nextNow(4_200) }),
+      transport: frames([
+        {
+          type: 'permission_request',
+          toolUseId: 'tool-1',
+          toolName: 'maka_computer',
+          args: {
+            action: 'type',
+            app: 'Example',
+            observation_id: 'frame-1',
+            text: 'secret text',
+            coordinate: [123, 456],
+          },
+          categoryHint: 'computer_use',
+        },
+        { type: 'complete' },
+      ]),
+      newId: nextId('id'),
+      now: nextNow(4_300),
+    });
+
+    const iterator = backend.send({ turnId: 'turn-1', text: 'type', context: [] })[Symbol.asyncIterator]();
+    const first = await iterator.next();
+    assert.equal(first.value?.type, 'permission_request');
+    if (first.value?.type !== 'permission_request') return;
+    assert.equal(first.value.category, 'computer_use');
+    assert.equal(first.value.reason, 'computer_use');
+    assert.deepEqual(first.value.args, {
+      action: 'type',
+      approvalClass: 'keyboard_mutation',
+      rememberForTurnAllowed: true,
+      app: 'Example',
+      observationId: 'frame-1',
+    });
+  });
+
   test('suppresses later child output for a denied permission request', async () => {
     const messages: StoredMessage[] = [];
     const backend = new PiAgentBackend({
