@@ -665,6 +665,7 @@ const {
   browserTools,
   computerUse,
   computerUseOverlay,
+  computerUseStatusItem,
   computerUseTools,
   agentTeamLeadTools,
   desktopProductToolSurface,
@@ -704,7 +705,10 @@ const desktopBackendToolSurfaceDeps = {
     agentGraphCoordinator.toolsForSession(sessionId),
 };
 // Cursor-overlay teardown assigns a module-scoped `let`, so it stays in main.ts.
-onMainWindowClose = () => computerUseOverlay.destroyAll();
+onMainWindowClose = () => {
+  computerUseOverlay.destroyAll();
+  computerUseStatusItem.destroy();
+};
 const systemPromptService = createSystemPromptMainService({
   settingsStore,
   workspaceRoot,
@@ -1070,6 +1074,7 @@ function registerIpc(): void {
     goalWiring,
     automationManager: automationWiring.manager,
     computerUseOverlay,
+    computerUseStatusItem,
     computerUseTools,
     artifactStore,
     attachmentApprovals,
