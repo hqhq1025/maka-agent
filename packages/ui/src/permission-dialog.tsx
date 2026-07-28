@@ -91,7 +91,13 @@ export function PermissionPrompt(props: {
         requestId,
         decision,
         ...(props.request.rememberForTurnAllowed
-          ? { rememberForTurn: decision === 'allow' ? rememberForTurn : false }
+          ? {
+              // Computer Use carries no checkbox: allowing it is allowing it
+              // for the conversation, which is what the dialog says.
+              rememberForTurn:
+                decision === 'allow' &&
+                (props.request.reason === 'computer_use' || rememberForTurn),
+            }
           : {}),
       });
     } finally {
@@ -104,6 +110,11 @@ export function PermissionPrompt(props: {
 
   const fullArgsOpen = expandedRequestId === props.request.requestId;
   const reason = props.request.reason in REASON_TONE ? props.request.reason as ReasonKind : 'custom';
+  // Computer Use is granted for the conversation or not at all. There is no
+  // narrower question worth asking — approving one click and re-asking on the
+  // next tells the user nothing they can act on — so the dialog does not offer
+  // a per-turn option it would only be pretending to honour.
+  const isSessionScoped = reason === 'computer_use' && props.request.rememberForTurnAllowed;
   const preset: ReasonPreset = { prompt: copy.reason[reason], tone: REASON_TONE[reason] };
   const summary = renderPermissionSummary(props.request, copy);
   const details = renderPermissionDetails(props.request, fullArgsOpen, copy);
@@ -149,7 +160,7 @@ export function PermissionPrompt(props: {
               {copy.rememberBrowser}
             </p>
           )}
-          {props.request.reason === 'computer_use' && rememberForTurn && (
+          {isSessionScoped && (
             <p className="maka-permission-context" role="note">
               {copy.rememberScoped}
             </p>
@@ -169,7 +180,7 @@ export function PermissionPrompt(props: {
           <footer className="permissionActions">
             <div className="maka-permission-utility-actions">
               {showDisclosure && <CollapsibleTrigger>{disclosureLabel}</CollapsibleTrigger>}
-              {props.request.rememberForTurnAllowed && (
+              {props.request.rememberForTurnAllowed && !isSessionScoped && (
                 <label className="permissionRemember">
                   <Checkbox
                     checked={rememberForTurn}
@@ -208,7 +219,9 @@ export function PermissionPrompt(props: {
                 onClick={() => submit('allow')}
               >
                 {responsePending ? copy.submitting
-                  : isOneShotPermissionRequest(props.request) ? copy.allowOnce : copy.allow}
+                  : isOneShotPermissionRequest(props.request) ? copy.allowOnce
+                  : isSessionScoped ? copy.allowSession
+                  : copy.allow}
               </UiButton>
             </div>
           </footer>

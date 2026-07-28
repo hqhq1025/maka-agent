@@ -738,7 +738,14 @@ describe('preToolUse — Computer Use permission contract', () => {
     });
   });
 
-  test('remembered metadata permission does not authorize screenshots or mutations', () => {
+  test('a remembered Computer Use grant covers the whole action surface', () => {
+    // Per-class grants were the original design and did not survive a real
+    // session. Every action carries a single-use observation id, so the
+    // remembered key never matched twice and the user was asked again on every
+    // step — which trains the click-through reflex rather than preventing
+    // anything. The grant is now what the dialog says it is before the user
+    // accepts: the whole surface, for this conversation. What keeps an action
+    // pointed at the right target is the frame binding, not this gate.
     const metadataArgs = {
       action: 'observe',
       include_screenshot: false,
@@ -767,8 +774,8 @@ describe('preToolUse — Computer Use permission contract', () => {
     );
 
     expect(metadata.proceed).toBe(true);
-    expect(screenshot.needsPrompt).toBe(true);
-    expect(click.needsPrompt).toBe(true);
+    expect(screenshot.proceed).toBe(true);
+    expect(click.proceed).toBe(true);
   });
 
   test('malformed Computer Use requests cannot use a forged remembered scope', () => {

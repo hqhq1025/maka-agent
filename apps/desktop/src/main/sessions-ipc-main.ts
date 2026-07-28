@@ -90,6 +90,8 @@ export interface SessionsIpcDeps {
     skillIds?: readonly string[],
   ) => Promise<PreparedSkillInvocationMessage>;
   invalidateSessionBindings?: (sessionId: string) => void;
+  /** Drop permission grants scoped to the session, such as Computer Use. */
+  revokeSessionPermissions?: (sessionId: string) => void;
   clearSkillHost?: (sessionId: string) => void;
   ensureSessionWorkspaceAvailable: (sessionId: string) => Promise<void>;
   createSession: (input: CreateSessionInput) => ReturnType<SessionManager['createSession']>;
@@ -189,6 +191,7 @@ export function registerSessionsIpc(deps: SessionsIpcDeps): void {
     ensureSessionCanSend,
     prepareSkillInvocation,
     invalidateSessionBindings,
+    revokeSessionPermissions,
     clearSkillHost,
     ensureSessionWorkspaceAvailable,
     createSession,
@@ -479,6 +482,7 @@ export function registerSessionsIpc(deps: SessionsIpcDeps): void {
       computerUseTools.clearSession(id);
       await goalWiring.archiveSession(id, () => runtime.archive(id));
       invalidateSessionBindings?.(id);
+      revokeSessionPermissions?.(id);
       clearSkillHost?.(id);
       await releaseBrowserSession(id);
       automationManager.removeAllForSession(id);
@@ -659,6 +663,7 @@ export function registerSessionsIpc(deps: SessionsIpcDeps): void {
       computerUseTools.clearSession(id);
       await goalWiring.removeSession(id, () => runtime.remove(id));
       invalidateSessionBindings?.(id);
+      revokeSessionPermissions?.(id);
       clearSkillHost?.(id);
       await releaseBrowserSession(id);
       automationManager.removeAllForSession(id);

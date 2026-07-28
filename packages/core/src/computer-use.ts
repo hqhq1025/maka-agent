@@ -315,16 +315,11 @@ export function computerUseApprovalSummary(args: unknown): ComputerUseApprovalSu
     exactObservationId === undefined
       ? undefined
       : boundedDisplay(redactSecrets(exactObservationId), 256);
-  const explicitTarget = exactApp !== undefined || windowId !== undefined;
-  const targetBound =
-    action === 'list_apps' ||
-    ((action === 'observe' || action === 'screenshot') && explicitTarget) ||
-    ((POINTER_ACTIONS.has(action) ||
-      KEYBOARD_ACTIONS.has(action) ||
-      SEMANTIC_ACTIONS.has(action)) &&
-      exactObservationId !== undefined &&
-      explicitTarget);
-  const rememberForTurnAllowed = knownAction && targetBound;
+  // The grant is session-scoped and covers the whole Computer Use surface, so
+  // whether this particular request names a target no longer bears on it.
+  // Unknown actions stay unrememberable: nothing outside the known action
+  // surface should be able to mint the session grant.
+  const rememberForTurnAllowed = knownAction;
 
   return {
     action,
@@ -336,25 +331,30 @@ export function computerUseApprovalSummary(args: unknown): ComputerUseApprovalSu
   };
 }
 
-export function computerUseApprovalScopeKey(args: unknown): string {
-  const record = asRecord(args);
-  const rawAction = ownDataProperty(record, 'action');
-  const exactAction = typeof rawAction === 'string' ? rawAction : null;
-  const rawApp = ownDataProperty(record, 'app');
-  const exactApp = typeof rawApp === 'string' ? rawApp : null;
-  const rawWindowId = ownDataProperty(record, 'window_id');
-  const exactWindowId =
-    typeof rawWindowId === 'number' && Number.isInteger(rawWindowId) ? rawWindowId : null;
-  const rawObservationId = ownDataProperty(record, 'observation_id');
-  const exactObservationId = typeof rawObservationId === 'string' ? rawObservationId : null;
-  const summary = computerUseApprovalSummary(record);
-  return `computer_use:${JSON.stringify([
-    summary.approvalClass,
-    exactAction,
-    exactApp,
-    exactWindowId,
-    exactObservationId,
-  ])}`;
+/**
+ * Computer Use is granted once per session, not once per action.
+ *
+ * The scope key is deliberately constant. A per-action key made the grant
+ * unusable: every action carries a single-use `observation_id`, so no two
+ * requests ever shared a key and "remember this" could never match anything.
+ * Narrowing the key to action+target would not have fixed that either — the
+ * user cannot meaningfully answer "may I click element 4?", because element 4
+ * means nothing outside the observation the model is looking at.
+ *
+ * What the user can answer is "may this agent drive my computer?". That is the
+ * question this key represents, and the prompt is worded to match: it describes
+ * the whole capability, so a grant obtained on a harmless `list_apps` is not a
+ * grant the user thought was narrower than it is.
+ *
+ * Target correctness is not what this gate protects. Every mutating action must
+ * echo the frame identity of the observation it came from, that binding is
+ * consumed once, and a stale or mismatched target fails closed regardless of
+ * what was approved.
+ */
+export const COMPUTER_USE_APPROVAL_SCOPE_KEY = 'computer_use:session';
+
+export function computerUseApprovalScopeKey(_args: unknown): string {
+  return COMPUTER_USE_APPROVAL_SCOPE_KEY;
 }
 
 function asRecord(value: unknown): Record<string, unknown> {

@@ -992,6 +992,7 @@ function registerIpc(): void {
     ensureSessionCanSend,
     prepareSkillInvocation: prepareDesktopSkillInvocation,
     invalidateSessionBindings: (sessionId) => botIncoming.invalidateSessionBindings(sessionId),
+    revokeSessionPermissions: (sessionId) => permissionEngine.endSession(sessionId),
     clearSkillHost: (sessionId) => desktopSessionSkillHosts.delete(sessionId),
     ensureSessionWorkspaceAvailable,
     createSession: createDesktopSession,

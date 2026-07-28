@@ -71,6 +71,22 @@ import {
 // Per-turn state
 // ============================================================================
 
+/**
+ * Categories whose "remember this" grant is scoped to the session, not the turn.
+ * Everything not listed here keeps turn-scoped memory.
+ */
+const SESSION_SCOPED_GRANT_CATEGORIES: ReadonlySet<ToolCategory> = new Set<ToolCategory>([
+  'computer_use',
+]);
+
+/**
+ * Sessions tracked for session-scoped grants before the oldest is evicted.
+ * Each entry holds a handful of short strings; the cap exists so a long-lived
+ * process cannot accumulate them without bound, not because the cost is real.
+ * Eviction can only cause a re-prompt, never an unintended allow.
+ */
+const MAX_TRACKED_GRANT_SESSIONS = 512;
+
 interface TurnState {
   turnId: string;
   /** Tool-intent scopes granted with `rememberForTurn: true` in this turn. */
@@ -182,6 +198,19 @@ export interface PermissionEngineDeps {
 
 export class PermissionEngine {
   private readonly turns = new Map<string, TurnState>();
+  /**
+   * Scopes the user granted for a whole session rather than a single turn.
+   *
+   * Turn-scoped memory is the right default: a grant for `rm -rf` should not
+   * survive into the next thing the user asks for. Computer Use is the case
+   * where it is wrong. Driving a computer takes many actions across many turns,
+   * and re-asking on each one degenerates into a click-through reflex — the
+   * user stops reading and the prompt stops protecting anything. Asking once,
+   * clearly, and then honouring the answer is the stronger position.
+   *
+   * Only categories in SESSION_SCOPED_GRANT_CATEGORIES are stored here.
+   */
+  private readonly sessionGrants = new Map<string, Set<string>>();
   private readonly parked = new TurnScopedAwaitRegistry<PermissionResponse, ParkedPermission>();
   private readonly deferredTurnClosures = new Set<string>();
 
@@ -229,6 +258,19 @@ export class PermissionEngine {
           : new Error(message);
     });
     this.turns.delete(turnId);
+  }
+
+  /**
+   * Drop a session's session-scoped grants, so the next Computer Use request
+   * asks again.
+   *
+   * Correctness does not depend on this being called: an untracked session
+   * simply prompts, and grants are capped and evicted oldest-first. Call it
+   * where a session's end is known, to keep a grant from outliving the
+   * conversation it was given in.
+   */
+  endSession(sessionId: string): void {
+    this.sessionGrants.delete(sessionId);
   }
 
   /**
@@ -296,7 +338,9 @@ export class PermissionEngine {
       mode: input.mode,
       // Hosted siblings always establish their own request and durable outcome.
       // The Host may settle a late sibling during admission from its remembered winner.
-      turnRemembered: hostedInteraction ? new Set() : state.remembered,
+      turnRemembered: hostedInteraction
+        ? new Set()
+        : this.effectiveRemembered(input.sessionId, state),
     });
 
     let additional = input.additionalPermissionProposal;
@@ -645,6 +689,9 @@ export class PermissionEngine {
       parked.rememberForTurnAllowed
     ) {
       state.remembered.add(parked.scopeKey);
+      if (SESSION_SCOPED_GRANT_CATEGORIES.has(parked.category)) {
+        this.grantForSession(parked.sessionId, parked.scopeKey);
+      }
       // The user allowed this scope for the whole turn, so other requests
       // already parked under the same scope (e.g. the rest of a parallel
       // browser_* batch) must not each re-prompt. Resolve them now — each
@@ -922,6 +969,36 @@ export class PermissionEngine {
         ),
     );
     this.turns.delete(turnId);
+  }
+
+  /**
+   * Scopes visible to this evaluation: what the turn remembers, plus what the
+   * session granted in an earlier turn.
+   *
+   * The union is computed lazily. The common case has no session grant and
+   * returns the turn's own set unchanged, so this stays off the allocation path
+   * for every tool that is not Computer Use.
+   */
+  private effectiveRemembered(sessionId: string, state: TurnState): ReadonlySet<string> {
+    const granted = this.sessionGrants.get(sessionId);
+    if (granted === undefined || granted.size === 0) return state.remembered;
+    if (state.remembered.size === 0) return granted;
+    return new Set([...state.remembered, ...granted]);
+  }
+
+  private grantForSession(sessionId: string, scopeKey: string): void {
+    const existing = this.sessionGrants.get(sessionId);
+    if (existing) {
+      existing.add(scopeKey);
+      return;
+    }
+    if (this.sessionGrants.size >= MAX_TRACKED_GRANT_SESSIONS) {
+      // Map iteration is insertion-ordered, so the first key is the oldest
+      // session still tracked. Dropping it costs one extra prompt.
+      const oldest = this.sessionGrants.keys().next();
+      if (!oldest.done) this.sessionGrants.delete(oldest.value);
+    }
+    this.sessionGrants.set(sessionId, new Set([scopeKey]));
   }
 
   private rememberScopeId(state: TurnState, scopeKey: string, requestId: string): string {

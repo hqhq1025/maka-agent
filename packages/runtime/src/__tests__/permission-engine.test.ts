@@ -92,6 +92,152 @@ describe('PermissionEngine.evaluate — allow path', () => {
   });
 });
 
+describe('PermissionEngine — session-scoped Computer Use grant', () => {
+  const OBSERVE = { action: 'observe', include_screenshot: false, app: 'Example', window_id: 42 };
+  const CLICK = { action: 'left_click', observation_id: 'frame-7', coordinate: [10, 20] };
+
+  async function grantComputerUse(
+    engine: ReturnType<typeof makeEngine>['engine'],
+    sessionId: string,
+    turnId: string,
+  ): Promise<void> {
+    const r = engine.evaluate({
+      sessionId,
+      turnId,
+      toolUseId: `${turnId}-grant`,
+      toolName: 'maka_computer',
+      args: OBSERVE,
+      categoryHint: 'computer_use',
+      mode: 'execute',
+    });
+    expect(r.kind).toBe('prompt');
+    if (r.kind !== 'prompt') return;
+    engine.recordResponse(turnId, {
+      requestId: r.event.requestId,
+      decision: 'allow',
+      rememberForTurn: true,
+    });
+    await r.parked;
+  }
+
+  test('the grant survives into later turns of the same session', async () => {
+    // This is the whole point. Driving a computer spans many turns, and a grant
+    // that dies at the turn boundary means the user is asked again every time
+    // they say anything — which is the behaviour that made the prompt
+    // meaningless in the first place.
+    const { engine } = makeEngine();
+    engine.beginTurn('t1');
+    await grantComputerUse(engine, 's1', 't1');
+    engine.endTurn('t1');
+
+    engine.beginTurn('t2');
+    const later = engine.evaluate({
+      sessionId: 's1',
+      turnId: 't2',
+      toolUseId: 'tu-later',
+      toolName: 'maka_computer',
+      args: CLICK,
+      categoryHint: 'computer_use',
+      mode: 'execute',
+    });
+    expect(later.kind).toBe('allow');
+  });
+
+  test('other categories still forget at the turn boundary', async () => {
+    const { engine } = makeEngine();
+    engine.beginTurn('t1');
+    const r1 = engine.evaluate({
+      sessionId: 's1',
+      turnId: 't1',
+      toolUseId: 'tu1',
+      toolName: 'Write',
+      args: { path: '/x' },
+      mode: 'ask',
+    });
+    expect(r1.kind).toBe('prompt');
+    if (r1.kind !== 'prompt') return;
+    engine.recordResponse('t1', {
+      requestId: r1.event.requestId,
+      decision: 'allow',
+      rememberForTurn: true,
+    });
+    await r1.parked;
+    engine.endTurn('t1');
+
+    engine.beginTurn('t2');
+    const r2 = engine.evaluate({
+      sessionId: 's1',
+      turnId: 't2',
+      toolUseId: 'tu2',
+      toolName: 'Write',
+      args: { path: '/x' },
+      mode: 'ask',
+    });
+    expect(r2.kind).toBe('prompt');
+  });
+
+  test('the grant does not leak into another session', async () => {
+    const { engine } = makeEngine();
+    engine.beginTurn('t1');
+    await grantComputerUse(engine, 's1', 't1');
+    engine.endTurn('t1');
+
+    engine.beginTurn('t2');
+    const otherSession = engine.evaluate({
+      sessionId: 's2',
+      turnId: 't2',
+      toolUseId: 'tu-other',
+      toolName: 'maka_computer',
+      args: CLICK,
+      categoryHint: 'computer_use',
+      mode: 'execute',
+    });
+    expect(otherSession.kind).toBe('prompt');
+  });
+
+  test('endSession revokes the grant', async () => {
+    const { engine } = makeEngine();
+    engine.beginTurn('t1');
+    await grantComputerUse(engine, 's1', 't1');
+    engine.endTurn('t1');
+    engine.endSession('s1');
+
+    engine.beginTurn('t2');
+    const afterEnd = engine.evaluate({
+      sessionId: 's1',
+      turnId: 't2',
+      toolUseId: 'tu-after',
+      toolName: 'maka_computer',
+      args: CLICK,
+      categoryHint: 'computer_use',
+      mode: 'execute',
+    });
+    expect(afterEnd.kind).toBe('prompt');
+  });
+
+  test('an unknown action cannot ride along on the grant', async () => {
+    // The grant covers the known action surface. Something the schema does not
+    // recognize resolves to the same scope key, so the check that keeps it out
+    // is rememberForTurnAllowed — not the key.
+    const { engine } = makeEngine();
+    engine.beginTurn('t1');
+    await grantComputerUse(engine, 's1', 't1');
+    engine.endTurn('t1');
+
+    engine.beginTurn('t2');
+    const unknown = engine.evaluate({
+      sessionId: 's1',
+      turnId: 't2',
+      toolUseId: 'tu-unknown',
+      toolName: 'maka_computer',
+      args: { action: 'raw_unknown_action', app: 'Example' },
+      categoryHint: 'computer_use',
+      mode: 'execute',
+    });
+    expect(unknown.kind).toBe('prompt');
+  });
+});
+
 describe('PermissionEngine.evaluate — invocation-local rules', () => {
   test('explicit deny wins over allow and applies to permission-free tools in bypass mode', () => {
     const { engine } = makeEngine();
@@ -501,12 +647,14 @@ describe('PermissionEngine — turn lifecycle', () => {
   test('a request that forbids turn memory rejects a forged remember response without losing the request', async () => {
     const { engine } = makeEngine();
     engine.beginTurn('t1');
+    // An action outside the known surface is the case that still forbids
+    // memory — the session grant covers known actions only.
     const first = engine.evaluate({
       sessionId: 's1',
       turnId: 't1',
       toolUseId: 'tu1',
       toolName: 'maka_computer',
-      args: { action: 'type', text: 'secret' },
+      args: { action: 'raw_unknown_action', app: 'Example' },
       categoryHint: 'computer_use',
       mode: 'execute',
     });
@@ -535,7 +683,7 @@ describe('PermissionEngine — turn lifecycle', () => {
       turnId: 't1',
       toolUseId: 'tu2',
       toolName: 'maka_computer',
-      args: { action: 'type', text: 'other secret' },
+      args: { action: 'another_unknown_action', app: 'Example' },
       categoryHint: 'computer_use',
       mode: 'execute',
     });

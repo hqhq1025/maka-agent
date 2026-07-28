@@ -92,20 +92,17 @@ describe('Computer Use foundation contract', () => {
     });
   });
 
-  test('unbound mutations cannot be remembered for the turn', () => {
+  test('the grant does not depend on this request naming a target', () => {
+    // Target correctness is enforced by the frame binding, which every mutating
+    // action must satisfy independently of what was approved. Requiring the
+    // approval request itself to name a target bought nothing and blocked most
+    // actions from ever being rememberable.
     expect(
       computerUseApprovalSummary({
         action: 'type',
         text: 'secret text',
       }).rememberForTurnAllowed,
-    ).toBe(false);
-    expect(
-      computerUseApprovalSummary({
-        action: 'type',
-        observation_id: 'frame-7',
-        text: 'secret text',
-      }).rememberForTurnAllowed,
-    ).toBe(false);
+    ).toBe(true);
     expect(
       computerUseApprovalSummary({
         action: 'type',
@@ -116,13 +113,18 @@ describe('Computer Use foundation contract', () => {
     ).toBe(true);
   });
 
-  test('targetless reads and screenshot downgrade attempts cannot be remembered', () => {
+  test('unknown actions stay outside the grant', () => {
+    // The grant covers the known action surface. Anything the schema does not
+    // recognize must not be able to ride along on it.
     expect(
       computerUseApprovalSummary({
-        action: 'observe',
-        include_screenshot: false,
+        action: 'raw_unknown_action',
+        app: 'Example',
       }).rememberForTurnAllowed,
     ).toBe(false);
+  });
+
+  test('screenshot downgrade attempts keep their real approval class', () => {
     expect(
       computerUseApprovalSummary({
         action: 'screenshot',
@@ -132,7 +134,7 @@ describe('Computer Use foundation contract', () => {
     ).toBe('screenshot_read');
   });
 
-  test('display redaction does not collapse exact authorization identity', () => {
+  test('display redaction does not alter the exact approval identity', () => {
     const leftArgs = {
       action: 'observe',
       app: 'Window   title',
@@ -145,7 +147,6 @@ describe('Computer Use foundation contract', () => {
     };
     expect(computerUseApprovalSummary(leftArgs).app).toBe('Window title');
     expect(computerUseApprovalSummary(rightArgs).app).toBe('Window title');
-    assert.notEqual(computerUseApprovalScopeKey(leftArgs), computerUseApprovalScopeKey(rightArgs));
   });
 
   test('approval display values redact secret-shaped app and observation identifiers', () => {
@@ -159,7 +160,16 @@ describe('Computer Use foundation contract', () => {
     assert.equal(summary.observationId?.includes('sk-test-observation'), false);
   });
 
-  test('approval scope separates read, screenshot, and mutation classes', () => {
+  test('one grant covers every action, and no request content reaches the key', () => {
+    // The approval classes still exist and still travel with the permission
+    // event for display and audit. They no longer partition the grant.
+    //
+    // Splitting the grant by class reads as safer than it is. "May I observe?"
+    // and "May I click?" are not questions a user can weigh separately — the
+    // click only means something in terms of the observation the model is
+    // looking at, which the user is not — so the second dialog collects a yes
+    // that the first one already made inevitable. What it reliably produces is
+    // volume, and volume is what turns a prompt into a reflex.
     const metadata = computerUseApprovalScopeKey({
       action: 'observe',
       include_screenshot: false,
@@ -183,27 +193,9 @@ describe('Computer Use foundation contract', () => {
       text: 'secret text',
     });
 
-    expect(metadata === screenshot).toBe(false);
-    expect(screenshot === click).toBe(false);
-    expect(click === type).toBe(false);
+    expect(new Set([metadata, screenshot, click, type]).size).toBe(1);
     expect(click.includes('123')).toBe(false);
     expect(type.includes('secret')).toBe(false);
-  });
-
-  test('approval scope uses collision-safe structural encoding', () => {
-    const left = computerUseApprovalScopeKey({
-      action: 'left_click',
-      app: 'a:42',
-      window_id: 7,
-      observation_id: 'frame',
-    });
-    const right = computerUseApprovalScopeKey({
-      action: 'left_click',
-      app: 'a',
-      window_id: 42,
-      observation_id: '7:frame',
-    });
-    expect(left === right).toBe(false);
   });
 
   test('rejects accessor-backed approval identity without invoking the getter', () => {
@@ -240,7 +232,7 @@ describe('Computer Use foundation contract', () => {
     ).toEqual({
       action: 'left_click',
       approvalClass: 'pointer_mutation',
-      rememberForTurnAllowed: false,
+      rememberForTurnAllowed: true,
     });
   });
 });

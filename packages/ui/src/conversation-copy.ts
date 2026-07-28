@@ -125,6 +125,8 @@ export interface ConversationCopy {
     rememberBrowser: string;
     rememberScoped: string;
     rememberTurn: string;
+    /** Allow label where the grant lasts the conversation, not one action. */
+    allowSession: string;
     actionsAriaLabel: string;
     stop: string;
     stopping: string;
@@ -356,8 +358,8 @@ const CONVERSATION_COPY = {
       reason: { shell_dangerous: '允许执行高风险 shell 命令？', file_write: '允许写入或创建文件？', fs_destructive: '允许执行不可恢复的文件操作？', git_destructive: '允许执行不可恢复的 Git 操作？', network: '允许发起网络请求？', privileged: '允许执行特权操作？', browser: '允许操作已登录的浏览器？', computer_use: '允许读取或操作本机应用？', additional_permissions: '允许本次额外权限？', sandbox_escalation: '允许本次在 sandbox 外执行？', custom: '允许执行此操作？' },
       destructiveContext: '此操作无法恢复，请确认上面的内容。', waited: (label) => `已等待 ${label}`,
       rememberBrowser: '勾选后，本轮接下来的浏览、读取页面、导航、点击和输入都不再逐次询问。你会全程看到操作页面并可随时停止；本轮结束后授权失效。',
-      rememberScoped: '只会记住上方显示的目标、动作和授权类别。读取授权不会扩展为截图或输入授权；目标或动作类别变化时仍会再次询问。',
-      rememberTurn: '本轮记住', actionsAriaLabel: '权限操作', stop: '停止', stopping: '停止中…', deny: '拒绝操作', submitting: '正在提交…', allowOnce: '允许这一次', allow: '允许操作',
+      rememberScoped: '本次对话接下来的读屏、点击和输入都不再询问，不限于上方显示的这个目标或这类动作。你会全程看到操作过程并可随时停止；对话结束后授权失效。',
+      rememberTurn: '本轮记住', allowSession: '本次对话允许', actionsAriaLabel: '权限操作', stop: '停止', stopping: '停止中…', deny: '拒绝操作', submitting: '正在提交…', allowOnce: '允许这一次', allow: '允许操作',
       additionalPermission: '允许本次额外权限？', sandboxEscalation: '允许本次在 sandbox 外执行？', editFile: '允许修改文件？', editOffice: '允许编辑 Office 文档？',
       disclosure: { changes: '查看变更', content: '查看内容', input: '查看输入', fullArguments: '完整参数', details: '查看详情' }, unsupportedValue: '不支持的属性值',
       browser: { navigate: (url) => `即将在浏览器中打开 ${url}`, click: (ref) => `即将在当前页面点击元素 ${ref}`.trim(), type: (ref) => `即将在当前页面输入文本${ref ? ` 到元素 ${ref}` : ''}`, snapshot: '即将读取当前页面的可交互元素列表', extract: (selector) => `即将读取当前页面内容${selector ? `（${selector}）` : ''}`, wait: '即将等待当前页面满足某个条件', generic: '即将操作当前浏览器页面', urlFallback: '一个网址' },
@@ -492,8 +494,8 @@ const CONVERSATION_COPY = {
       reason: { shell_dangerous: 'Allow a high-risk shell command?', file_write: 'Allow writing or creating files?', fs_destructive: 'Allow an irreversible file operation?', git_destructive: 'Allow an irreversible Git operation?', network: 'Allow network access?', privileged: 'Allow a privileged operation?', browser: 'Allow control of your signed-in browser?', computer_use: 'Allow reading or controlling local apps?', additional_permissions: 'Allow these additional permissions?', sandbox_escalation: 'Allow this command to run outside the sandbox?', custom: 'Allow this operation?' },
       destructiveContext: 'This operation cannot be undone. Review the details above.', waited: (label) => `Waiting for ${label}`,
       rememberBrowser: 'For the rest of this turn, do not ask again for browsing, page reading, navigation, clicking, or typing. You can watch the page and stop at any time; access expires when the turn ends.',
-      rememberScoped: 'Remember only the target, action, and permission category shown above. Read access does not expand to screenshots or typing; a different target or action category still requires confirmation.',
-      rememberTurn: 'Remember for this turn', actionsAriaLabel: 'Permission actions', stop: 'Stop', stopping: 'Stopping…', deny: 'Deny', submitting: 'Submitting…', allowOnce: 'Allow once', allow: 'Allow',
+      rememberScoped: 'For the rest of this conversation, do not ask again for reading the screen, clicking, or typing — including targets and action types other than the one shown above. You can watch and stop at any time; the grant ends with the conversation.',
+      rememberTurn: 'Remember for this turn', allowSession: 'Allow for this conversation', actionsAriaLabel: 'Permission actions', stop: 'Stop', stopping: 'Stopping…', deny: 'Deny', submitting: 'Submitting…', allowOnce: 'Allow once', allow: 'Allow',
       additionalPermission: 'Allow these additional permissions?', sandboxEscalation: 'Allow this command to run outside the sandbox?', editFile: 'Allow file changes?', editOffice: 'Allow editing an Office document?',
       disclosure: { changes: 'View changes', content: 'View content', input: 'View input', fullArguments: 'Full arguments', details: 'View details' }, unsupportedValue: 'Unsupported property value',
       browser: { navigate: (url) => `About to open ${url} in the browser`, click: (ref) => `About to click element ${ref} on the current page`.trim(), type: (ref) => `About to type text${ref ? ` into element ${ref}` : ''} on the current page`, snapshot: 'About to read the interactive elements on the current page', extract: (selector) => `About to read the current page${selector ? ` (${selector})` : ''}`, wait: 'About to wait for a condition on the current page', generic: 'About to control the current browser page', urlFallback: 'a URL' },
