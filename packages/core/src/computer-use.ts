@@ -17,6 +17,12 @@ export const COMPUTER_USE_ERROR_CODES = [
   'capture_failed',
   'sensitivity_blocked',
   'unsupported_action',
+  // The executor attempted the action, the OS refused it, and nothing happened —
+  // or nothing was attempted because every path that could reach the target was
+  // forbidden. Distinct from `unsupported_action`, which is decided before
+  // anything is dispatched: "the element does not offer this" tells the model to
+  // try something else, "we tried and it said no" tells it to try again.
+  'dispatch_refused',
   'aborted',
   'timeout',
   'no_active_frame',

@@ -1,6 +1,6 @@
 // Unit test for the maka-cu CuDispatchBackend. Drives the module against a MOCK
 // executor (a small CommonJS node script written to a temp dir) that speaks
-// `maka.cu/1` — the real `maka-cu` binary is never spawned, and does not exist
+// `maka.cu/2` — the real `maka-cu` binary is never spawned, and does not exist
 // as a signed artifact yet. The mock records every message it receives to an
 // NDJSON log the test inspects, the same way the cua-driver backend test does.
 //
@@ -32,12 +32,22 @@ const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
 const LOG = process.env.MAKACU_MOCK_LOG || '';
-const PROTOCOL = process.env.MAKACU_MOCK_PROTOCOL || 'maka.cu/1';
+const PROTOCOL = process.env.MAKACU_MOCK_PROTOCOL || 'maka.cu/2';
 const DISPATCH_ERROR = process.env.MAKACU_MOCK_DISPATCH_ERROR || '';
 const TIER = process.env.MAKACU_MOCK_TIER || 'ax';
 const PATH_NAME = process.env.MAKACU_MOCK_PATH || 'ax_action';
 const BAD_IMAGE_SHA = process.env.MAKACU_MOCK_BAD_IMAGE_SHA === '1';
+const BARE_IMAGE_SHA = process.env.MAKACU_MOCK_BARE_IMAGE_SHA === '1';
 const NO_POST_SNAPSHOT = process.env.MAKACU_MOCK_NO_POST_SNAPSHOT === '1';
+// A refusal that carries only 'error', the way the maka.cu/1 executor emitted it.
+const BARE_REFUSAL = process.env.MAKACU_MOCK_BARE_REFUSAL === '1';
+const REFUSAL_PATH = process.env.MAKACU_MOCK_REFUSAL_PATH || 'none';
+const REFUSAL_OUTCOME = process.env.MAKACU_MOCK_REFUSAL_OUTCOME || 'refused';
+const OK_OUTCOME = process.env.MAKACU_MOCK_OK_OUTCOME || 'ok';
+const SESSION_ERROR = process.env.MAKACU_MOCK_SESSION_ERROR || '';
+const WINDOW_LIST_ERROR = process.env.MAKACU_MOCK_WINDOW_LIST_ERROR || '';
+const MALFORMED = process.env.MAKACU_MOCK_MALFORMED || '';
+const WINDOW_ORIGIN_Y = Number(process.env.MAKACU_MOCK_WINDOW_ORIGIN_Y || '25');
 const NONCE = crypto.randomBytes(16).toString('hex');
 // 1x1 transparent PNG.
 const PNG = Buffer.from(
@@ -52,28 +62,30 @@ function logRec(rec) {
 logRec({ kind: 'start', pid: process.pid, argv: process.argv.slice(2) });
 function send(obj) { process.stdout.write(JSON.stringify(obj) + '\n'); }
 function ok(id, fields) { send({ jsonrpc: '2.0', id: id, result: Object.assign({ ok: true }, fields) }); }
-function domainError(id, code, detail) {
-  send({ jsonrpc: '2.0', id: id, result: { ok: false, error: {
-    code: code, message: 'mock refused: ' + code, detail: detail || {} } } });
+function digest(seed) { return 'sha256:' + crypto.createHash('sha256').update(seed).digest('hex'); }
+function domainError(id, code, detail, extra) {
+  send({ jsonrpc: '2.0', id: id, result: Object.assign({ ok: false }, extra || {}, { error: {
+    code: code, message: 'mock refused: ' + code, detail: detail || {} } }) });
 }
 function writeImage(name) {
   const file = path.join(imageDir, name + '.png');
   fs.writeFileSync(file, PNG);
-  const sha = crypto.createHash('sha256').update(PNG).digest('hex');
+  const hex = crypto.createHash('sha256').update(PNG).digest('hex');
+  const sha = BARE_IMAGE_SHA ? hex : 'sha256:' + hex;
   return {
     path: file,
     format: 'png',
     widthPx: 1200,
     heightPx: 800,
     byteLength: PNG.byteLength,
-    sha256: BAD_IMAGE_SHA ? sha.split('').reverse().join('') : sha,
+    sha256: BAD_IMAGE_SHA ? digest('a different frame') : sha,
     scale: 2,
   };
 }
 function element(index, label, focused) {
   return {
     token: 'el_' + index,
-    parentToken: index === 1 ? null : 'el_1',
+    parentToken: index === 1 ? null : (MALFORMED === 'numeric_parent' ? 7 : 'el_1'),
     depth: index === 1 ? 0 : 1,
     role: index === 1 ? 'AXWindow' : 'AXButton',
     subrole: null,
@@ -86,28 +98,28 @@ function element(index, label, focused) {
     selected: null,
     frame: { x: 10 * index, y: 20 * index, width: 72, height: 28 },
     actions: ['press'],
-    digest: 'sha256:digest_' + index,
+    digest: digest('el_' + index),
     truncated: [],
   };
 }
 function snapshot(includeImage) {
   snapshotSeq += 1;
   const id = 'snap_' + NONCE + '_' + snapshotSeq;
-  return {
+  const shot = {
     snapshotId: id,
     capturedAt: Date.now(),
     target: {
       pid: 4711,
       windowId: 90210,
-      bundleId: 'com.example.Fixture',
+      appId: 'com.example.Fixture',
       appName: 'Fixture',
       title: 'Untitled',
-      bounds: { x: 0, y: 25, width: 600, height: 400 },
+      bounds: { x: 0, y: WINDOW_ORIGIN_Y, width: 600, height: 400 },
       layer: 0,
       zIndex: 3,
       displayId: '69732928',
     },
-    windowDigest: 'sha256:window_' + snapshotSeq,
+    windowDigest: digest('window_' + snapshotSeq),
     focusedElementToken: 'el_2',
     selectedText: null,
     image: includeImage ? writeImage(id) : null,
@@ -121,15 +133,29 @@ function snapshot(includeImage) {
     elements: [element(1, 'Fixture Window', false), element(2, 'Send', true)],
     truncated: { elements: false, depth: false },
   };
+  if (MALFORMED === 'no_displays') delete shot.displays;
+  if (MALFORMED === 'no_obscuring') shot.obscuringRects = null;
+  return shot;
 }
 function dispatchReply(id, params) {
-  if (DISPATCH_ERROR) { domainError(id, DISPATCH_ERROR, { wouldRequirePath: 'cg_event_global' }); return; }
+  if (DISPATCH_ERROR) {
+    if (BARE_REFUSAL) { domainError(id, DISPATCH_ERROR, {}); return; }
+    domainError(id, DISPATCH_ERROR, { wouldRequirePath: 'cg_event_global' }, {
+      toolCallId: params.toolCallId,
+      outcome: REFUSAL_OUTCOME,
+      tier: TIER,
+      path: REFUSAL_PATH,
+      effect: 'unverifiable',
+      verification: { method: 'none', observedChange: false },
+    });
+    return;
+  }
   ok(id, {
     toolCallId: params.toolCallId,
-    outcome: 'ok',
+    outcome: OK_OUTCOME,
     tier: TIER,
     path: PATH_NAME,
-    effect: 'confirmed',
+    effect: OK_OUTCOME === 'ok' ? 'confirmed' : 'unverifiable',
     verification: { method: 'tree_delta', observedChange: true },
     settle: { waitedMs: 12, quiesced: true, reason: 'quiesced' },
     snapshot: NO_POST_SNAPSHOT ? null : snapshot(true),
@@ -173,6 +199,7 @@ function handle(msg) {
       });
       return;
     case 'session.begin':
+      if (SESSION_ERROR) { domainError(id, SESSION_ERROR, {}); return; }
       ok(id, {});
       return;
     case 'session.end':
@@ -182,13 +209,17 @@ function handle(msg) {
       ok(id, { accessibility: true, screenRecording: true, screenRecordingProbe: 'capture_succeeded' });
       return;
     case 'apps.list':
-      ok(id, { apps: [{ appId: 'com.example.Fixture', pid: 4711, name: 'Fixture',
-        bundleId: 'com.example.Fixture', windowCount: 1, running: true }] });
+      ok(id, { apps: [Object.assign({ appId: 'com.example.Fixture', pid: 4711, name: 'Fixture',
+        windowCount: 1, running: true },
+        MALFORMED === 'app_no_window_count' ? { windowCount: undefined } : {})] });
       return;
     case 'window.list':
-      ok(id, { windows: [{ pid: 4711, windowId: 90210, appName: 'Fixture', title: 'Untitled',
-        bounds: { x: 0, y: 25, width: 600, height: 400 }, layer: 0, zIndex: 3,
-        onScreen: true, displayId: '69732928' }] });
+      if (WINDOW_LIST_ERROR) { domainError(id, WINDOW_LIST_ERROR, {}); return; }
+      ok(id, { windows: [Object.assign({ pid: 4711, windowId: 90210,
+        appId: 'com.example.Fixture', appName: 'Fixture', title: 'Untitled',
+        bounds: { x: 0, y: WINDOW_ORIGIN_Y, width: 600, height: 400 }, layer: 0, zIndex: 3,
+        onScreen: true, displayId: '69732928' },
+        MALFORMED === 'window_no_zindex' ? { zIndex: undefined } : {})] });
       return;
     case 'observe':
       ok(id, { snapshot: snapshot(params.includeImage !== false) });
@@ -254,7 +285,16 @@ function makeBackend(
     tier?: string;
     path?: string;
     badImageSha?: boolean;
+    bareImageSha?: boolean;
     noPostSnapshot?: boolean;
+    bareRefusal?: boolean;
+    refusalPath?: string;
+    refusalOutcome?: string;
+    okOutcome?: string;
+    sessionError?: string;
+    windowListError?: string;
+    malformed?: string;
+    windowOriginY?: number;
     physicalInputRecentlyActive?: MakaCuBackendOptions['physicalInputRecentlyActive'];
     allowCompatibilityInputDispatch?: boolean;
     onTrace?: MakaCuBackendOptions['onTrace'];
@@ -263,12 +303,21 @@ function makeBackend(
   const logPath = join(workDir, 'log-' + randomUUID() + '.ndjson');
   const imageDir = join(workDir, 'images-' + randomUUID());
   process.env.MAKACU_MOCK_LOG = logPath;
-  process.env.MAKACU_MOCK_PROTOCOL = opts.protocol ?? 'maka.cu/1';
+  process.env.MAKACU_MOCK_PROTOCOL = opts.protocol ?? 'maka.cu/2';
   process.env.MAKACU_MOCK_DISPATCH_ERROR = opts.dispatchError ?? '';
   process.env.MAKACU_MOCK_TIER = opts.tier ?? 'ax';
   process.env.MAKACU_MOCK_PATH = opts.path ?? 'ax_action';
   process.env.MAKACU_MOCK_BAD_IMAGE_SHA = opts.badImageSha ? '1' : '';
+  process.env.MAKACU_MOCK_BARE_IMAGE_SHA = opts.bareImageSha ? '1' : '';
   process.env.MAKACU_MOCK_NO_POST_SNAPSHOT = opts.noPostSnapshot ? '1' : '';
+  process.env.MAKACU_MOCK_BARE_REFUSAL = opts.bareRefusal ? '1' : '';
+  process.env.MAKACU_MOCK_REFUSAL_PATH = opts.refusalPath ?? 'none';
+  process.env.MAKACU_MOCK_REFUSAL_OUTCOME = opts.refusalOutcome ?? 'refused';
+  process.env.MAKACU_MOCK_OK_OUTCOME = opts.okOutcome ?? 'ok';
+  process.env.MAKACU_MOCK_SESSION_ERROR = opts.sessionError ?? '';
+  process.env.MAKACU_MOCK_WINDOW_LIST_ERROR = opts.windowListError ?? '';
+  process.env.MAKACU_MOCK_MALFORMED = opts.malformed ?? '';
+  process.env.MAKACU_MOCK_WINDOW_ORIGIN_Y = String(opts.windowOriginY ?? 25);
   const backend = createMakaCuBackend({
     binaryPath: mockPath,
     imageDir,
@@ -292,10 +341,16 @@ function signal(): AbortSignal {
   return new AbortController().signal;
 }
 
+const FIXTURE_APP_ID = 'com.example.Fixture';
+
 async function observeFixture(
   backend: ReturnType<typeof createMakaCuBackend>,
 ): Promise<CuObservation> {
-  return backend.observeApp!({ app: 'Fixture', includeScreenshot: true }, signal(), RUN_CONTEXT);
+  return backend.observeApp!(
+    { app: FIXTURE_APP_ID, includeScreenshot: true },
+    signal(),
+    RUN_CONTEXT,
+  );
 }
 
 function boundCoordinate(observation: CuObservation): CuaBoundAction {
@@ -343,7 +398,7 @@ describe('maka-cu backend', () => {
 
     const records = await readRecords(logPath);
     const hello = received(records, 'host.hello')[0];
-    assert.equal(hello?.protocol, 'maka.cu/1');
+    assert.equal(hello?.protocol, 'maka.cu/2');
     assert.equal(hello?.hostPid, process.pid);
     assert.equal(hello?.allowGlobalPointer, false);
     assert.equal(typeof hello?.imageDir, 'string');
@@ -371,15 +426,17 @@ describe('maka-cu backend', () => {
     assert.match(observation.observationId, /^snap_/);
     assert.equal(observation.pid, 4711);
     assert.equal(observation.windowId, 90210);
-    assert.equal(observation.appId, 'com.example.Fixture');
+    assert.equal(observation.appId, FIXTURE_APP_ID);
     // §4.3: the window digest already is the content fingerprint.
-    assert.match(observation.contentFingerprint!, /^sha256:window_/);
+    assert.match(observation.contentFingerprint!, /^sha256:[0-9a-f]{64}$/);
     const button = observation.elements.find((element) => element.role === 'AXButton');
     assert.equal(button?.elementId, 'el_2');
     assert.equal(button?.identity?.token, 'el_2');
     assert.equal(button?.parentElementId, 'el_1');
-    // §5: element frames are window-local logical points, not screen space.
-    assert.deepEqual(button?.frame, { x: 20, y: 40, width: 72, height: 28 });
+    // §5.3: the wire frame is window-local and CuObservedElement.frame is screen
+    // logical points, so the observed rectangle is the element's plus the
+    // window's origin — the fixture window starts at y: 25.
+    assert.deepEqual(button?.frame, { x: 20, y: 65, width: 72, height: 28 });
     assert.equal(observation.screenshot?.mimeType, 'image/png');
     assert.equal(observation.screenshot?.widthPx, 1200);
     assert.deepEqual(observation.displays?.[0]?.sourceBoundsPx, {
@@ -392,8 +449,11 @@ describe('maka-cu backend', () => {
     const records = await readRecords(logPath);
     const observeParams = received(records, 'observe')[0];
     assert.equal(observeParams?.session, RUN_CONTEXT.sessionId);
-    // §5: a tagged union, never app + windowId as two optional fields.
-    assert.deepEqual(observeParams?.target, { kind: 'app', app: 'Fixture' });
+    // §5.2: a tagged union, never app + windowId as two optional fields, and the
+    // app string travels unaltered — the executor resolves it (§5.1), so the
+    // host never touches window.list to do it.
+    assert.deepEqual(observeParams?.target, { kind: 'app', app: FIXTURE_APP_ID });
+    assert.equal(received(records, 'window.list').length, 0);
     // §5: bounds are omitted so the executor applies the ones it declared.
     assert.equal(observeParams?.maxElements, undefined);
     assert.equal(received(records, 'session.begin').length, 1);
@@ -429,7 +489,7 @@ describe('maka-cu backend', () => {
     assert.equal(dispatch?.snapshotId, observation.observationId);
     assert.equal(dispatch?.elementToken, 'el_2');
     // §4.3: echoing the digest catches a host that mixed up two snapshots.
-    assert.equal(dispatch?.expectElementDigest, 'sha256:digest_2');
+    assert.match(dispatch?.expectElementDigest, /^sha256:[0-9a-f]{64}$/);
     assert.equal(dispatch?.strictness, 'element');
     // §6.1: a semantic dispatch addresses an element, not a pixel.
     assert.equal(dispatch?.occlusionPolicy, 'same_app');
@@ -609,6 +669,270 @@ describe('maka-cu backend', () => {
     assert.deepEqual(apps, [
       { appId: 'com.example.Fixture', pid: 4711, name: 'Fixture', windowCount: 1 },
     ]);
+  });
+
+  // §5.1 — one namespace for naming an app.
+
+  it('serves the {app, windowId} pair every fresh full observation asks for', async () => {
+    const { backend, logPath } = makeBackend();
+    const observation = await observeFixture(backend);
+    // This is the exact call the runtime makes after a mutating action
+    // (computer-use-tools.ts freshFullObservation): the appId it hands back is
+    // the one the observation carried.
+    const again = await backend.captureObservation!(
+      { app: observation.appId, windowId: observation.windowId, includeScreenshot: true },
+      signal(),
+      RUN_CONTEXT,
+    );
+    assert.equal(again.appId, FIXTURE_APP_ID);
+
+    // The window id was joined to its pid through window.list (§5.4) and the
+    // pair resolved into the exact arm of the union.
+    const observes = received(await readRecords(logPath), 'observe');
+    assert.deepEqual(observes[1]?.target, { kind: 'window', pid: 4711, windowId: 90210 });
+  });
+
+  it('refuses an {app, windowId} pair no window satisfies as target_missing', async () => {
+    const { backend } = makeBackend();
+    await assert.rejects(
+      backend.captureObservation!(
+        { app: 'com.example.Other', windowId: 90210, includeScreenshot: true },
+        signal(),
+        RUN_CONTEXT,
+      ),
+      /target_missing/,
+    );
+  });
+
+  it('matches an app string against appId only, never against a display name', async () => {
+    const { backend } = makeBackend();
+    // `Fixture` is `appName` on both window.list and snapshot.target. It is a
+    // display string (§1.2) and is never a key, so it matches nothing.
+    await assert.rejects(
+      backend.captureObservation!(
+        { app: 'Fixture', windowId: 90210, includeScreenshot: true },
+        signal(),
+        RUN_CONTEXT,
+      ),
+      /target_missing/,
+    );
+  });
+
+  // §5.3 — coordinate space.
+
+  it('converts every element frame into screen points once, by the window origin', async () => {
+    const { backend } = makeBackend({ windowOriginY: 300 });
+    const observation = await observeFixture(backend);
+    const button = observation.elements.find((element) => element.role === 'AXButton');
+    const root = observation.elements.find((element) => element.role === 'AXWindow');
+    // Window-local (20, 40) inside a window whose origin is (0, 300).
+    assert.deepEqual(button?.frame, { x: 20, y: 340, width: 72, height: 28 });
+    assert.deepEqual(root?.frame, { x: 10, y: 320, width: 72, height: 28 });
+    // The occlusion check compares this centre against the window bounds in
+    // screen space; an unconverted frame is inside a window that starts 300
+    // points lower, so the element reads as outside it.
+    assert.equal(observation.windowBounds?.y, 300);
+  });
+
+  // §6.4 — the host parses the key string.
+
+  it('parses a key combination into the wire closed sets before sending it', async () => {
+    const { backend, logPath } = makeBackend({ allowCompatibilityInputDispatch: true });
+    const observation = await observeFixture(backend);
+    const result = await backend.run({ type: 'key', text: 'cmd+a' }, signal(), {
+      ...RUN_CONTEXT,
+      boundAction: boundCoordinate(observation),
+    });
+    assert.equal(result.outcome.ok, true);
+    const dispatch = received(await readRecords(logPath), 'dispatch.key')[0];
+    // The raw xdotool-flavoured string never reaches the wire; `key` is one
+    // member of the closed set and the modifiers travel in their own array.
+    assert.deepEqual(dispatch?.action, { kind: 'key', key: 'a', modifiers: ['command'] });
+  });
+
+  it('parses an aliased named key and collapses a duplicated modifier', async () => {
+    const { backend, logPath } = makeBackend({ allowCompatibilityInputDispatch: true });
+    const observation = await observeFixture(backend);
+    await backend.runSemantic!(
+      { type: 'press_key', observationId: observation.observationId, key: 'shift+shift+Tab' },
+      signal(),
+      RUN_CONTEXT,
+    );
+    const dispatch = received(await readRecords(logPath), 'dispatch.key')[0];
+    assert.deepEqual(dispatch?.action, { kind: 'key', key: 'Tab', modifiers: ['shift'] });
+  });
+
+  it('sends nothing for a key string it cannot parse', async () => {
+    for (const key of ['delete', 'del', 'cmd+', 'a+b', 'hyper+a']) {
+      const { backend, logPath } = makeBackend({ allowCompatibilityInputDispatch: true });
+      const observation = await observeFixture(backend);
+      const result = await backend.runSemantic!(
+        { type: 'press_key', observationId: observation.observationId, key },
+        signal(),
+        RUN_CONTEXT,
+      );
+      // §6.4: no dropped modifier, no nearest match, and no raw string sent down
+      // for the executor to answer -32602 — which would have reached the model
+      // as `service_mismatch`, blaming the executor's version for Cmd+A.
+      assert.equal(!result.outcome.ok && result.outcome.error, 'unsupported_action', key);
+      assert.ok(
+        !result.outcome.ok && result.outcome.message.includes(`'${key}'`),
+        `the message names the string it could not parse: ${key}`,
+      );
+      assert.equal(received(await readRecords(logPath), 'dispatch.key').length, 0, key);
+    }
+  });
+
+  // §1.1 / §6.5 — refusals carry the declared fields.
+
+  it('accepts a refusal that carries the four declared fields and keeps the executor', async () => {
+    const traces: any[] = [];
+    const { backend } = makeBackend({
+      dispatchError: 'window_occluded',
+      onTrace: (event) => traces.push(event),
+    });
+    const observation = await observeFixture(backend);
+    const result = await backend.runSemantic!(
+      { type: 'click_element', observationId: observation.observationId, elementId: 'el_2' },
+      signal(),
+      RUN_CONTEXT,
+    );
+    assert.equal(!result.outcome.ok && result.outcome.error, 'target_occluded');
+    assert.equal(result.outcome.evidence?.path, 'none');
+    assert.equal(result.outcome.evidence?.effect, 'unverifiable');
+    // §1.1: a refusal is an outcome, not a protocol violation. The maka.cu/1
+    // host SIGKILLed the child for any non-`ok` outcome.
+    assert.ok(!traces.some((event) => event.type === 'protocol_violation'));
+    assert.equal(backend.executorState().state, 'ready');
+    assert.equal(traces.find((event) => event.type === 'refusal')?.outcome, 'refused');
+  });
+
+  it('rejects a refusal that carries only an error object', async () => {
+    const { backend } = makeBackend({ dispatchError: 'window_occluded', bareRefusal: true });
+    const observation = await observeFixture(backend);
+    const result = await backend.runSemantic!(
+      { type: 'click_element', observationId: observation.observationId, elementId: 'el_2' },
+      signal(),
+      RUN_CONTEXT,
+    );
+    // §6.5: the four fields are required on every dispatch result, this arm
+    // included, so a bare refusal is version skew rather than an outcome.
+    assert.equal(!result.outcome.ok && result.outcome.error, 'service_mismatch');
+  });
+
+  it('rejects an ok result that declares a refusal', async () => {
+    const { backend } = makeBackend({ okOutcome: 'refused' });
+    const observation = await observeFixture(backend);
+    const result = await backend.runSemantic!(
+      { type: 'click_element', observationId: observation.observationId, elementId: 'el_2' },
+      signal(),
+      RUN_CONTEXT,
+    );
+    // §6.5: `outcome` selects the arm, so the two can never disagree.
+    assert.equal(!result.outcome.ok && result.outcome.error, 'service_mismatch');
+    assert.match(result.outcome.ok ? '' : result.outcome.message, /contradicts the ok:true arm/);
+  });
+
+  // §7.1 — refused, not unsupported.
+
+  it('tells the model a dispatch was refused, and leaves the frame it quoted live', async () => {
+    const { backend } = makeBackend({ dispatchError: 'dispatch_refused' });
+    const observation = await observeFixture(backend);
+    const result = await backend.runSemantic!(
+      { type: 'click_element', observationId: observation.observationId, elementId: 'el_2' },
+      signal(),
+      RUN_CONTEXT,
+    );
+    // Not `capture_failed` (the wrong subsystem) and not `unsupported_action`
+    // (which is decided before anything is dispatched).
+    assert.equal(!result.outcome.ok && result.outcome.error, 'dispatch_refused');
+    assert.equal(result.outcome.evidence?.reason, 'would_require:cg_event_global');
+
+    // §4.1: a refusal does not spend its snapshot, so the model may retry
+    // against the same frame with different arguments.
+    const retry = await backend.runSemantic!(
+      { type: 'click_element', observationId: observation.observationId, elementId: 'el_1' },
+      signal(),
+      RUN_CONTEXT,
+    );
+    assert.equal(!retry.outcome.ok && retry.outcome.error, 'dispatch_refused');
+  });
+
+  it('discards the frame when the echoed digest was not the recorded one', async () => {
+    const { backend } = makeBackend({ dispatchError: 'element_digest_mismatch' });
+    const observation = await observeFixture(backend);
+    const result = await backend.runSemantic!(
+      { type: 'click_element', observationId: observation.observationId, elementId: 'el_2' },
+      signal(),
+      RUN_CONTEXT,
+    );
+    assert.equal(!result.outcome.ok && result.outcome.error, 'stale_frame');
+    // §6.2: this host paired a token with a digest from another frame, so
+    // re-sending against the same frame cannot help.
+    const again = await backend.runSemantic!(
+      { type: 'click_element', observationId: observation.observationId, elementId: 'el_2' },
+      signal(),
+      RUN_CONTEXT,
+    );
+    assert.equal(!again.outcome.ok && again.outcome.error, 'stale_frame');
+    assert.match(again.outcome.ok ? '' : again.outcome.message, /missing or already consumed/);
+  });
+
+  // §1.3 — one way to write a hash.
+
+  it('rejects a bare-hex image digest instead of comparing against it', async () => {
+    const { backend } = makeBackend({ bareImageSha: true });
+    // §1.3: the host prefixes its own digest and never strips the executor's.
+    // Accepting both spellings is what let the two ends disagree; comparing
+    // bare hex against a prefixed value made every frame mismatch, and a
+    // mismatched frame is teardown.
+    await assert.rejects(observeFixture(backend), /"sha256:" lowercase-hex digest/);
+  });
+
+  // §5.2 / §5.4 / §5.5 — declared fields are not optional.
+
+  it('refuses a snapshot missing a declared array rather than reading it as empty', async () => {
+    for (const malformed of ['no_displays', 'no_obscuring', 'numeric_parent']) {
+      const { backend } = makeBackend({ malformed });
+      await assert.rejects(observeFixture(backend), /service_mismatch/, malformed);
+    }
+  });
+
+  it('refuses a window list entry with no zIndex rather than sorting it as 0', async () => {
+    const { backend } = makeBackend({ malformed: 'window_no_zindex' });
+    // §5.4: the executor MUST NOT emit ties, and a defaulted 0 manufactures
+    // them in the sort that picks the target window.
+    await assert.rejects(
+      backend.captureObservation!({ windowId: 90210, includeScreenshot: true }, signal(), {
+        ...RUN_CONTEXT,
+      }),
+      /window.zIndex/,
+    );
+  });
+
+  it('refuses an apps.list entry with no windowCount rather than reporting zero', async () => {
+    const { backend } = makeBackend({ malformed: 'app_no_window_count' });
+    await assert.rejects(backend.listApps!(signal()), /app.windowCount/);
+  });
+
+  // §1.1 — a refusal from a helper is still an outcome.
+
+  it('maps a refused session.begin instead of letting it escape as an exception', async () => {
+    const { backend } = makeBackend({ sessionError: 'permission_missing' });
+    const result = await backend.run({ type: 'screenshot' }, signal(), RUN_CONTEXT);
+    // The tool implementation gets a CuRunResult the model can read, not a
+    // thrown Error from inside the backend.
+    assert.equal(!result.outcome.ok && result.outcome.error, 'permission_missing');
+  });
+
+  it('maps a refused window.list the same way', async () => {
+    const { backend } = makeBackend({ windowListError: 'permission_missing' });
+    await assert.rejects(
+      backend.captureObservation!({ windowId: 90210, includeScreenshot: true }, signal(), {
+        ...RUN_CONTEXT,
+      }),
+      /permission_missing/,
+    );
   });
 });
 
