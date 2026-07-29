@@ -1,5 +1,5 @@
-// The `maka.cu/1` wire contract, host side. Mirrors
-// docs/maka-cu-host-protocol.md; section numbers in comments refer to it.
+// The `maka.cu/2` wire contract, host side. Mirrors `maka-cu`'s
+// docs/HOST_PROTOCOL.md; section numbers in comments refer to it.
 //
 // Everything here is parsing and mapping only: closed sets are checked against
 // the tables the protocol declares, and anything outside them is a protocol
@@ -15,7 +15,7 @@ import {
   type ComputerUseRect,
 } from '@maka/core';
 
-export const MAKA_CU_PROTOCOL_VERSION = 'maka.cu/1';
+export const MAKA_CU_PROTOCOL_VERSION = 'maka.cu/2';
 
 /** JSON-RPC error codes (§1.1). These describe the request, never the world. */
 export const MAKA_CU_RPC_ERROR = {
@@ -53,7 +53,10 @@ export interface MakaCuRpcResponse {
 /** A `result` envelope (§1.1): the tagged union that carries the world. */
 export type MakaCuEnvelope =
   | ({ ok: true } & Record<string, unknown>)
-  | { ok: false; error: MakaCuDomainError };
+  // §1.1: the refusal arm of a dispatch carries `outcome`/`tier`/`path`/`effect`
+  // beside `error`, so the rest of the record survives the split — reading only
+  // `error` here is what made the host treat a declared refusal as unreadable.
+  | ({ ok: false; error: MakaCuDomainError } & Record<string, unknown>);
 
 export interface MakaCuDomainError {
   code: string;
@@ -70,6 +73,13 @@ const DOMAIN_ERROR_CODES: Record<string, ComputerUseErrorCode> = {
   snapshot_expired: 'stale_frame',
   snapshot_evicted: 'stale_frame',
   element_unknown: 'stale_frame',
+  // §6.2: the token was in the snapshot but the echoed digest was not the one
+  // recorded for it — a different diagnosis from `element_unknown` (token never
+  // minted) and from `element_changed` (the element itself moved on). All three
+  // land on `stale_frame` because that is the closest member of a closed set,
+  // and the trace records which code arrived: a repeated digest mismatch is a
+  // host bug, a repeated `element_changed` is a busy screen.
+  element_digest_mismatch: 'stale_frame',
   snapshot_spent: 'duplicate_action',
   snapshot_superseded: 'stale_epoch',
   element_released: 'target_missing',
@@ -94,13 +104,12 @@ const DOMAIN_ERROR_CODES: Record<string, ComputerUseErrorCode> = {
   outcome_unknown: 'outcome_unknown',
   aborted: 'aborted',
   timeout: 'timeout',
-  // §7.1 leaves `dispatch_refused` unmapped because COMPUTER_USE_ERROR_CODES has
-  // no member meaning "attempted, the OS refused, nothing happened". Of the
-  // members that exist, `unsupported_action` is the only one whose host response
-  // (§6.2: tell the model) matches; `capture_failed`, which the cua-driver
-  // backend falls back to, tells the model a screenshot broke when a button
-  // refused a press. The executor's `detail` still reaches the model as evidence.
-  dispatch_refused: 'unsupported_action',
+  // §7.1: its own member, because `capture_failed` names the wrong subsystem and
+  // `unsupported_action` is where `element_not_actionable`/`element_disabled`
+  // already land — collapsing them loses the difference between "the element
+  // does not offer this" and "it offered it, we tried, the OS said no", which is
+  // the difference between try something else and try again.
+  dispatch_refused: 'dispatch_refused',
 };
 
 /** `undefined` means this host does not know the code — treat as version skew. */
@@ -157,6 +166,133 @@ export interface MakaCuSettle {
   reason: string;
 }
 
+// ---------------------------------------------------------------------------
+// §6.4 keys. The wire carries a named key or one printable character plus a
+// closed set of modifiers; Maka's callers hold xdotool-flavoured strings like
+// `cmd+a`. The host owns the translation because Maka's runtime owns every
+// model-facing word (§13), and because an executor that accepts free-form
+// strings is an executor doing the loose parsing this protocol deletes.
+// ---------------------------------------------------------------------------
+export const MAKA_CU_KEY_MODIFIERS = ['command', 'shift', 'option', 'control', 'fn'] as const;
+export type MakaCuKeyModifier = (typeof MAKA_CU_KEY_MODIFIERS)[number];
+
+/**
+ * §6.4. `Enter` and `Delete` are absent on purpose: `Enter` was a second name
+ * for `Return` with no stated difference, and `Delete` is the backspace legend
+ * on a Mac keyboard but the forward delete in the xdotool vocabulary — one
+ * string, two destructive meanings.
+ */
+export const MAKA_CU_NAMED_KEYS = [
+  'Return',
+  'Tab',
+  'Space',
+  'Escape',
+  'Backspace',
+  'ForwardDelete',
+  'Up',
+  'Down',
+  'Left',
+  'Right',
+  'Home',
+  'End',
+  'PageUp',
+  'PageDown',
+  'F1',
+  'F2',
+  'F3',
+  'F4',
+  'F5',
+  'F6',
+  'F7',
+  'F8',
+  'F9',
+  'F10',
+  'F11',
+  'F12',
+] as const;
+export type MakaCuNamedKey = (typeof MAKA_CU_NAMED_KEYS)[number];
+
+const MODIFIER_ALIASES: Record<string, MakaCuKeyModifier> = {
+  cmd: 'command',
+  command: 'command',
+  meta: 'command',
+  super: 'command',
+  ctrl: 'control',
+  control: 'control',
+  alt: 'option',
+  opt: 'option',
+  option: 'option',
+  shift: 'shift',
+  fn: 'fn',
+  function: 'fn',
+};
+
+const NAMED_KEY_ALIASES: Record<string, MakaCuNamedKey> = {
+  ...Object.fromEntries(MAKA_CU_NAMED_KEYS.map((key) => [key.toLowerCase(), key])),
+  enter: 'Return',
+  esc: 'Escape',
+  spc: 'Space',
+  pgup: 'PageUp',
+  pgdn: 'PageDown',
+  pgdown: 'PageDown',
+  arrowup: 'Up',
+  arrowdown: 'Down',
+  arrowleft: 'Left',
+  arrowright: 'Right',
+  // `delete` and `del` are the aliases a reasonable parser would add and the
+  // ones that must not exist (§6.4): they read as backspace to a Mac user and
+  // as forward delete to xdotool, and picking either deletes the wrong
+  // character. Their absence is what makes those strings unparseable.
+};
+
+export interface MakaCuKeyChord {
+  key: string;
+  modifiers: MakaCuKeyModifier[];
+}
+
+/** The printable range starts at U+0021: `Space` is the only spelling of U+0020. */
+function readKeyToken(token: string): string | undefined {
+  const named = NAMED_KEY_ALIASES[token.toLowerCase()];
+  if (named) return named;
+  if ([...token].length !== 1) return undefined;
+  const code = token.codePointAt(0);
+  return code !== undefined && code >= 0x21 && code <= 0x7e ? token : undefined;
+}
+
+/**
+ * §6.4: parse a caller's combination into the wire's closed sets, or return
+ * `undefined`. `undefined` means the action fails with `unsupported_action`
+ * before anything is sent — never a dropped modifier, never a nearest match,
+ * and never the raw string forwarded for the executor to decide, because a
+ * defaulted key press is an action the user did not ask for and cannot see.
+ */
+export function parseMakaCuKeyChord(input: string): MakaCuKeyChord | undefined {
+  if (input.length === 0) return undefined;
+  let segments: string[];
+  if (input.endsWith('+')) {
+    // A trailing empty segment means the key is literally `+`: `cmd++` is
+    // command-plus and `+` is plus. Any other empty segment is unparseable, so
+    // `cmd+` — which names no key at all — is refused rather than read as one.
+    const head = input.slice(0, -1);
+    if (head.length === 0) segments = ['+'];
+    else if (head.endsWith('+')) segments = [...head.slice(0, -1).split('+'), '+'];
+    else return undefined;
+  } else {
+    segments = input.split('+');
+  }
+  const key = readKeyToken(segments[segments.length - 1]!);
+  if (key === undefined) return undefined;
+  const modifiers: MakaCuKeyModifier[] = [];
+  for (const segment of segments.slice(0, -1)) {
+    // Every earlier segment must be a modifier, so two non-modifier tokens is
+    // not a chord this protocol can express. Duplicates collapse.
+    const modifier = MODIFIER_ALIASES[segment.toLowerCase()];
+    if (!modifier) return undefined;
+    if (!modifiers.includes(modifier)) modifiers.push(modifier);
+  }
+  return { key, modifiers };
+}
+
 export interface MakaCuDispatchResult {
   toolCallId: string;
   outcome: MakaCuDispatchOutcome;
@@ -174,7 +310,7 @@ export interface MakaCuDispatchResult {
 // ---------------------------------------------------------------------------
 export interface MakaCuElement {
   token: string;
-  /** `null` for the root; `null` and absent are the same on the wire (§5). */
+  /** `null` for the root; `null` and absent are the same on the wire (§5.2). */
   parentToken: string | null;
   depth: number;
   role: string;
@@ -186,11 +322,17 @@ export interface MakaCuElement {
   enabled: boolean;
   focused: boolean;
   selected: boolean | null;
-  /** Window-local logical points, origin at the window's top-left (§5). */
-  frame: ComputerUseRect;
+  /**
+   * Window-local logical points, origin at the window's top-left (§5.3). The
+   * name carries the space because §5.3 requires the space to be known from the
+   * type and never from the call site: the runtime's `CuObservedElement.frame`
+   * is screen points, and a field called `frame` on both sides is what let a
+   * window-local rectangle be passed straight through as a screen one.
+   */
+  frameInWindow: ComputerUseRect;
   actions: string[];
   digest: string;
-  /** Which of this element's text fields were cut at `maxTextChars` (§5). */
+  /** Which of this element's text fields were cut at `maxTextChars` (§5.2). */
   truncated: string[];
 }
 
@@ -200,8 +342,9 @@ export interface MakaCuImage {
   widthPx: number;
   heightPx: number;
   byteLength: number;
+  /** `"sha256:"` then lowercase hex, like every other hash here (§1.3). */
   sha256: string;
-  /** Measured `widthPx / target.bounds.width`, not `NSScreen.backingScaleFactor` (§5). */
+  /** Measured `widthPx / target.bounds.width`, not `NSScreen.backingScaleFactor` (§5.3). */
   scale: number;
 }
 
@@ -212,16 +355,45 @@ export interface MakaCuDisplay {
   scaleFactor: number;
 }
 
+/**
+ * §5.1: one namespace. `appId` is the bundle identifier when the process has
+ * one and `pid:<n>` otherwise; `appName` and `title` are display strings, are
+ * untrusted application content (§1.2), and are never matched against.
+ */
 export interface MakaCuSnapshotTarget {
   pid: number;
   windowId: number;
-  bundleId?: string | null;
-  appName?: string | null;
-  title?: string | null;
+  appId: string;
+  appName?: string;
+  title?: string;
   bounds: ComputerUseRect;
   layer: number;
   zIndex: number;
-  displayId?: string | null;
+  displayId?: string;
+}
+
+/**
+ * §5.4. Only the fields the host consumes are read: it joins a window id to its
+ * pid and picks the frontmost window. `appName` and `title` are deliberately
+ * absent — the host that read them is the host that resolved an app string
+ * against them (§5.1), and a field it cannot see is one it cannot match on.
+ */
+export interface MakaCuWindow {
+  pid: number;
+  windowId: number;
+  appId: string;
+  layer: number;
+  /** Monotonically decreasing along the array; the executor MUST NOT emit ties. */
+  zIndex: number;
+  onScreen: boolean;
+}
+
+/** §5.5, mapped straight onto `CuAppSummary`. */
+export interface MakaCuApp {
+  appId: string;
+  pid: number;
+  name?: string;
+  windowCount: number;
 }
 
 export interface MakaCuSnapshot {
@@ -296,8 +468,55 @@ function requireMember<T extends string>(
   return value as T;
 }
 
-function optionalString(value: unknown): string | undefined {
-  return typeof value === 'string' && value.length > 0 ? value : undefined;
+/** §1.3: one way to write a hash. Bare hex is a violation, not a value to fix up. */
+const HASH_PATTERN = /^sha256:[0-9a-f]{64}$/;
+
+export function requireDigest(method: string, value: unknown, what: string): string {
+  if (typeof value !== 'string' || !HASH_PATTERN.test(value)) {
+    throw new MakaCuProtocolViolation(method, `${what} is not a "sha256:" lowercase-hex digest`);
+  }
+  return value;
+}
+
+/** §1.3: the host prefixes its own digest before comparing; it never strips one. */
+export function hostDigest(hex: string): string {
+  return `sha256:${hex}`;
+}
+
+function requireArray(method: string, value: unknown, what: string): unknown[] {
+  if (!Array.isArray(value)) throw new MakaCuProtocolViolation(method, `${what} is not an array`);
+  return value;
+}
+
+/** A declared field that is a string or `null`; any other type is version skew. */
+function requireNullableString(method: string, value: unknown, what: string): string | null {
+  if (value === null || value === undefined) return null;
+  if (typeof value !== 'string' || value.length === 0) {
+    throw new MakaCuProtocolViolation(method, `${what} is neither null nor a non-empty string`);
+  }
+  return value;
+}
+
+function requireNullableBoolean(method: string, value: unknown, what: string): boolean | null {
+  if (value === null || value === undefined) return null;
+  if (typeof value !== 'boolean') {
+    throw new MakaCuProtocolViolation(method, `${what} is neither null nor a boolean`);
+  }
+  return value;
+}
+
+/**
+ * A declared field that is absent, `null`, or a string. Present-and-not-a-string
+ * is version skew, not a value to drop: the fields this reads are the observed
+ * application's own text (§1.2), and an element whose label failed to parse is
+ * not an element without a label.
+ */
+function optionalText(method: string, value: unknown, what: string): string | undefined {
+  if (value === null || value === undefined) return undefined;
+  if (typeof value !== 'string') {
+    throw new MakaCuProtocolViolation(method, `${what} is not a string`);
+  }
+  return value;
 }
 
 function requireRect(method: string, value: unknown, what: string): ComputerUseRect {
@@ -317,6 +536,7 @@ export function readEnvelope(method: string, result: unknown): MakaCuEnvelope {
   if (record.ok !== false) throw new MakaCuProtocolViolation(method, 'result.ok is not a boolean');
   const error = requireRecord(method, record.error, 'result.error');
   return {
+    ...record,
     ok: false,
     error: {
       code: requireString(method, error.code, 'result.error.code'),
@@ -328,34 +548,34 @@ export function readEnvelope(method: string, result: unknown): MakaCuEnvelope {
 
 export function readElement(method: string, value: unknown): MakaCuElement {
   const element = requireRecord(method, value, 'element');
-  const truncated = element.truncated;
-  if (!Array.isArray(truncated)) {
-    throw new MakaCuProtocolViolation(method, 'element.truncated is not an array');
-  }
-  const actions = element.actions;
-  if (!Array.isArray(actions)) {
-    throw new MakaCuProtocolViolation(method, 'element.actions is not an array');
-  }
+  const truncated = requireArray(method, element.truncated, 'element.truncated');
+  const actions = requireArray(method, element.actions, 'element.actions');
+  // §5.2: these five are absent, `null`, or a string. A number where a string
+  // was declared is version skew; dropping it would report an element with no
+  // label as an element that has none.
+  const subrole = optionalText(method, element.subrole, 'element.subrole');
+  const axIdentifier = optionalText(method, element.axIdentifier, 'element.axIdentifier');
+  const label = optionalText(method, element.label, 'element.label');
+  const text = optionalText(method, element.value, 'element.value');
+  const placeholder = optionalText(method, element.placeholder, 'element.placeholder');
   return {
     token: requireString(method, element.token, 'element.token'),
-    parentToken: optionalString(element.parentToken) ?? null,
+    parentToken: requireNullableString(method, element.parentToken, 'element.parentToken'),
     depth: requireNumber(method, element.depth, 'element.depth'),
     role: requireString(method, element.role, 'element.role'),
-    ...(optionalString(element.subrole) ? { subrole: element.subrole as string } : {}),
-    ...(optionalString(element.axIdentifier)
-      ? { axIdentifier: element.axIdentifier as string }
-      : {}),
-    ...(typeof element.label === 'string' ? { label: element.label } : {}),
-    ...(typeof element.value === 'string' ? { value: element.value } : {}),
-    ...(typeof element.placeholder === 'string' ? { placeholder: element.placeholder } : {}),
+    ...(subrole === undefined ? {} : { subrole }),
+    ...(axIdentifier === undefined ? {} : { axIdentifier }),
+    ...(label === undefined ? {} : { label }),
+    ...(text === undefined ? {} : { value: text }),
+    ...(placeholder === undefined ? {} : { placeholder }),
     enabled: requireBoolean(method, element.enabled, 'element.enabled'),
     focused: requireBoolean(method, element.focused, 'element.focused'),
-    selected: typeof element.selected === 'boolean' ? element.selected : null,
-    frame: requireRect(method, element.frame, 'element.frame'),
+    selected: requireNullableBoolean(method, element.selected, 'element.selected'),
+    frameInWindow: requireRect(method, element.frame, 'element.frame'),
     actions: actions.map((action, index) =>
       requireString(method, action, `element.actions[${index}]`),
     ),
-    digest: requireString(method, element.digest, 'element.digest'),
+    digest: requireDigest(method, element.digest, 'element.digest'),
     truncated: truncated.map((field, index) =>
       requireString(method, field, `element.truncated[${index}]`),
     ),
@@ -376,47 +596,82 @@ export function readImageField(method: string, value: unknown): MakaCuImage {
     widthPx: requireNumber(method, image.widthPx, 'image.widthPx'),
     heightPx: requireNumber(method, image.heightPx, 'image.heightPx'),
     byteLength: requireNumber(method, image.byteLength, 'image.byteLength'),
-    sha256: requireString(method, image.sha256, 'image.sha256'),
+    sha256: requireDigest(method, image.sha256, 'image.sha256'),
     scale: requireNumber(method, image.scale, 'image.scale'),
+  };
+}
+
+/** §5.4. Every field the host reads is declared, so none of them may be absent. */
+export function readWindow(method: string, value: unknown): MakaCuWindow {
+  const window = requireRecord(method, value, 'window');
+  return {
+    pid: requireNumber(method, window.pid, 'window.pid'),
+    windowId: requireNumber(method, window.windowId, 'window.windowId'),
+    appId: requireString(method, window.appId, 'window.appId'),
+    layer: requireNumber(method, window.layer, 'window.layer'),
+    // Defaulting this to 0 manufactures the ties §5.4 forbids, in the sort that
+    // picks the target window.
+    zIndex: requireNumber(method, window.zIndex, 'window.zIndex'),
+    onScreen: requireBoolean(method, window.onScreen, 'window.onScreen'),
+  };
+}
+
+/** §5.5. `windowCount` defaulted to 0 is a window inventory the host invented. */
+export function readApp(method: string, value: unknown): MakaCuApp {
+  const app = requireRecord(method, value, 'app');
+  const name = optionalText(method, app.name, 'app.name');
+  return {
+    appId: requireString(method, app.appId, 'app.appId'),
+    pid: requireNumber(method, app.pid, 'app.pid'),
+    ...(name === undefined ? {} : { name }),
+    windowCount: requireNumber(method, app.windowCount, 'app.windowCount'),
   };
 }
 
 export function readSnapshot(method: string, value: unknown): MakaCuSnapshot {
   const snapshot = requireRecord(method, value, 'snapshot');
   const target = requireRecord(method, snapshot.target, 'snapshot.target');
-  const elements = snapshot.elements;
-  if (!Array.isArray(elements)) {
-    throw new MakaCuProtocolViolation(method, 'snapshot.elements is not an array');
-  }
-  const displays = Array.isArray(snapshot.displays) ? snapshot.displays : [];
-  const obscuring = Array.isArray(snapshot.obscuringRects) ? snapshot.obscuringRects : [];
+  const elements = requireArray(method, snapshot.elements, 'snapshot.elements');
+  // §5.2 declares both of these on every snapshot. Falling back to `[]` when
+  // one is absent or malformed reports a target nothing is stacked above and a
+  // machine with no displays, which is a claim about the world the host made up.
+  const displays = requireArray(method, snapshot.displays, 'snapshot.displays');
+  const obscuring = requireArray(method, snapshot.obscuringRects, 'snapshot.obscuringRects');
   const truncated = requireRecord(method, snapshot.truncated, 'snapshot.truncated');
-  const selectedText = isRecord(snapshot.selectedText)
-    ? {
-        text: requireString(method, snapshot.selectedText.text, 'snapshot.selectedText.text'),
-        truncated: requireBoolean(
-          method,
-          snapshot.selectedText.truncated,
-          'snapshot.selectedText.truncated',
-        ),
-      }
-    : null;
+  const selectedText =
+    snapshot.selectedText === null || snapshot.selectedText === undefined
+      ? null
+      : (() => {
+          const record = requireRecord(method, snapshot.selectedText, 'snapshot.selectedText');
+          return {
+            text: requireString(method, record.text, 'snapshot.selectedText.text'),
+            truncated: requireBoolean(method, record.truncated, 'snapshot.selectedText.truncated'),
+          };
+        })();
+  const appName = optionalText(method, target.appName, 'snapshot.target.appName');
+  const title = optionalText(method, target.title, 'snapshot.target.title');
+  const displayId = optionalText(method, target.displayId, 'snapshot.target.displayId');
   return {
     snapshotId: requireString(method, snapshot.snapshotId, 'snapshot.snapshotId'),
     capturedAt: requireNumber(method, snapshot.capturedAt, 'snapshot.capturedAt'),
     target: {
       pid: requireNumber(method, target.pid, 'snapshot.target.pid'),
       windowId: requireNumber(method, target.windowId, 'snapshot.target.windowId'),
-      ...(optionalString(target.bundleId) ? { bundleId: target.bundleId as string } : {}),
-      ...(optionalString(target.appName) ? { appName: target.appName as string } : {}),
-      ...(typeof target.title === 'string' ? { title: target.title } : {}),
+      // §5.1: the one string that names an app on this wire.
+      appId: requireString(method, target.appId, 'snapshot.target.appId'),
+      ...(appName === undefined ? {} : { appName }),
+      ...(title === undefined ? {} : { title }),
       bounds: requireRect(method, target.bounds, 'snapshot.target.bounds'),
       layer: requireNumber(method, target.layer, 'snapshot.target.layer'),
       zIndex: requireNumber(method, target.zIndex, 'snapshot.target.zIndex'),
-      ...(optionalString(target.displayId) ? { displayId: target.displayId as string } : {}),
+      ...(displayId === undefined ? {} : { displayId }),
     },
-    windowDigest: requireString(method, snapshot.windowDigest, 'snapshot.windowDigest'),
-    focusedElementToken: optionalString(snapshot.focusedElementToken) ?? null,
+    windowDigest: requireDigest(method, snapshot.windowDigest, 'snapshot.windowDigest'),
+    focusedElementToken: requireNullableString(
+      method,
+      snapshot.focusedElementToken,
+      'snapshot.focusedElementToken',
+    ),
     selectedText,
     image: readImage(method, snapshot.image),
     displays: displays.map((display, index) => {
@@ -440,20 +695,38 @@ export function readSnapshot(method: string, value: unknown): MakaCuSnapshot {
 }
 
 /**
- * §6.5 + §6.3: all four declared fields are required, and the tier/path pair is
- * rejected rather than coerced. `allowGlobalPointer` is verified here because
- * the executor states the path and the host checks it — a response whose path
- * was not permitted means the executor moved the system cursor, which is the
- * one invariant Maka does not trade.
+ * §6.5 + §6.3 + §1.1: all four declared fields are required on **both** arms,
+ * the tier/path pair is rejected rather than coerced, and `outcome` must agree
+ * with the arm that carries it — `ok: true` with `outcome: "refused"` and
+ * `ok: false` with `outcome: "ok"` are both protocol violations.
+ *
+ * `allowGlobalPointer` is verified here because the executor states the path
+ * and the host checks it: a response whose path was not permitted means the
+ * executor moved the system cursor, which is the one invariant Maka does not
+ * trade. It is checked on the refusal arm too, where the path names what was
+ * attempted before the OS said no.
  */
 export function readDispatchResult(
   method: string,
-  envelope: { ok: true } & Record<string, unknown>,
+  envelope: MakaCuEnvelope,
   allowGlobalPointer: boolean,
 ): MakaCuDispatchResult {
   const verification = requireRecord(method, envelope.verification, 'verification');
   const tier = requireMember(method, envelope.tier, COMPUTER_USE_DISPATCH_TIERS, 'tier');
   const path = requireMember(method, envelope.path, MAKA_CU_DISPATCH_PATHS, 'path');
+  const outcome = requireMember(method, envelope.outcome, MAKA_CU_DISPATCH_OUTCOMES, 'outcome');
+  const effect = requireMember(method, envelope.effect, COMPUTER_USE_EFFECTS, 'effect');
+  if (envelope.ok !== (outcome === 'ok')) {
+    throw new MakaCuProtocolViolation(
+      method,
+      `outcome '${outcome}' contradicts the ok:${String(envelope.ok)} arm carrying it`,
+    );
+  }
+  if (outcome !== 'ok' && effect === 'confirmed') {
+    // §6.5: `failed` and `unknown` MUST NOT report `confirmed`, and a refusal
+    // dispatched nothing to confirm.
+    throw new MakaCuProtocolViolation(method, `outcome '${outcome}' reported effect 'confirmed'`);
+  }
   if (path !== 'none' && !PATHS_BY_TIER[tier].includes(path)) {
     throw new MakaCuProtocolViolation(method, `tier '${tier}' does not permit path '${path}'`);
   }
@@ -486,10 +759,10 @@ export function readDispatchResult(
     : undefined;
   return {
     toolCallId: requireString(method, envelope.toolCallId, 'toolCallId'),
-    outcome: requireMember(method, envelope.outcome, MAKA_CU_DISPATCH_OUTCOMES, 'outcome'),
+    outcome,
     tier,
     path,
-    effect: requireMember(method, envelope.effect, COMPUTER_USE_EFFECTS, 'effect'),
+    effect,
     verification: {
       method: requireMember(
         method,

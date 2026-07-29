@@ -1,6 +1,6 @@
-// The `maka.cu/1` CuDispatchBackend. Speaks the host protocol
-// (docs/maka-cu-host-protocol.md) to `maka-cu`, the native macOS executor;
-// section numbers in comments refer to that document.
+// The `maka.cu/2` CuDispatchBackend. Speaks the host protocol (`maka-cu`'s
+// docs/HOST_PROTOCOL.md) to `maka-cu`, the native macOS executor; section
+// numbers in comments refer to that document.
 //
 // The point of this backend, next to the cua-driver one, is that frame binding
 // lives in the executor. A dispatch quotes a snapshot id, an element token and
@@ -45,17 +45,23 @@ import type {
 import { exceedsFrameCap, FRAME_COMPRESS_THRESHOLD_BYTES } from './frame-budget.js';
 import {
   MAKA_CU_ALLOW_GLOBAL_POINTER,
+  hostDigest,
   mapMakaCuDomainError,
   MakaCuProtocolViolation,
+  parseMakaCuKeyChord,
+  readApp,
   readDispatchResult,
   readImageField,
   readSnapshot,
+  readWindow,
   MAKA_CU_RPC_ERROR,
   type MakaCuDispatchResult,
   type MakaCuDomainError,
   type MakaCuElement,
+  type MakaCuEnvelope,
   type MakaCuImage,
   type MakaCuSnapshot,
+  type MakaCuWindow,
 } from './maka-cu-protocol.js';
 import {
   isMakaCuLifecycleError,
@@ -67,7 +73,7 @@ import {
 
 /**
  * `CuAction.scrollAmount` has no declared unit at the tool boundary ("Amount for
- * scroll", 0..100) while `maka.cu/1` declares pages. The conversion is fixed
+ * scroll", 0..100) while `maka.cu/2` declares pages. The conversion is fixed
  * here, in one place, so the two ends cannot disagree silently. The number is a
  * convention, not a measurement — replace it with one when a real machine says
  * what a model-issued scroll of `n` should move.
@@ -172,6 +178,16 @@ export type MakaCuTraceEvent =
       toolCallId?: string;
       method: string;
       code: string;
+      /**
+       * §1.1: a dispatch refusal carries the four declared fields, and §6.2
+       * wants the code recorded — a repeated `element_digest_mismatch` is a bug
+       * in this host while a repeated `element_changed` is a busy screen, and
+       * nothing else in the exchange says which arrived.
+       */
+      outcome?: string;
+      tier?: string;
+      path?: string;
+      effect?: string;
     }
   | {
       type: 'protocol_violation';
@@ -204,6 +220,39 @@ class MakaCuSessionCleared extends Error {
   constructor() {
     super('session was cleared before request delivery');
     this.name = 'MakaCuSessionCleared';
+  }
+}
+
+/**
+ * A domain refusal (§1.1) raised from a helper that cannot return a
+ * `CuRunResult` — `session.begin`, `window.list`, `apps.list`. It carries the
+ * envelope's error so the one mapping table (§7.1) still decides what the model
+ * is told; throwing a plain Error here is what let a refused `session.begin`
+ * escape `run`/`runSemantic` as an unmapped exception.
+ */
+class MakaCuDomainRefusal extends Error {
+  constructor(
+    readonly method: string,
+    readonly domain: MakaCuDomainError,
+  ) {
+    super(`maka-cu ${method} refused: ${domain.code}`);
+    this.name = 'MakaCuDomainRefusal';
+  }
+}
+
+/**
+ * A refusal the host decided by itself — the caller named a window that is not
+ * open, or an {app, windowId} pair no window satisfies (§5.1). It carries a
+ * Maka code directly because no executor code was involved, and it travels the
+ * same path as a domain refusal so neither escapes as an unmapped exception.
+ */
+class MakaCuHostRefusal extends Error {
+  constructor(
+    readonly code: ComputerUseErrorCode,
+    message: string,
+  ) {
+    super(message);
+    this.name = 'MakaCuHostRefusal';
   }
 }
 
@@ -329,6 +378,12 @@ export function createMakaCuBackend(opts: MakaCuBackendOptions): CuDispatchBacke
   /** Translate an executor or transport failure into a Maka outcome. */
   function backendFailure(method: string, error: unknown): CaptureFailure | undefined {
     if (error instanceof MakaCuSessionCleared) return failure('aborted', error.message);
+    if (error instanceof MakaCuDomainRefusal) {
+      // A refusal is an outcome the model must read (§1.1), wherever in the
+      // sequence it was raised.
+      return domainFailure(error.method, error.domain);
+    }
+    if (error instanceof MakaCuHostRefusal) return failure(error.code, error.message);
     if (isMakaCuLifecycleError(error)) {
       return failure(error.code === 'aborted' ? 'aborted' : error.code, error.message);
     }
@@ -357,8 +412,22 @@ export function createMakaCuBackend(opts: MakaCuBackendOptions): CuDispatchBacke
     method: string,
     error: MakaCuDomainError,
     toolCallId?: string,
+    refusal?: MakaCuDispatchResult,
   ): CaptureFailure {
-    trace({ type: 'refusal', ...(toolCallId ? { toolCallId } : {}), method, code: error.code });
+    trace({
+      type: 'refusal',
+      ...(toolCallId ? { toolCallId } : {}),
+      method,
+      code: error.code,
+      ...(refusal
+        ? {
+            outcome: refusal.outcome,
+            tier: refusal.tier,
+            path: refusal.path,
+            effect: refusal.effect,
+          }
+        : {}),
+    });
     const mapped = mapMakaCuDomainError(error.code);
     if (!mapped) {
       // §7.1 is a closed table. An unknown code is version skew, and guessing a
@@ -379,7 +448,18 @@ export function createMakaCuBackend(opts: MakaCuBackendOptions): CuDispatchBacke
         // §1.2: `message` is a fixed sentence chosen by `code` and carries no
         // application content, so it passes through without a redaction pass.
         message: error.message,
-        ...(wouldRequirePath ? { evidence: { reason: `would_require:${wouldRequirePath}` } } : {}),
+        // §7.1: the executor's enum-only detail is the evidence the model gets.
+        // `path` tells a refusal that was attempted and rejected from one where
+        // nothing permitted could reach the target — which is what `path: none`
+        // plus `wouldRequirePath` says, and is why one code covers both.
+        ...(refusal || wouldRequirePath
+          ? {
+              evidence: {
+                ...(refusal ? { path: refusal.path, effect: refusal.effect } : {}),
+                ...(wouldRequirePath ? { reason: `would_require:${wouldRequirePath}` } : {}),
+              },
+            }
+          : {}),
       },
     };
   }
@@ -421,7 +501,7 @@ export function createMakaCuBackend(opts: MakaCuBackendOptions): CuDispatchBacke
       signal,
     );
     if (!envelope.ok) {
-      throw new Error(`maka-cu session.begin refused: ${envelope.error.code}`);
+      throw new MakaCuDomainRefusal('session.begin', envelope.error);
     }
     begunSessions.add(sessionId);
   }
@@ -549,7 +629,10 @@ export function createMakaCuBackend(opts: MakaCuBackendOptions): CuDispatchBacke
       service.reportProtocolViolation();
       return failure('service_mismatch', 'captured frame length does not match the declared bytes');
     }
-    const digest = createHash('sha256').update(bytes).digest('hex');
+    // §1.3: the host prefixes its own digest before comparing. Comparing bare
+    // hex against the executor's `sha256:`-prefixed value made every frame
+    // mismatch, and the host's answer to a mismatched frame is teardown.
+    const digest = hostDigest(createHash('sha256').update(bytes).digest('hex'));
     if (digest !== image.sha256) {
       service.reportProtocolViolation();
       return failure(
@@ -572,11 +655,16 @@ export function createMakaCuBackend(opts: MakaCuBackendOptions): CuDispatchBacke
     return { base64, mimeType, widthPx: image.widthPx, heightPx: image.heightPx };
   }
 
-  function appIdFor(target: MakaCuSnapshot['target']): string {
-    return target.bundleId ?? target.appName ?? `pid:${target.pid}`;
-  }
-
-  function toObservedElement(element: MakaCuElement): CuObservedElement {
+  /**
+   * §5.3: the wire frame is window-local and `CuObservedElement.frame` is screen
+   * logical points for every backend, so the conversion happens here, in the one
+   * function that holds both the element and the window origin, and nowhere
+   * else. `validateSemanticElementVisibility` compares this rectangle's centre
+   * against the window bounds in screen space and the agent cursor is drawn at
+   * it; passing the window-local value straight through makes both wrong by the
+   * window's origin, silently.
+   */
+  function toObservedElement(element: MakaCuElement, origin: ComputerUseRect): CuObservedElement {
     return {
       // The token IS the element id: it is opaque, snapshot-scoped, and looked
       // up by exact string match (§4.2). An index would be the defect the
@@ -588,7 +676,12 @@ export function createMakaCuBackend(opts: MakaCuBackendOptions): CuDispatchBacke
       enabled: element.enabled,
       ...(element.selected === null ? {} : { selected: element.selected }),
       ...(element.parentToken ? { parentElementId: element.parentToken } : {}),
-      frame: element.frame,
+      frame: {
+        x: element.frameInWindow.x + origin.x,
+        y: element.frameInWindow.y + origin.y,
+        width: element.frameInWindow.width,
+        height: element.frameInWindow.height,
+      },
       identity: {
         token: element.token,
         role: element.role,
@@ -640,7 +733,10 @@ export function createMakaCuBackend(opts: MakaCuBackendOptions): CuDispatchBacke
       // The protocol's snapshot id IS the observation id: a dispatch quotes it
       // straight back, so the two identity spaces never need joining by hand.
       observationId: snapshot.snapshotId,
-      appId: appIdFor(snapshot.target),
+      // §5.1: one namespace. The executor states the `appId`; the host neither
+      // builds one out of display strings nor hands the model a second spelling
+      // to guess between.
+      appId: snapshot.target.appId,
       pid: snapshot.target.pid,
       windowId: snapshot.target.windowId,
       ...(snapshot.target.title ? { windowTitle: snapshot.target.title } : {}),
@@ -648,12 +744,13 @@ export function createMakaCuBackend(opts: MakaCuBackendOptions): CuDispatchBacke
       windowBounds: snapshot.target.bounds,
       ...(sourceBoundsPx ? { sourceBoundsPx } : {}),
       zIndex: snapshot.target.zIndex,
-      ...(snapshot.target.bundleId ? { bundleId: snapshot.target.bundleId } : {}),
       // §4.3: the window digest already is a content fingerprint over every
       // element digest plus bounds and title, computed where the tree lives.
       contentFingerprint: snapshot.windowDigest,
       ...(displays ? { displays } : {}),
-      elements: snapshot.elements.map(toObservedElement),
+      elements: snapshot.elements.map((element) =>
+        toObservedElement(element, snapshot.target.bounds),
+      ),
       ...(screenshot ? { screenshot } : {}),
     };
   }
@@ -662,44 +759,26 @@ export function createMakaCuBackend(opts: MakaCuBackendOptions): CuDispatchBacke
   // Observe (§5).
   // -------------------------------------------------------------------------
 
-  interface WindowRecord {
-    pid: number;
-    windowId: number;
-    appName?: string;
-    title?: string;
-    zIndex: number;
-    onScreen: boolean;
-    layer: number;
-  }
-
-  async function listWindows(sessionId: string, signal: AbortSignal): Promise<WindowRecord[]> {
+  async function listWindows(sessionId: string, signal: AbortSignal): Promise<MakaCuWindow[]> {
     const envelope = await service.call('window.list', { session: sessionId }, signal);
-    if (!envelope.ok) throw new Error(`maka-cu window.list refused: ${envelope.error.code}`);
-    const windows = Array.isArray(envelope.windows) ? envelope.windows : [];
-    return windows.flatMap((entry) => {
-      const record = entry as Record<string, unknown>;
-      if (typeof record.pid !== 'number' || typeof record.windowId !== 'number') return [];
-      return [
-        {
-          pid: record.pid,
-          windowId: record.windowId,
-          ...(typeof record.appName === 'string' ? { appName: record.appName } : {}),
-          ...(typeof record.title === 'string' ? { title: record.title } : {}),
-          zIndex: typeof record.zIndex === 'number' ? record.zIndex : 0,
-          onScreen: record.onScreen !== false,
-          layer: typeof record.layer === 'number' ? record.layer : 0,
-        },
-      ];
-    });
+    if (!envelope.ok) throw new MakaCuDomainRefusal('window.list', envelope.error);
+    const windows = envelope.windows;
+    if (!Array.isArray(windows)) {
+      throw new MakaCuProtocolViolation('window.list', 'windows is not an array');
+    }
+    // Dropping an entry the host could not read would hide a window from the
+    // occlusion sort and from the id→pid join, and the entry it hid is exactly
+    // the one that was malformed.
+    return windows.map((entry) => readWindow('window.list', entry));
   }
 
   /**
-   * §5: `target` is a tagged union, never a bag of optional fields — "app OR
+   * §5.2: `target` is a tagged union, never a bag of optional fields — "app OR
    * window_id" is exactly the disagreement that made a compliant model fail on a
    * real machine. The host resolves its own two-optional API into one arm here:
-   * a window id is exact, an app alone is the app's frontmost usable window, and
-   * neither means the frontmost window on screen, which `window.list` declares
-   * (ordered front-to-back, no zIndex ties).
+   * an app alone goes to the executor, which owns the window inventory and the
+   * z-order (§5.2); a window id is resolved against `window.list` for its pid,
+   * because that join is what the list is for (§5.4).
    */
   async function resolveTarget(
     input: { app?: string; windowId?: number },
@@ -707,29 +786,35 @@ export function createMakaCuBackend(opts: MakaCuBackendOptions): CuDispatchBacke
     signal: AbortSignal,
   ): Promise<{ kind: 'app'; app: string } | { kind: 'window'; pid: number; windowId: number }> {
     if (input.windowId === undefined && input.app) return { kind: 'app', app: input.app };
-    const windows = (await listWindows(sessionId, signal)).filter(
-      (window) => window.layer === 0 && window.onScreen,
-    );
-    const eligible =
-      input.windowId === undefined
-        ? windows
-        : windows.filter((window) => window.windowId === input.windowId);
-    const winner = eligible.sort((a, b) => b.zIndex - a.zIndex)[0];
-    if (!winner) {
-      throw new Error(
-        `invalidApp: no visible window matched ${input.app ?? input.windowId ?? 'the current desktop'}`,
-      );
+    const windows = await listWindows(sessionId, signal);
+    if (input.windowId === undefined) {
+      // Neither input: the frontmost usable window, which `window.list` declares
+      // by ordering front-to-back with no zIndex ties.
+      const winner = windows
+        .filter((window) => window.layer === 0 && window.onScreen)
+        .sort((a, b) => b.zIndex - a.zIndex)[0];
+      if (!winner) {
+        throw new MakaCuHostRefusal('target_missing', 'no visible window is available to observe');
+      }
+      return { kind: 'window', pid: winner.pid, windowId: winner.windowId };
     }
-    if (
-      input.app &&
-      input.app !== winner.appName &&
-      input.app !== winner.title &&
-      input.app !== `pid:${winner.pid}`
-    ) {
-      // Both were supplied and they disagree. Refusing here is not the old
-      // over-strict check: that one required both to match when the model had
-      // sent only one.
-      throw new Error(`ambiguousApp: window ${input.windowId} does not belong to ${input.app}`);
+    // A window id is exact and numeric, and it is resolved whatever its layer or
+    // on-screen state: the caller named one window, not "one of the visible ones".
+    const winner = windows.find((window) => window.windowId === input.windowId);
+    if (!winner) {
+      throw new MakaCuHostRefusal('target_missing', `no window with id ${input.windowId} is open`);
+    }
+    // §5.1: both were supplied, so both must hold, and no window satisfies the
+    // pair when they disagree. The comparison is against `appId` and nothing
+    // else — matching `appName` or `title` is what made every {app, windowId}
+    // pair for a bundle-identified app unresolvable, since the string the host
+    // handed out was the bundle id and the strings it matched against were
+    // display strings that never carry one.
+    if (input.app && input.app !== winner.appId) {
+      throw new MakaCuHostRefusal(
+        'target_missing',
+        `window ${input.windowId} does not belong to ${input.app}`,
+      );
     }
     return { kind: 'window', pid: winner.pid, windowId: winner.windowId };
   }
@@ -739,30 +824,40 @@ export function createMakaCuBackend(opts: MakaCuBackendOptions): CuDispatchBacke
     signal: AbortSignal,
     context: CuRunContext,
   ): Promise<CuObservation> {
-    await ensureSession(context.sessionId, signal);
-    const target = await resolveTarget(input, context.sessionId, signal);
-    const envelope = await service.call(
-      'observe',
-      {
-        session: context.sessionId,
-        target,
-        includeImage: input.includeScreenshot,
-        // maxElements/maxDepth/maxTextChars are omitted so the executor applies
-        // the bounds it declared at handshake (§5). A host-side copy of those
-        // numbers is the drift this protocol removes.
-      },
-      signal,
-    );
-    if (!envelope.ok) {
-      const refusal = domainFailure('observe', envelope.error, context.toolCallId);
-      // `observeApp` reports failure by throwing, so the mapped code travels in
-      // the message the way the cua-driver backend's does.
-      throw new Error(`${refusal.outcome.error}: ${refusal.outcome.message}`);
+    try {
+      await ensureSession(context.sessionId, signal);
+      const target = await resolveTarget(input, context.sessionId, signal);
+      const envelope = await service.call(
+        'observe',
+        {
+          session: context.sessionId,
+          target,
+          includeImage: input.includeScreenshot,
+          // maxElements/maxDepth/maxTextChars are omitted so the executor applies
+          // the bounds it declared at handshake (§5.2). A host-side copy of those
+          // numbers is the drift this protocol removes.
+        },
+        signal,
+      );
+      if (!envelope.ok) throw new MakaCuDomainRefusal('observe', envelope.error);
+      const snapshot = readSnapshot('observe', envelope.snapshot);
+      const observation = await toObservation(snapshot, context);
+      if ('outcome' in observation) {
+        throw new Error(`${observation.outcome.error}: ${observation.outcome.message}`);
+      }
+      return observation;
+    } catch (error) {
+      // `observeApp` reports failure by throwing, so a refusal raised anywhere
+      // in the sequence — session, window list, target resolution, observe —
+      // travels in the message with its mapped code, the way the cua-driver
+      // backend's does.
+      const mapped =
+        error instanceof MakaCuDomainRefusal
+          ? domainFailure(error.method, error.domain, context.toolCallId)
+          : backendFailure('observe', error);
+      if (!mapped) throw error;
+      throw new Error(`${mapped.outcome.error}: ${mapped.outcome.message}`);
     }
-    const snapshot = readSnapshot('observe', envelope.snapshot);
-    const observation = await toObservation(snapshot, context);
-    if ('outcome' in observation) throw new Error(observation.outcome.message);
-    return observation;
   }
 
   // -------------------------------------------------------------------------
@@ -792,12 +887,10 @@ export function createMakaCuBackend(opts: MakaCuBackendOptions): CuDispatchBacke
     quoted: StoredSnapshot,
     context: CuRunContext,
   ): Promise<CuRunResult> {
+    // §1.1/§6.5: `outcome` selects the arm, and `readDispatchResult` rejects a
+    // disagreement — an `ok: true` result may only say `outcome: "ok"`, and a
+    // refusal arrives on the other arm carrying the same four fields.
     const result = readDispatchResult(method, envelope, MAKA_CU_ALLOW_GLOBAL_POINTER);
-    if (result.outcome !== 'ok') {
-      // §6.2 routes every refusal through the `ok: false` arm, so an `ok: true`
-      // envelope that also says `refused` contradicts itself.
-      throw new MakaCuProtocolViolation(method, `ok result declared outcome '${result.outcome}'`);
-    }
     trace({
       type: 'dispatch',
       ...(context.toolCallId ? { toolCallId: context.toolCallId } : {}),
@@ -913,23 +1006,43 @@ export function createMakaCuBackend(opts: MakaCuBackendOptions): CuDispatchBacke
       },
       signal,
     );
-    if (!envelope.ok) {
-      forgetSpentSnapshot(envelope.error, snapshot);
-      return domainFailure('dispatch.element', envelope.error, context.toolCallId);
-    }
+    if (!envelope.ok) return refusedDispatch('dispatch.element', envelope, snapshot, context);
     return completeDispatch('dispatch.element', envelope, snapshot, context);
   }
 
   /** §4.1: a refused dispatch leaves the frame live; `outcome_unknown` spends it. */
-  function forgetSpentSnapshot(error: MakaCuDomainError, snapshot: StoredSnapshot): void {
-    const spent =
+  function forgetUnusableSnapshot(error: MakaCuDomainError, snapshot: StoredSnapshot): void {
+    const unusable =
       error.code === 'outcome_unknown' ||
       error.code === 'snapshot_spent' ||
       error.code === 'snapshot_superseded' ||
       error.code === 'snapshot_expired' ||
       error.code === 'snapshot_evicted' ||
-      error.code === 'snapshot_unknown';
-    if (spent) forgetSnapshot(snapshot.snapshotId);
+      error.code === 'snapshot_unknown' ||
+      // §6.2: the token was real and the echoed digest was not the recorded one,
+      // which means this host paired a token with a digest from another frame.
+      // Re-sending against the same frame cannot help, so the frame goes.
+      error.code === 'element_digest_mismatch';
+    if (unusable) forgetSnapshot(snapshot.snapshotId);
+  }
+
+  /**
+   * §1.1: the refusal arm carries `outcome`, `tier`, `path`, `effect` and
+   * `verification` beside `error`, so it is read and checked exactly like the
+   * success arm — a refusal missing any of them is version skew. What it is
+   * *not* is a protocol violation: a non-`ok` outcome can no longer appear on
+   * the `ok: true` arm, so this arm is the only place one can live, and tearing
+   * the executor down for saying `refused` is how the two ends disagreed.
+   */
+  function refusedDispatch(
+    method: string,
+    envelope: Extract<MakaCuEnvelope, { ok: false }>,
+    snapshot: StoredSnapshot,
+    context: CuRunContext,
+  ): CuRunResult {
+    const refusal = readDispatchResult(method, envelope, MAKA_CU_ALLOW_GLOBAL_POINTER);
+    forgetUnusableSnapshot(envelope.error, snapshot);
+    return domainFailure(method, envelope.error, context.toolCallId, refusal);
   }
 
   async function dispatchKey(
@@ -972,10 +1085,7 @@ export function createMakaCuBackend(opts: MakaCuBackendOptions): CuDispatchBacke
       },
       signal,
     );
-    if (!envelope.ok) {
-      forgetSpentSnapshot(envelope.error, snapshot);
-      return domainFailure('dispatch.key', envelope.error, context.toolCallId);
-    }
+    if (!envelope.ok) return refusedDispatch('dispatch.key', envelope, snapshot, context);
     return completeDispatch('dispatch.key', envelope, snapshot, context);
   }
 
@@ -1017,10 +1127,7 @@ export function createMakaCuBackend(opts: MakaCuBackendOptions): CuDispatchBacke
       },
       signal,
     );
-    if (!envelope.ok) {
-      forgetSpentSnapshot(envelope.error, snapshot);
-      return domainFailure('dispatch.point', envelope.error, context.toolCallId);
-    }
+    if (!envelope.ok) return refusedDispatch('dispatch.point', envelope, snapshot, context);
     return completeDispatch('dispatch.point', envelope, snapshot, context);
   }
 
@@ -1065,6 +1172,34 @@ export function createMakaCuBackend(opts: MakaCuBackendOptions): CuDispatchBacke
     }
   }
 
+  /**
+   * §6.4: the host parses, before it sends. Maka's callers hold xdotool-flavoured
+   * strings (`CuAction.key.text`, `CuSemanticAction.press_key.key`) while the
+   * wire declares a closed set of named keys plus single printable characters
+   * with modifiers in their own array. Forwarding the raw string earned a
+   * `-32602` — a JSON-RPC error, which per §1.1 never describes the world —
+   * which `backendFailure` then reported as `service_mismatch`, telling the
+   * model the executor was the wrong version when it had asked for Cmd+A.
+   *
+   * An unparseable string fails the action here, with the string named. Nothing
+   * reaches `dispatch.key`: a dropped modifier or a nearest match is a key press
+   * the user did not ask for and cannot see.
+   */
+  function keyAction(raw: string): { wire: Record<string, unknown> } | { refusal: CaptureFailure } {
+    const chord = parseMakaCuKeyChord(raw);
+    if (!chord) {
+      return {
+        refusal: failure(
+          'unsupported_action',
+          `'${raw}' is not a key this protocol can express; name one key, ` +
+            'optionally after modifiers (for example cmd+a, shift+Tab, Return), ' +
+            'and say Backspace or ForwardDelete rather than delete',
+        ),
+      };
+    }
+    return { wire: { kind: 'key', key: chord.key, modifiers: chord.modifiers } };
+  }
+
   async function captureScreen(signal: AbortSignal, context: CuRunContext): Promise<CuRunResult> {
     await ensureSession(context.sessionId, signal);
     const envelope = await service.call('screen.capture', { session: context.sessionId }, signal);
@@ -1098,21 +1233,24 @@ export function createMakaCuBackend(opts: MakaCuBackendOptions): CuDispatchBacke
 
     async listApps(signal) {
       return withOperationQueue(signal, async (): Promise<CuAppSummary[]> => {
-        const envelope = await service.call('apps.list', {}, signal);
-        if (!envelope.ok) throw new Error(`maka-cu apps.list refused: ${envelope.error.code}`);
-        const apps = Array.isArray(envelope.apps) ? envelope.apps : [];
-        return apps.flatMap((entry) => {
-          const app = entry as Record<string, unknown>;
-          if (typeof app.appId !== 'string' || typeof app.pid !== 'number') return [];
-          return [
-            {
-              appId: app.appId,
-              pid: app.pid,
-              ...(typeof app.name === 'string' ? { name: app.name } : {}),
-              windowCount: typeof app.windowCount === 'number' ? app.windowCount : 0,
-            },
-          ];
-        });
+        try {
+          const envelope = await service.call('apps.list', {}, signal);
+          if (!envelope.ok) throw new MakaCuDomainRefusal('apps.list', envelope.error);
+          const apps = envelope.apps;
+          if (!Array.isArray(apps)) {
+            throw new MakaCuProtocolViolation('apps.list', 'apps is not an array');
+          }
+          return apps.map((entry) => readApp('apps.list', entry));
+        } catch (error) {
+          // Like `observeApp`, this reports by throwing, so the mapped code
+          // travels in the message rather than escaping as an unmapped one.
+          const mapped =
+            error instanceof MakaCuDomainRefusal
+              ? domainFailure(error.method, error.domain)
+              : backendFailure('apps.list', error);
+          if (!mapped) throw error;
+          throw new Error(`${mapped.outcome.error}: ${mapped.outcome.message}`);
+        }
       });
     },
 
@@ -1133,7 +1271,9 @@ export function createMakaCuBackend(opts: MakaCuBackendOptions): CuDispatchBacke
             const snapshot = requireSnapshot(action.observationId, context);
             if ('outcome' in snapshot) return snapshot;
             if (action.type === 'press_key') {
-              return dispatchKey({ kind: 'key', key: action.key }, snapshot, signal, context);
+              const key = keyAction(action.key);
+              if ('refusal' in key) return key.refusal;
+              return dispatchKey(key.wire, snapshot, signal, context);
             }
             return dispatchElement(action, snapshot, signal, context);
           },
@@ -1159,27 +1299,25 @@ export function createMakaCuBackend(opts: MakaCuBackendOptions): CuDispatchBacke
             }
             if (action.type === 'screenshot') return captureScreen(signal, context);
             if (action.type === 'type' || action.type === 'key') {
+              const wire =
+                action.type === 'type'
+                  ? { wire: { kind: 'type', text: action.text } as Record<string, unknown> }
+                  : keyAction(action.text);
+              if ('refusal' in wire) return wire.refusal;
               await ensureSession(context.sessionId, signal);
               const snapshot = boundSnapshot(context);
               if ('outcome' in snapshot) return snapshot;
-              return dispatchKey(
-                action.type === 'type'
-                  ? { kind: 'type', text: action.text }
-                  : { kind: 'key', key: action.text },
-                snapshot,
-                signal,
-                context,
-              );
+              return dispatchKey(wire.wire, snapshot, signal, context);
             }
             const wire = pointActionFor(action);
             if (!wire) {
-              // `cursor_position`, `hold_key` and `zoom` have no maka.cu/1
+              // `cursor_position`, `hold_key` and `zoom` have no maka.cu/2
               // method. Reading the cursor is meaningless for an executor that
               // never moves it, and the other two are not in the protocol's
               // action sets — feature detection, not silent degradation.
               return failure(
                 'unsupported_action',
-                `action '${action.type}' is not part of maka.cu/1`,
+                `action '${action.type}' is not part of maka.cu/2`,
               );
             }
             await ensureSession(context.sessionId, signal);
