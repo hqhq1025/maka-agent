@@ -212,7 +212,15 @@ export const MAKA_CU_NAMED_KEYS = [
 ] as const;
 export type MakaCuNamedKey = (typeof MAKA_CU_NAMED_KEYS)[number];
 
-const MODIFIER_ALIASES: Record<string, MakaCuKeyModifier> = {
+// Both alias tables are read with a caller-supplied string, so they are built
+// without a prototype. A plain object literal answers `constructor` and
+// `__proto__` from `Object.prototype`: measured before this changed,
+// `parseMakaCuKeyChord('constructor')` returned a chord whose key was a
+// function, `'__proto__'` returned one whose key was an object, and
+// `'constructor+a'` returned `modifiers: [null]`. Each of those goes on the
+// wire, the executor answers -32602, and the host tells the model the executor
+// is the wrong version.
+const MODIFIER_ALIASES: Record<string, MakaCuKeyModifier> = Object.assign(Object.create(null), {
   cmd: 'command',
   command: 'command',
   meta: 'command',
@@ -225,9 +233,9 @@ const MODIFIER_ALIASES: Record<string, MakaCuKeyModifier> = {
   shift: 'shift',
   fn: 'fn',
   function: 'fn',
-};
+});
 
-const NAMED_KEY_ALIASES: Record<string, MakaCuNamedKey> = {
+const NAMED_KEY_ALIASES: Record<string, MakaCuNamedKey> = Object.assign(Object.create(null), {
   ...Object.fromEntries(MAKA_CU_NAMED_KEYS.map((key) => [key.toLowerCase(), key])),
   enter: 'Return',
   esc: 'Escape',
@@ -243,7 +251,7 @@ const NAMED_KEY_ALIASES: Record<string, MakaCuNamedKey> = {
   // ones that must not exist (§6.4): they read as backspace to a Mac user and
   // as forward delete to xdotool, and picking either deletes the wrong
   // character. Their absence is what makes those strings unparseable.
-};
+});
 
 export interface MakaCuKeyChord {
   key: string;
