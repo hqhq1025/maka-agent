@@ -440,7 +440,15 @@ describe('maka-cu backend', () => {
     // §4.3: the window digest already is the content fingerprint.
     assert.match(observation.contentFingerprint!, /^sha256:[0-9a-f]{64}$/);
     const button = observation.elements.find((element) => element.role === 'AXButton');
-    assert.equal(button?.elementId, 'el_2');
+    // The model quotes `elementId` back, so it is short. The real token stays in
+    // `identity`, and the backend maps between them at dispatch — the executor
+    // never sees the short form, which is what the protocol's rule is about.
+    //
+    // The token was the elementId until a real model run: 53 characters, 45 of
+    // them a prefix shared by every element in the snapshot. The model failed
+    // four calls with "arguments failed validation" and explained itself with
+    // 「看起来我漏掉了 element_id 参数」. It had not missed it; it could not copy it.
+    assert.equal(button?.elementId, '1');
     assert.equal(button?.identity?.token, 'el_2');
     assert.equal(button?.parentElementId, 'el_1');
     // §5.3: the wire frame is window-local and CuObservedElement.frame is screen

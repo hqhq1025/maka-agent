@@ -206,6 +206,20 @@ interface StoredSnapshot {
   capturedAt: number;
   /** token → digest, echoed on every element dispatch (§4.3). */
   digests: Map<string, string>;
+  /**
+   * The id the model sees → the wire token.
+   *
+   * The token is 53 characters and every one in a snapshot shares a 45-character
+   * prefix, because it embeds the snapshot id. Handed to a model as the thing to
+   * quote back, it produced a turn that failed four times with
+   * "Computer Use arguments failed validation" and the model's own explanation:
+   * "看起来我漏掉了 element_id 参数". It had not missed it — it could not copy it.
+   *
+   * The wire is unchanged: dispatch still sends the full token, so the binding
+   * the protocol exists for is exactly as strong. Only the model-facing name is
+   * short, and this map is what makes that safe.
+   */
+  modelIds: Map<string, string>;
   focused?: { token: string; digest: string };
 }
 
@@ -562,6 +576,7 @@ export function createMakaCuBackend(opts: MakaCuBackendOptions): CuDispatchBacke
       windowDigest: snapshot.windowDigest,
       capturedAt: snapshot.capturedAt,
       digests: new Map(snapshot.elements.map((element) => [element.token, element.digest])),
+      modelIds: new Map(snapshot.elements.map((element, index) => [String(index), element.token])),
       ...(focusedToken && focusedDigest
         ? { focused: { token: focusedToken, digest: focusedDigest } }
         : {}),
@@ -664,12 +679,17 @@ export function createMakaCuBackend(opts: MakaCuBackendOptions): CuDispatchBacke
    * it; passing the window-local value straight through makes both wrong by the
    * window's origin, silently.
    */
-  function toObservedElement(element: MakaCuElement, origin: ComputerUseRect): CuObservedElement {
+  function toObservedElement(
+    element: MakaCuElement,
+    origin: ComputerUseRect,
+    modelId: string,
+  ): CuObservedElement {
     return {
-      // The token IS the element id: it is opaque, snapshot-scoped, and looked
-      // up by exact string match (§4.2). An index would be the defect the
-      // protocol exists to remove.
-      elementId: element.token,
+      // The model quotes this back, so it is the short one; `identity.token`
+      // below keeps the wire token, and dispatch maps back through the
+      // snapshot's `modelIds`. The protocol's rule is that the EXECUTOR must
+      // not re-resolve an index against a fresh tree — it never sees this id.
+      elementId: modelId,
       role: element.role,
       ...(element.label ? { label: element.label } : {}),
       ...(element.value !== undefined ? { value: element.value } : {}),
@@ -748,8 +768,8 @@ export function createMakaCuBackend(opts: MakaCuBackendOptions): CuDispatchBacke
       // element digest plus bounds and title, computed where the tree lives.
       contentFingerprint: snapshot.windowDigest,
       ...(displays ? { displays } : {}),
-      elements: snapshot.elements.map((element) =>
-        toObservedElement(element, snapshot.target.bounds),
+      elements: snapshot.elements.map((element, index) =>
+        toObservedElement(element, snapshot.target.bounds, String(index)),
       ),
       ...(screenshot ? { screenshot } : {}),
     };
@@ -969,7 +989,9 @@ export function createMakaCuBackend(opts: MakaCuBackendOptions): CuDispatchBacke
     signal: AbortSignal,
     context: CuRunContext,
   ): Promise<CuRunResult> {
-    const digest = snapshot.digests.get(action.elementId);
+    // The model quoted a short id; the wire takes the token.
+    const elementToken = snapshot.modelIds.get(action.elementId) ?? action.elementId;
+    const digest = snapshot.digests.get(elementToken);
     if (!digest) {
       return failure('stale_frame', 'element is not part of the quoted observation');
     }
@@ -989,7 +1011,7 @@ export function createMakaCuBackend(opts: MakaCuBackendOptions): CuDispatchBacke
         session: context.sessionId,
         snapshotId: snapshot.snapshotId,
         toolCallId: context.toolCallId,
-        elementToken: action.elementId,
+        elementToken,
         expectElementDigest: digest,
         // §6.1: element-level binding. `window` would refuse on any change
         // anywhere in the window, which is right for recycled row views and far
