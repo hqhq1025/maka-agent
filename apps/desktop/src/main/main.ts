@@ -667,6 +667,7 @@ const {
   computerUseOverlay,
   computerUseStatusItem,
   computerUsePip,
+  computerUseScreenLock,
   computerUseTools,
   agentTeamLeadTools,
   desktopProductToolSurface,
@@ -711,6 +712,7 @@ onMainWindowClose = () => {
   computerUseOverlay.destroyAll();
   computerUseStatusItem.destroy();
   computerUsePip.destroyAll();
+  computerUseScreenLock.dispose();
 };
 const systemPromptService = createSystemPromptMainService({
   settingsStore,
@@ -1079,6 +1081,7 @@ function registerIpc(): void {
     computerUseOverlay,
     computerUseStatusItem,
     computerUsePip,
+    computerUseScreenLock,
     computerUseTools,
     artifactStore,
     attachmentApprovals,
