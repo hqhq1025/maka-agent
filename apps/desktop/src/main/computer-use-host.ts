@@ -52,6 +52,7 @@ export function createComputerUseHost(input: {
     mimeType: string,
   ) => { base64: string; mimeType: 'image/png' | 'image/jpeg' };
   physicalInputRecentlyActive?: () => boolean | Promise<boolean>;
+  screenLocked?: () => boolean | Promise<boolean>;
   onTrace?: CuaDriverBackendOptions['onTrace'];
   debug?: Parameters<typeof selectComputerUseBackend>[0] extends infer D
     ? D extends { debug?: infer F }
@@ -152,6 +153,7 @@ export function createComputerUseHost(input: {
         ...(input.physicalInputRecentlyActive
           ? { physicalInputRecentlyActive: input.physicalInputRecentlyActive }
           : {}),
+        ...(input.screenLocked ? { screenLocked: input.screenLocked } : {}),
         ...(input.onTrace ? { onTrace: input.onTrace } : {}),
         ...(input.debug ? { debug: input.debug } : {}),
         ...(input.overlay ? { overlay: input.overlay } : {}),

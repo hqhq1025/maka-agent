@@ -34,6 +34,10 @@ import {
   withComputerUsePip,
 } from './computer-use/pip-window.js';
 import {
+  createComputerUseScreenLockGuard,
+  withComputerUseScreenLock,
+} from './computer-use/screen-lock.js';
+import {
   applyComputerUseRealModelPolicy,
   parseComputerUseRealModelPolicy,
 } from './computer-use-real-model-policy.js';
@@ -213,6 +217,10 @@ export function assembleDesktopTools(deps: DesktopToolAssemblyDeps) {
       })
       .catch(() => {});
   };
+  // Background operation is the point, but "the user is elsewhere on the same
+  // machine" and "the user locked the machine and left" are different
+  // situations, and only the first one is what Computer Use was built for.
+  const computerUseScreenLock = createComputerUseScreenLockGuard();
   const computerUseHost = createComputerUseHost({
     isPackaged: app.isPackaged,
     resourcesPath: process.resourcesPath,
@@ -230,6 +238,7 @@ export function assembleDesktopTools(deps: DesktopToolAssemblyDeps) {
       }
     },
     physicalInputRecentlyActive: () => powerMonitor.getSystemIdleTime() < 1,
+    screenLocked: () => computerUseScreenLock.locked(),
     // The Computer Use debug journal.
     //
     // Everything recorded elsewhere is a redacted summary — right for an audit
@@ -270,11 +279,15 @@ export function assembleDesktopTools(deps: DesktopToolAssemblyDeps) {
     // the driver does not do: the menu-bar item, and the mirror of the window
     // being driven.
     overlay: withComputerUsePip(
-      withComputerUseStatusItem(passThroughOverlayHook(), computerUseStatusItem),
+      withComputerUseStatusItem(
+        withComputerUseScreenLock(passThroughOverlayHook(), computerUseScreenLock),
+        computerUseStatusItem,
+      ),
       computerUsePip,
     ),
   });
   const computerUse = computerUseHost.selected;
+  computerUseScreenLock.setSessionEvents(computerUse.tools.sessionEvents);
   const computerUseTools = applyComputerUseRealModelPolicy(
     computerUse.tools,
     isComputerUseRealModelE2e
@@ -396,6 +409,7 @@ export function assembleDesktopTools(deps: DesktopToolAssemblyDeps) {
     computerUse,
     computerUseStatusItem,
     computerUsePip,
+    computerUseScreenLock,
     computerUseTools,
     agentTeamLeadTools,
     desktopProductToolSurface,

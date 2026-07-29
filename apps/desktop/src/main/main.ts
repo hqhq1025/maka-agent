@@ -666,6 +666,7 @@ const {
   computerUse,
   computerUseStatusItem,
   computerUsePip,
+  computerUseScreenLock,
   computerUseTools,
   agentTeamLeadTools,
   desktopProductToolSurface,
@@ -712,6 +713,7 @@ const desktopBackendToolSurfaceDeps = {
 onMainWindowClose = () => {
   computerUseStatusItem.destroy();
   computerUsePip.destroyAll();
+  computerUseScreenLock.dispose();
 };
 const systemPromptService = createSystemPromptMainService({
   settingsStore,
@@ -1094,6 +1096,7 @@ function registerIpc(): void {
     automationManager: automationWiring.manager,
       computerUseStatusItem,
     computerUsePip,
+    computerUseScreenLock,
     computerUseTools,
     artifactStore,
     attachmentApprovals,

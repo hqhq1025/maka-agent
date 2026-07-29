@@ -82,6 +82,7 @@ export function selectComputerUseBackend<TId extends CuBackendId = 'cua-driver'>
     mimeType: string,
   ) => { base64: string; mimeType: 'image/png' | 'image/jpeg' };
   physicalInputRecentlyActive?: () => boolean | Promise<boolean>;
+  screenLocked?: () => boolean | Promise<boolean>;
   onTrace?: CuaDriverBackendOptions['onTrace'];
   /** Diagnostics only; see `CuDebugRecord`. */
   debug?: Parameters<typeof buildComputerUseTools>[0]['debug'];
@@ -109,6 +110,7 @@ export function selectComputerUseBackend<TId extends CuBackendId = 'cua-driver'>
             ...(deps.physicalInputRecentlyActive
               ? { physicalInputRecentlyActive: deps.physicalInputRecentlyActive }
               : {}),
+            ...(deps.screenLocked ? { screenLocked: deps.screenLocked } : {}),
             ...(deps.onMakaCuTrace ? { onTrace: deps.onMakaCuTrace } : {}),
             onSessionInvalidated: ({ sessionId }) => {
               tools?.sessionEvents.reobserveRequired(sessionId);
@@ -129,6 +131,7 @@ export function selectComputerUseBackend<TId extends CuBackendId = 'cua-driver'>
             ...(deps?.physicalInputRecentlyActive
               ? { physicalInputRecentlyActive: deps.physicalInputRecentlyActive }
               : {}),
+            ...(deps?.screenLocked ? { screenLocked: deps.screenLocked } : {}),
             ...(deps?.onTrace ? { onTrace: deps.onTrace } : {}),
             // Typing, scrolling and dragging go through cua-driver's compatibility
             // event backend. That path was left off in the shipping build, which meant

@@ -109,6 +109,11 @@ export interface SessionsIpcDeps {
     clearForSession(sessionId: string): void;
     setStopHandler(handler: (sessionId: string) => void): void;
   };
+  /**
+   * Screen-lock guard. It releases sessions from the locked state when the user
+   * comes back, so a session that has ended must stop being one of them.
+   */
+  computerUseScreenLock?: { clearForSession(sessionId: string): void };
   clearSkillHost?: (sessionId: string) => void;
   stopAgentGraph?: (sessionId: string) => Promise<void>;
   notifyAgentGraphPermissionResponse?: (sessionId: string) => void;
@@ -213,6 +218,7 @@ export function registerSessionsIpc(
     prepareSkillInvocation,
     invalidateSessionBindings,
     computerUsePip,
+    computerUseScreenLock,
     computerUseStatusItem,
     clearSkillHost,
     stopAgentGraph,
@@ -235,6 +241,7 @@ export function registerSessionsIpc(
   const removeSession = async (sessionId: string): Promise<void> => {
     // The mirror is per-session too, and dies with it.
     computerUsePip?.clearForSession(sessionId);
+    computerUseScreenLock?.clearForSession(sessionId);
     computerUseTools.clearSession(sessionId);
     await goalWiring.removeSession(sessionId, () => runtime.remove(sessionId));
     invalidateSessionBindings?.(sessionId);
@@ -378,6 +385,7 @@ export function registerSessionsIpc(
   });
   async function stopSession(sessionId: string, input?: { source?: 'stop_button' }): Promise<void> {
     computerUsePip?.clearForSession(sessionId);
+    computerUseScreenLock?.clearForSession(sessionId);
     computerUseTools.clearSession(sessionId);
     await stopAgentGraph?.(sessionId);
     computerUseStatusItem?.clearForSession(sessionId);
@@ -541,6 +549,7 @@ export function registerSessionsIpc(
   ipcMain.handle('sessions:archive', async (_event, sessionId: string, options?: unknown) => {
     for (const id of await resolveSessionActionIds(runtime, sessionId, options)) {
       computerUsePip?.clearForSession(id);
+      computerUseScreenLock?.clearForSession(id);
       computerUseTools.clearSession(id);
       computerUseStatusItem?.clearForSession(id);
       computerUseStatusItem?.clearForSession(id);
