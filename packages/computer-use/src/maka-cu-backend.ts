@@ -989,6 +989,16 @@ export function createMakaCuBackend(opts: MakaCuBackendOptions): CuDispatchBacke
       case 'set_value':
         return { wire: { kind: 'set_value', value: action.value } };
       case 'select_text':
+        // §6.1 declares `text` required. Sending the request without it comes
+        // back as `invalid_params`, which the host reports as
+        // `service_mismatch` — a phrase that means "the two sides disagree
+        // about the protocol" and sends whoever reads it looking for a version
+        // skew that is not there. Name the missing field instead.
+        if (typeof action.text !== 'string' || action.text.length === 0) {
+          return {
+            refusal: failure('unsupported_action', 'select_text needs the text to select'),
+          };
+        }
         return { wire: { kind: 'select_text', text: action.text } };
       case 'secondary_action': {
         if (!(ELEMENT_ACTION_NAMES as readonly string[]).includes(action.action)) {
@@ -1005,6 +1015,17 @@ export function createMakaCuBackend(opts: MakaCuBackendOptions): CuDispatchBacke
         return { wire: { kind: 'secondary_action', action: action.action } };
       }
       default:
+        // Reached only by an action Maka can express and this backend cannot
+        // map. Worth naming what is missing rather than what is unknown: §6.1
+        // declares `{ kind: "scroll", direction, pages }` and the executor
+        // advertises `scroll` in its handshake `elementActions`, but Maka's
+        // semantic action union has no scroll member — the compiler refuses a
+        // `case 'scroll'` here, which is the proof. Scrolling goes through the
+        // point path today, aiming at a coordinate rather than at the scroll
+        // area it means, and that is exactly the difference that shows up when
+        // the window is in the background. Wiring it up needs a new semantic
+        // action across the runtime types, the tool schema and the approval
+        // classes, so it is named rather than half-built.
         return {
           refusal: failure('unsupported_action', `'${action.type}' is not an element action`),
         };
