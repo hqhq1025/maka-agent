@@ -49,6 +49,9 @@ const PATH_NAME = process.env.MAKACU_MOCK_PATH || 'ax_action';
 const BAD_IMAGE_SHA = process.env.MAKACU_MOCK_BAD_IMAGE_SHA === '1';
 const BARE_IMAGE_SHA = process.env.MAKACU_MOCK_BARE_IMAGE_SHA === '1';
 const NO_POST_SNAPSHOT = process.env.MAKACU_MOCK_NO_POST_SNAPSHOT === '1';
+// The action closed the thing it acted on, so the post-action observation could
+// not be taken and never will be.
+const POST_WINDOW_GONE = process.env.MAKACU_MOCK_POST_WINDOW_GONE === '1';
 // A refusal that carries only 'error', the way the maka.cu/1 executor emitted it.
 const BARE_REFUSAL = process.env.MAKACU_MOCK_BARE_REFUSAL === '1';
 const REFUSAL_PATH = process.env.MAKACU_MOCK_REFUSAL_PATH || 'none';
@@ -168,7 +171,10 @@ function dispatchReply(id, params) {
     effect: OK_OUTCOME === 'ok' ? 'confirmed' : 'unverifiable',
     verification: { method: 'tree_delta', observedChange: true },
     settle: { waitedMs: 12, quiesced: true, reason: 'quiesced' },
-    snapshot: NO_POST_SNAPSHOT ? null : snapshot(true),
+    snapshot: NO_POST_SNAPSHOT || POST_WINDOW_GONE ? null : snapshot(true),
+    ...(POST_WINDOW_GONE
+      ? { postObservationError: { code: 'window_gone', message: 'the target window no longer exists' } }
+      : {}),
   });
 }
 function handle(msg) {
@@ -297,6 +303,7 @@ function makeBackend(
     badImageSha?: boolean;
     bareImageSha?: boolean;
     noPostSnapshot?: boolean;
+    postWindowGone?: boolean;
     bareRefusal?: boolean;
     refusalPath?: string;
     refusalOutcome?: string;
@@ -320,6 +327,7 @@ function makeBackend(
   process.env.MAKACU_MOCK_BAD_IMAGE_SHA = opts.badImageSha ? '1' : '';
   process.env.MAKACU_MOCK_BARE_IMAGE_SHA = opts.bareImageSha ? '1' : '';
   process.env.MAKACU_MOCK_NO_POST_SNAPSHOT = opts.noPostSnapshot ? '1' : '';
+  process.env.MAKACU_MOCK_POST_WINDOW_GONE = opts.postWindowGone ? '1' : '';
   process.env.MAKACU_MOCK_BARE_REFUSAL = opts.bareRefusal ? '1' : '';
   process.env.MAKACU_MOCK_REFUSAL_PATH = opts.refusalPath ?? 'none';
   process.env.MAKACU_MOCK_REFUSAL_OUTCOME = opts.refusalOutcome ?? 'refused';
@@ -670,6 +678,28 @@ describe('maka-cu backend', () => {
     );
     assert.equal(!result.outcome.ok && result.outcome.error, 'outcome_unknown');
     assert.equal(result.outcome.evidence?.effect, 'unverifiable');
+  });
+
+  it('reports an action that closed its own target as done, not as unknown', async () => {
+    // Closing a dialog, dismissing a sheet and closing a window all end with
+    // the acted-on window gone, so no post-action observation is possible.
+    // Calling that `outcome_unknown` tells the model it does not know whether
+    // the action worked, and the obvious response to not knowing is to repeat
+    // it — which for a close is a second close, aimed at whatever took the
+    // window's place. Measured on the CUA Lab fixture: pressing its modal's own
+    // close button reported `outcome_unknown` on an action that had plainly
+    // succeeded.
+    const { backend } = makeBackend({ postWindowGone: true });
+    const observation = await observeFixture(backend);
+    const result = await backend.runSemantic!(
+      { type: 'click_element', observationId: observation.observationId, elementId: 'el_2' },
+      signal(),
+      RUN_CONTEXT,
+    );
+    assert.equal(result.outcome.ok, true);
+    assert.equal(result.outcome.evidence?.reason, 'dispatch.element:target_closed');
+    // Still honest about what was not checked: nothing read the effect back.
+    assert.equal(result.outcome.verified, true);
   });
 
   it('ends the executor session when the host clears it', async () => {

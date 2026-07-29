@@ -927,6 +927,34 @@ export function createMakaCuBackend(opts: MakaCuBackendOptions): CuDispatchBacke
       // §4.1: a mutating dispatch that returned ok spent the frame it quoted,
       // and no fresh one arrived to supersede it, so drop it here.
       forgetSnapshot(quoted.snapshotId);
+      // The window being gone is not an unknown outcome. It is the outcome.
+      //
+      // Closing a dialog, dismissing a sheet, closing a window and quitting an
+      // app all end with the thing that was acted on no longer existing, so the
+      // post-action observation cannot succeed and never will. Reporting that
+      // as `outcome_unknown` tells a model "I do not know whether this worked",
+      // and the obvious response to not knowing is to do it again — which for a
+      // close is a second close, aimed at whatever took the window's place.
+      //
+      // Measured against the CUA Lab fixture: pressing the modal's own close
+      // button reported `outcome_unknown: the target window no longer exists`,
+      // on an action that had plainly succeeded.
+      if (result.postObservationError?.code === 'window_gone' && result.outcome === 'ok') {
+        return {
+          outcome: {
+            ...outcome,
+            evidence: {
+              ...outcome.evidence,
+              // Not a new `effect`: that set is closed and model-facing, and
+              // "unverifiable" is still the truthful reading of an effect no
+              // readback could confirm. What changes is that the reason names
+              // *why* nothing could be read back, so the answer is "it was
+              // delivered and the target is gone" rather than "who knows".
+              reason: `${method}:target_closed`,
+            },
+          },
+        };
+      }
       // §6.1: the action happened and must be reported even though the frame
       // after it could not be. Same host policy as the cua-driver backend: a
       // delivered dispatch without a fresh frame is outcome_unknown.
