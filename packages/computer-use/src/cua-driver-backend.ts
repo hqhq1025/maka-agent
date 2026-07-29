@@ -80,10 +80,7 @@ import {
   type CuaStoredObservation,
   type CuaTargetResolutionDeps,
 } from './cua-driver-target-resolution.js';
-// Frames larger than this get compressed (to JPEG) before the cap check. Small
-// crisp PNGs (simple screens) pass through untouched.
-const COMPRESS_FRAME_THRESHOLD = 1.5 * 1024 * 1024;
-const CUA_DRIVER_FRAME_MAX_BYTES = 8 * 1024 * 1024;
+import { exceedsFrameCap, FRAME_COMPRESS_THRESHOLD_BYTES } from './frame-budget.js';
 const MAX_OBSERVATIONS_PER_SESSION = 16;
 /**
  * How long to let a window settle after an action before capturing the
@@ -115,10 +112,6 @@ const SETTLE_CEILING_MS = 2_500;
  */
 const LAUNCH_WINDOW_TIMEOUT_MS = 8_000;
 const LAUNCH_WINDOW_POLL_MS = 250;
-
-function exceedsCuaDriverFrameCap(byteLength: number): boolean {
-  return byteLength > CUA_DRIVER_FRAME_MAX_BYTES;
-}
 
 type CuaDriverCaptureFailure = CuRunResult & {
   outcome: Extract<CuRunResult['outcome'], { ok: false }>;
@@ -536,13 +529,13 @@ export function createCuaDriverBackend(opts: CuaDriverBackendOptions): CuDispatc
     let mimeType: 'image/png' | 'image/jpeg' =
       image.mimeType === 'image/jpeg' ? 'image/jpeg' : 'image/png';
     let byteLength = Buffer.from(base64, 'base64').byteLength;
-    if (opts.compressFrame && byteLength > COMPRESS_FRAME_THRESHOLD) {
+    if (opts.compressFrame && byteLength > FRAME_COMPRESS_THRESHOLD_BYTES) {
       const compressed = opts.compressFrame(base64, mimeType);
       base64 = compressed.base64;
       mimeType = compressed.mimeType;
       byteLength = Buffer.from(base64, 'base64').byteLength;
     }
-    if (exceedsCuaDriverFrameCap(byteLength)) {
+    if (exceedsFrameCap(byteLength)) {
       return {
         outcome: {
           ok: false,
@@ -2577,7 +2570,7 @@ export function createCuaDriverBackend(opts: CuaDriverBackendOptions): CuDispatc
                     };
                   }
                   const byteLength = Buffer.from(image.data, 'base64').byteLength;
-                  if (exceedsCuaDriverFrameCap(byteLength)) {
+                  if (exceedsFrameCap(byteLength)) {
                     return {
                       outcome: {
                         ok: false as const,
