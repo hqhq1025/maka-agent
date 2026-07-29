@@ -31,6 +31,15 @@ const MOCK_SRC = String.raw`#!/usr/bin/env node
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
+// The real executable also serves 'doctor', 'list-apps' and 'snapshot' for a
+// human, and a bare invocation prints help and exits. The host must ask for
+// 'host' by name. Refusing anything else here is what makes a wrong argv a red
+// suite rather than a live-machine mystery — it was one, once: the child died
+// before the handshake and the host reported an exhausted restart budget.
+if (process.argv[2] !== 'host') {
+  process.stderr.write('mock maka-cu: expected argv[2] === "host", got ' + JSON.stringify(process.argv[2]) + '\n');
+  process.exit(64);
+}
 const LOG = process.env.MAKACU_MOCK_LOG || '';
 const PROTOCOL = process.env.MAKACU_MOCK_PROTOCOL || 'maka.cu/2';
 const DISPATCH_ERROR = process.env.MAKACU_MOCK_DISPATCH_ERROR || '';
