@@ -16,6 +16,7 @@ import { after, before, describe, it } from 'node:test';
 
 import type { CuaBoundAction, CuObservation, CuRunContext } from '@maka/runtime';
 import { createMakaCuBackend, type MakaCuBackendOptions } from '../maka-cu-backend.js';
+import { parseMakaCuKeyChord } from '../maka-cu-protocol.js';
 import { selectComputerUseBackend } from '../select-backend.js';
 
 const RUN_CONTEXT: CuRunContext = {
@@ -975,5 +976,30 @@ describe('maka-cu backend selection', () => {
     assert.equal(explicit.backendId, 'maka-cu');
     assert.equal(madeMakaCu, 1);
     assert.equal(madeCuaDriver, 1);
+  });
+});
+
+describe('maka-cu key chord parsing', () => {
+  it('cannot be spelled with an Object.prototype member', () => {
+    // Both alias tables are indexed with a caller-supplied string. Read off a
+    // plain object literal, `constructor` answered with a function and
+    // `__proto__` with an object, so `parseMakaCuKeyChord('constructor')`
+    // returned a chord whose key was not a string, and `'constructor+a'`
+    // returned `modifiers: [null]`. Either goes on the wire, the executor
+    // answers -32602, and the host tells the model the executor is the wrong
+    // version rather than that it asked for something unparseable.
+    for (const spelling of ['constructor', '__proto__', 'constructor+a', 'cmd+constructor']) {
+      assert.equal(
+        parseMakaCuKeyChord(spelling),
+        undefined,
+        `${spelling} must be unparseable, not a chord`,
+      );
+    }
+  });
+
+  it('still parses the chords that are real', () => {
+    assert.deepEqual(parseMakaCuKeyChord('cmd+a'), { key: 'a', modifiers: ['command'] });
+    assert.deepEqual(parseMakaCuKeyChord('cmd++'), { key: '+', modifiers: ['command'] });
+    assert.deepEqual(parseMakaCuKeyChord('Return'), { key: 'Return', modifiers: [] });
   });
 });
