@@ -13,6 +13,7 @@ import {
   type CuaDriverRole,
   type CuaDriverRoleSnapshot,
 } from './cua-driver-release.js';
+import { abortPromise, decodeJsonLines } from './stdio-json-rpc.js';
 
 const DEFAULT_HANDSHAKE_TIMEOUT_MS = 10_000;
 /** How long to wait for `serve --embedded` to publish its socket before failing the start. */
@@ -69,18 +70,6 @@ interface PendingRequest {
   stage: CuaDriverRequestStage;
   resolve: (response: CuaDriverJsonRpcResponse) => void;
   reject: (error: Error) => void;
-}
-
-function abortPromise(signal: AbortSignal): Promise<never> {
-  return new Promise((_, reject) => {
-    if (signal.aborted) {
-      reject(new Error('aborted'));
-      return;
-    }
-    signal.addEventListener('abort', () => reject(new Error('aborted')), {
-      once: true,
-    });
-  });
 }
 
 /** Owns one long-lived cua-driver child role and its JSON-RPC transport. */
@@ -394,25 +383,18 @@ export class CuaDriverService {
 
   private onStdout(child: ChildProcessWithoutNullStreams, chunk: string): void {
     if (this.child !== child) return;
-    this.buffer += chunk;
-    if (this.buffer.length > MAX_STDOUT_BUFFER) {
-      this.kill('child_exit');
-      return;
-    }
-    let index: number;
-    while ((index = this.buffer.indexOf('\n')) >= 0) {
-      const line = this.buffer.slice(0, index).trim();
-      this.buffer = this.buffer.slice(index + 1);
-      if (!line) continue;
-      let message: CuaDriverJsonRpcResponse;
-      try {
-        message = JSON.parse(line) as CuaDriverJsonRpcResponse;
-      } catch {
-        continue;
-      }
-      if (typeof message.id !== 'number') continue;
-      this.pending.get(message.id)?.resolve(message);
-    }
+    const rest = decodeJsonLines(this.buffer, chunk, {
+      maxBufferBytes: MAX_STDOUT_BUFFER,
+      onOverflow: () => this.kill('child_exit'),
+      onMessage: (value) => {
+        const message = value as CuaDriverJsonRpcResponse;
+        if (typeof message.id !== 'number') return;
+        this.pending.get(message.id)?.resolve(message);
+      },
+    });
+    // Teardown from inside the decode (buffer overflow) already reset the
+    // buffer and dropped the child; keeping the decoded tail would resurrect it.
+    if (this.child === child) this.buffer = rest;
   }
 
   private onStderr(child: ChildProcessWithoutNullStreams, chunk: string): void {

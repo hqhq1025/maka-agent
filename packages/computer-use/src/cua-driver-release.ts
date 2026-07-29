@@ -1,3 +1,5 @@
+import type { HostLifecycleErrorCode, HostRequestStage } from './stdio-json-rpc.js';
+
 export type CuaDriverRole = 'action' | 'capture';
 
 export type CuaDriverChildState =
@@ -8,7 +10,7 @@ export type CuaDriverChildState =
   | 'unavailable'
   | 'disposed';
 
-export type CuaDriverRequestStage = 'queued' | 'writing' | 'delivered' | 'settled';
+export type CuaDriverRequestStage = HostRequestStage;
 
 export interface CuaDriverRoleSnapshot {
   role: CuaDriverRole;
@@ -33,11 +35,7 @@ export interface CuaDriverReleaseEvent {
   outcomeUnknown: boolean;
 }
 
-export type CuaDriverLifecycleErrorCode =
-  | 'outcome_unknown'
-  | 'service_unavailable'
-  | 'service_mismatch'
-  | 'aborted';
+export type CuaDriverLifecycleErrorCode = HostLifecycleErrorCode;
 
 export class CuaDriverLifecycleError extends Error {
   constructor(
