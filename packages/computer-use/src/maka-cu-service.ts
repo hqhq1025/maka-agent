@@ -304,7 +304,14 @@ export class MakaCuService {
     await mkdir(this.opts.imageDir, { recursive: true, mode: 0o700 });
     this.assertActive();
 
-    const child = spawn(executablePath, [], {
+    // `host` is not optional. The same executable also serves `doctor`,
+    // `list-apps` and `snapshot` for a human at a terminal, and a bare
+    // invocation prints help and exits — which is what happened the first time
+    // this ran against a real executor: the child died before the handshake and
+    // the host reported an exhausted restart budget rather than a wrong argv.
+    // §11 said "spawns the executor as a direct child" and did not say with
+    // what, so the two sides each picked, and disagreed.
+    const child = spawn(executablePath, ['host'], {
       stdio: ['pipe', 'pipe', 'pipe'],
       // §13: no env-var behaviour switches. Everything behavioural is a
       // `host.hello` parameter, so the wire says what the executor will do.
