@@ -13,12 +13,19 @@ import type { CuaDriverRoleSnapshot } from '@maka/computer-use';
 import type { CuaDriverBackendOptions } from '@maka/computer-use';
 import {
   selectComputerUseBackend,
+  type CuBackendId,
   type SelectedComputerUseBackend,
 } from '@maka/computer-use';
 import type { CuOverlayHook } from '@maka/runtime';
 
 export interface ComputerUseHostState {
-  selected: SelectedComputerUseBackend;
+  /**
+   * Widened to both executors. The selector defaults its generic to
+   * `cua-driver` so a caller that never asks for maka-cu cannot be handed it;
+   * the host is the one place that does ask, so it is the one place the type
+   * opens up.
+   */
+  selected: SelectedComputerUseBackend<CuBackendId>;
   binaryPath?: string;
   expectedBinarySha256?: string;
 }
@@ -48,7 +55,44 @@ export function createComputerUseHost(input: {
   screenLocked?: () => boolean | Promise<boolean>;
   onTrace?: CuaDriverBackendOptions['onTrace'];
   overlay?: CuOverlayHook;
+  /** Reads the development executor switch. Injected so tests need no env. */
+  env?: NodeJS.ProcessEnv;
 }): ComputerUseHostState {
+  // Development switch for the maka-cu executor, which has no bundled,
+  // signed artifact yet and therefore cannot be a setting. Both variables are
+  // required: the path alone would mean spawning a binary nobody verified, and
+  // "never spawn what you cannot verify" has to hold on the development path
+  // too or it is not a rule.
+  //
+  //   MAKA_CU_EXECUTOR=maka-cu
+  //   MAKA_CU_EXECUTOR_PATH=/abs/path/to/OpenComputerUse
+  //   MAKA_CU_EXECUTOR_SHA256=$(shasum -a 256 <path> | cut -d' ' -f1)
+  const env = input.env ?? process.env;
+  if (env.MAKA_CU_EXECUTOR === 'maka-cu') {
+    const executorPath = env.MAKA_CU_EXECUTOR_PATH;
+    const executorSha256 = env.MAKA_CU_EXECUTOR_SHA256;
+    if (!executorPath || !/^[a-f0-9]{64}$/.test(executorSha256 ?? '')) {
+      // Refused rather than quietly falling back: an operator who asked for
+      // maka-cu and silently got cua-driver would draw conclusions from the
+      // wrong executor.
+      return { selected: selectComputerUseBackend() };
+    }
+    return {
+      selected: selectComputerUseBackend({
+        backendId: 'maka-cu',
+        binaryPath: executorPath,
+        expectedBinarySha256: executorSha256,
+        ...(input.compressFrame ? { compressFrame: input.compressFrame } : {}),
+        ...(input.physicalInputRecentlyActive
+          ? { physicalInputRecentlyActive: input.physicalInputRecentlyActive }
+          : {}),
+        ...(input.screenLocked ? { screenLocked: input.screenLocked } : {}),
+        ...(input.overlay ? { overlay: input.overlay } : {}),
+      }),
+      binaryPath: executorPath,
+      expectedBinarySha256: executorSha256,
+    };
+  }
   const manifestPath = input.manifestPath ?? (input.isPackaged
     ? join(input.resourcesPath, 'bundled-tools.json')
     : resolve(
@@ -117,7 +161,7 @@ export function createComputerUseHost(input: {
 }
 
 export function computerUseServiceHealth(
-  backendId: SelectedComputerUseBackend['backendId'],
+  backendId: SelectedComputerUseBackend<CuBackendId>['backendId'],
   state: {
     action: CuaDriverRoleSnapshot;
     capture: CuaDriverRoleSnapshot;

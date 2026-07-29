@@ -1,3 +1,4 @@
+import type { CuBackendId } from '@maka/computer-use';
 import { Notification, systemPreferences } from 'electron';
 import {
   BOT_PROVIDERS,
@@ -42,7 +43,7 @@ export function buildCapabilitySnapshotCollection(input: {
   permissions: PermissionSnapshot;
   botStatuses: Record<BotProvider, BotStatus>;
   computerUse?: {
-    backendId: 'cua-driver' | 'none';
+    backendId: CuBackendId | 'none';
     health: ReturnType<typeof computerUseServiceHealth>;
   };
   now?: number;
@@ -137,7 +138,7 @@ export function buildCapabilitySnapshotCollection(input: {
 
 function computerUseCapability(
   input: {
-    backendId: 'cua-driver' | 'none';
+    backendId: CuBackendId | 'none';
     health: ReturnType<typeof computerUseServiceHealth>;
   } | undefined,
   permissions: PermissionSnapshot['permissions'],
@@ -173,7 +174,7 @@ function computerUseCapability(
 
 function computerUseCapabilityReason(
   input: {
-    backendId: 'cua-driver' | 'none';
+    backendId: CuBackendId | 'none';
     health: ReturnType<typeof computerUseServiceHealth>;
   } | undefined,
   permissions: PermissionSnapshot['permissions'],
