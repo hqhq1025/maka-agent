@@ -216,19 +216,30 @@ export async function validateSemanticElementVisibility(
   element: CuaNormalizedElement,
   signal: AbortSignal,
 ): Promise<CuRunResult | undefined> {
-  // Where the element and the window actually overlap.
+  // No geometric test decides whether a semantic action may run.
   //
-  // This used to ask whether the element's centre was inside the window, which
-  // is a fair question for a button and the wrong one for anything scrollable:
-  // a scroll area's content is taller than the window by definition, so its
-  // centre sits below the bottom edge and the element was ruled "moved outside
-  // the observed target window". On a real run every scroll of a dictionary
-  // definition was refused that way — the one action whose whole purpose is
-  // content that does not fit.
+  // This used to refuse when the element's centre fell outside the window's
+  // rectangle, reported as "the element moved outside the observed target
+  // window". It is a question about pixels asked of a dispatch that has none:
+  // the action addresses `element_index` / `element_token`, and the element was
+  // just refetched from a fresh snapshot OF THIS WINDOW, so it belongs to the
+  // window by construction. The rectangles answer a different question, and on
+  // anything scrollable they answer it wrongly — a scroll area's content is
+  // taller than its window by definition, so its centre is always past the
+  // bottom edge. On a real run that refused every scroll of a dictionary
+  // definition: the one action whose entire purpose is content that does not
+  // fit.
   //
-  // Overlapping the window at all is what "still in this window" means. The
-  // occlusion probe below then aims at the middle of the overlap, which is a
-  // point that is genuinely on screen, rather than at a centre that may not be.
+  // It is the third guard from coordinate space found standing on the semantic
+  // path, after the occlusion test below (narrowed to the same app) and the
+  // physical-input guard (removed from the element dispatch). Same mistake each
+  // time: reasoning about where a thing is on screen, to decide something that
+  // never touches the screen.
+  //
+  // What remains is the same-app occlusion test, which does need a point. It
+  // uses the middle of the overlap when there is one — a point that is
+  // genuinely on screen — and is skipped when there is not, because an element
+  // scrolled out of view is still perfectly addressable through accessibility.
   const left = Math.max(element.frame.x, window.bounds.x);
   const top = Math.max(element.frame.y, window.bounds.y);
   const right = Math.min(element.frame.x + element.frame.w, window.bounds.x + window.bounds.width);
@@ -236,16 +247,7 @@ export async function validateSemanticElementVisibility(
     element.frame.y + element.frame.h,
     window.bounds.y + window.bounds.height,
   );
-  if (right <= left || bottom <= top) {
-    return {
-      outcome: {
-        ok: false,
-        error: 'target_changed',
-        message: 'semantic element moved outside the observed target window',
-        evidence: { reason: 'element_left_window' },
-      },
-    };
-  }
+  if (right <= left || bottom <= top) return undefined;
   const point = { x: (left + right) / 2, y: (top + bottom) / 2 };
   const winner = topWindowAtPoint(await deps.listWindowRecords(signal), point);
   // Refuse only when another window OF THE SAME APP covers the element.
