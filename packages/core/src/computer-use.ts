@@ -271,6 +271,10 @@ const SEMANTIC_ACTIONS = new Set([
   'set_value',
   'select_text',
   'secondary_action',
+  // Scrolling an element moves what is on screen without changing any value.
+  // It is still a mutation of the target's state, and it is the semantic twin
+  // of the coordinate `scroll` that already sits in POINTER_ACTIONS.
+  'scroll_element',
   // Starting an app changes what is on screen. It touches no element, but it
   // is not a read, and letting it fall through to the default would have
   // classified it correctly by accident rather than on purpose.
@@ -285,6 +289,7 @@ const APPROVAL_ACTIONS = new Set([
   'set_value',
   'select_text',
   'secondary_action',
+  'scroll_element',
   'press_key',
   ...CU_ACTION_TYPES,
 ]);
