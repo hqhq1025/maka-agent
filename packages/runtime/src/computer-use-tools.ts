@@ -9,6 +9,7 @@
 import { z } from 'zod';
 import {
   CU_ACTION_TYPES,
+  computerUseModelCallArgs,
   isComputerUseErrorCode,
   type CuAction,
   type CuPoint,
@@ -316,11 +317,41 @@ function targetHintConflict(
   return undefined;
 }
 
+/**
+ * One line of the Computer Use debug journal.
+ *
+ * Everything about a call that is normally projected away before anyone can
+ * read it back: the arguments exactly as the model sent them, and the result
+ * exactly as it was returned. The stored record is a deliberately redacted
+ * summary — right for an audit row, useless when the question is "what did the
+ * model actually send", which is a question that has now cost two sessions.
+ *
+ * Off unless the host passes a sink.
+ */
+export interface CuDebugRecord {
+  ts: number;
+  sessionId: string;
+  turnId: string;
+  toolCallId: string;
+  /** Verbatim model arguments, before any parse or projection. */
+  rawArgs: unknown;
+  /** What the model will read back as its own call. */
+  modelFacingArgs: unknown;
+  /** Full result text, untruncated. */
+  resultText?: string;
+  /** The longer text the model sees, when it differs from the stored one. */
+  resultModelText?: string;
+  error?: string;
+  durationMs: number;
+}
+
 export function buildComputerUseTools(deps: {
   backend: CuDispatchBackend;
   overlay?: CuOverlayHook;
   presentationReadyTimeoutMs?: number;
   presentationFinishedTimeoutMs?: number;
+  /** Diagnostics only. Never on by default, never able to change an outcome. */
+  debug?: (record: CuDebugRecord) => void;
 }): ComputerUseToolSet {
   const presentationReadyTimeoutMs = deps.presentationReadyTimeoutMs ?? 1_000;
   const presentationFinishedTimeoutMs = deps.presentationFinishedTimeoutMs ?? 1_500;
@@ -973,6 +1004,13 @@ export function buildComputerUseTools(deps: {
             input.action === 'set_value' ||
             input.action === 'select_text' ||
             input.action === 'secondary_action' ||
+            // Its absence here made it unreachable: the semantic branch refuses
+            // without an action lease, so every scroll_element returned
+            // `no_active_frame` no matter how fresh the observation was. Nothing
+            // caught it because nothing called it — the schema never said what
+            // the action needed, so the model never tried until that was fixed,
+            // and then 24 of 26 calls in one run were this.
+            input.action === 'scroll_element' ||
             input.action === 'press_key' ||
             input.action === 'mouse_move' ||
             input.action === 'left_click' ||
@@ -1557,6 +1595,37 @@ export function buildComputerUseTools(deps: {
       };
     },
   };
+  const debug = deps.debug;
+  if (debug) {
+    const dispatch = tool.impl;
+    tool.impl = async (args, context) => {
+      const startedAt = Date.now();
+      let result: ComputerToolResult | undefined;
+      try {
+        result = await dispatch(args, context);
+        return result;
+      } finally {
+        try {
+          debug({
+            ts: startedAt,
+            sessionId: context.sessionId,
+            turnId: context.turnId,
+            toolCallId: context.toolCallId,
+            rawArgs: args,
+            modelFacingArgs: computerUseModelCallArgs(args),
+            ...(result?.text !== undefined ? { resultText: result.text } : {}),
+            ...(result?.modelText !== undefined && result.modelText !== result.text
+              ? { resultModelText: result.modelText }
+              : {}),
+            ...(result?.error ? { error: result.error } : {}),
+            durationMs: Date.now() - startedAt,
+          });
+        } catch {
+          // Diagnostics must never change an outcome.
+        }
+      }
+    };
+  }
   const tools = [tool] as ComputerUseToolSet;
   tools.clearSession = (sessionId: string) => {
     presentationGenerations.set(sessionId, (presentationGenerations.get(sessionId) ?? 0) + 1);

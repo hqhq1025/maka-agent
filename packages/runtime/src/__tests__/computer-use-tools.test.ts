@@ -968,6 +968,44 @@ describe('buildComputerUseTools — the `maka_computer` MakaTool', () => {
     assert.doesNotMatch(result.text, /failed validation/);
   });
 
+  test('scroll_element reaches the executor at all', async () => {
+    // It was in the action union, in the approval classes and in the semantic
+    // dispatch branch — and missing from the one list that grants an action
+    // lease, which the semantic branch refuses without. Every call returned
+    // `no_active_frame` however fresh the observation was. Nothing noticed
+    // because nothing called it: the schema never said what it needed, so the
+    // model never tried.
+    const backend = fakeBackend() as CuDispatchBackend & {
+      observeApp: NonNullable<CuDispatchBackend['observeApp']>;
+      runSemantic: NonNullable<CuDispatchBackend['runSemantic']>;
+    };
+    let scrolled: unknown;
+    backend.observeApp = async () => observation();
+    backend.runSemantic = async (action) => {
+      scrolled = action;
+      return { outcome: { ok: true, tier: 'ax', verified: true } };
+    };
+    const [tool] = buildComputerUseTools({ backend });
+    const observed = (await tool.impl(
+      { action: 'observe', app: 'Fixture', window_id: 7 } as never,
+      ctx(),
+    )) as { text: string };
+    const observationId = JSON.parse(observed.text).observation_id as string;
+
+    const result = (await tool.impl(
+      {
+        action: 'scroll_element',
+        observation_id: observationId,
+        element_id: '5',
+        scroll_direction: 'down',
+        scroll_amount: 20,
+      } as never,
+      ctx(undefined, { toolCallId: 'scroll-1' }),
+    )) as { text: string };
+    assert.doesNotMatch(result.text, /no_active_frame/);
+    assert.equal((scrolled as { type?: string } | undefined)?.type, 'scroll_element');
+  });
+
   test('a target hint that disagrees with the observation is reported, not ignored', async () => {
     const backend = fakeBackend() as CuDispatchBackend & {
       observeApp: NonNullable<CuDispatchBackend['observeApp']>;
