@@ -66,6 +66,8 @@ export function selectComputerUseBackend(deps?: {
   ) => { base64: string; mimeType: 'image/png' | 'image/jpeg' };
   physicalInputRecentlyActive?: () => boolean | Promise<boolean>;
   onTrace?: CuaDriverBackendOptions['onTrace'];
+  /** Diagnostics only; see `CuDebugRecord`. */
+  debug?: Parameters<typeof buildComputerUseTools>[0]['debug'];
   overlay?: CuOverlayHook;
   createBackend?: (options: CuaDriverBackendOptions) => DisposableBackend;
 }): SelectedComputerUseBackend {
@@ -107,6 +109,7 @@ export function selectComputerUseBackend(deps?: {
     tools = buildComputerUseTools({
       backend,
       ...(deps.overlay ? { overlay: deps.overlay } : {}),
+      ...(deps.debug ? { debug: deps.debug } : {}),
     });
     return {
       backend,

@@ -46,6 +46,11 @@ export function createComputerUseHost(input: {
   ) => { base64: string; mimeType: 'image/png' | 'image/jpeg' };
   physicalInputRecentlyActive?: () => boolean | Promise<boolean>;
   onTrace?: CuaDriverBackendOptions['onTrace'];
+  debug?: Parameters<typeof selectComputerUseBackend>[0] extends infer D
+    ? D extends { debug?: infer F }
+      ? F
+      : never
+    : never;
   overlay?: CuOverlayHook;
 }): ComputerUseHostState {
   const manifestPath = input.manifestPath ?? (input.isPackaged
@@ -104,6 +109,7 @@ export function createComputerUseHost(input: {
           ? { physicalInputRecentlyActive: input.physicalInputRecentlyActive }
           : {}),
         ...(input.onTrace ? { onTrace: input.onTrace } : {}),
+        ...(input.debug ? { debug: input.debug } : {}),
         ...(input.overlay ? { overlay: input.overlay } : {}),
       }),
       binaryPath,

@@ -171,6 +171,29 @@ export function assembleDesktopTools(deps: DesktopToolAssemblyDeps) {
         }
       : {},
   );
+  // Gated on the variable AND on this not being a shipped build. A packaged app
+  // must not be talked into writing screen contents to a path of someone's
+  // choosing by an environment variable.
+  const computerUseDebugLogPath = app.isPackaged
+    ? undefined
+    : process.env.MAKA_CU_DEBUG_LOG;
+  let computerUseDebugQueue: Promise<void> = Promise.resolve();
+  const appendComputerUseDebugLine = (kind: 'call' | 'driver', payload: unknown): void => {
+    if (!computerUseDebugLogPath) return;
+    // Serialised, so two calls landing together cannot interleave halves of a
+    // line, and never awaited by a caller: a diagnostic that can delay a
+    // dispatch is a diagnostic that changes what it is measuring.
+    computerUseDebugQueue = computerUseDebugQueue
+      .then(async () => {
+        const { appendFile } = await import('node:fs/promises');
+        await appendFile(
+          computerUseDebugLogPath,
+          `${JSON.stringify({ at: new Date().toISOString(), kind, ...(payload as object) })}\n`,
+          { encoding: 'utf8', mode: 0o600 },
+        );
+      })
+      .catch(() => {});
+  };
   const computerUseHost = createComputerUseHost({
     isPackaged: app.isPackaged,
     resourcesPath: process.resourcesPath,
@@ -188,20 +211,38 @@ export function assembleDesktopTools(deps: DesktopToolAssemblyDeps) {
       }
     },
     physicalInputRecentlyActive: () => powerMonitor.getSystemIdleTime() < 1,
-    ...(isComputerUseRealModelE2e
+    // The Computer Use debug journal.
+    //
+    // Everything recorded elsewhere is a redacted summary — right for an audit
+    // row, and no use at all when the question is what the model actually sent
+    // and what actually came back. Answering that took two sessions of
+    // guesswork, so: set `MAKA_CU_DEBUG_LOG` to a path and every call lands
+    // there as one JSON line, arguments verbatim and result untruncated,
+    // interleaved with the driver's own dispatch trace.
+    //
+    // Never on without the variable, and never in a packaged build: these lines
+    // hold whatever was on screen and whatever was typed.
+    ...(computerUseDebugLogPath
       ? {
-          onTrace: (event) => {
-            const tracePath = process.env.MAKA_CU_REAL_MODEL_TRACE;
-            if (!tracePath) return;
-            void import('node:fs/promises').then(({ appendFile }) =>
-              appendFile(tracePath, `${JSON.stringify(event)}\n`, {
-                encoding: 'utf8',
-                mode: 0o600,
-              }),
-            ).catch(() => {});
-          },
+          debug: (record: unknown) => appendComputerUseDebugLine('call', record),
+          onTrace: (event: unknown) => appendComputerUseDebugLine('driver', event),
         }
-      : {}),
+      : isComputerUseRealModelE2e
+        ? {
+            onTrace: (event) => {
+              const tracePath = process.env.MAKA_CU_REAL_MODEL_TRACE;
+              if (!tracePath) return;
+              void import('node:fs/promises')
+                .then(({ appendFile }) =>
+                  appendFile(tracePath, `${JSON.stringify(event)}\n`, {
+                    encoding: 'utf8',
+                    mode: 0o600,
+                  }),
+                )
+                .catch(() => {});
+            },
+          }
+        : {}),
     overlay: withComputerUsePip(
       withComputerUseStatusItem(
         createComputerUseOverlayHook(computerUseOverlay),
