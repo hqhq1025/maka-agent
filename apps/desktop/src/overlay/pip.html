@@ -145,6 +145,12 @@
       body[data-dragging='1'] {
         cursor: grabbing;
       }
+      /* The run finished. The tile stays up a while longer so its final state
+         can be read; this says the picture has stopped changing. */
+      body.pipCompleted #frame {
+        filter: saturate(0.55) brightness(0.85);
+        transition: filter 240ms ease-out;
+      }
     </style>
   </head>
   <body>

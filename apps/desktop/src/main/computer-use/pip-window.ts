@@ -52,6 +52,11 @@ export interface ComputerUsePipController {
   present(input: PipPresentInput): void;
   /** Draw the agent cursor inside the mirror, in target-window coordinates. */
   setCursor(input: { sessionId: string; x: number; y: number } | { sessionId: string }): void;
+  /**
+   * The run finished. Marks the mirror complete and retires it after a while,
+   * instead of taking it away at the moment a person looks over.
+   */
+  complete(sessionId: string): void;
   clearForSession(sessionId: string): void;
   destroyAll(): void;
   isVisible(): boolean;
@@ -219,6 +224,13 @@ const PIP_MIN_EDGE = 100;
 const PIP_MAX_EDGE = 400;
 /** Inset from the screen corner, matching Codex's 24pt anchor inset. */
 const PIP_MARGIN = 24;
+/**
+ * How long a finished run's mirror stays before it retires.
+ *
+ * Codex's value, read from its own dispatch: `dispatch_time(DISPATCH_TIME_NOW,
+ * 0x6FC23AC00)` is exactly 30 seconds.
+ */
+const PIP_COMPLETED_LINGER_MS = 30_000;
 
 function defaultDistDir(): string {
   // Same walk the cursor overlay uses, and for the same reason: prod tsc emits
@@ -402,6 +414,8 @@ export function createComputerUsePipController(
    * would be un-set by the very next frame of the run it was meant to dismiss.
    */
   let hiddenSessionId: string | null = null;
+  /** Pending retirement of a finished run's mirror. */
+  let retire: ReturnType<typeof setTimeout> | undefined;
   let pointerInside = false;
   let cancelHover: (() => void) | null = null;
   let stopHandler: ((sessionId: string) => void) | undefined;
@@ -440,6 +454,10 @@ export function createComputerUsePipController(
   }
 
   function teardown(): void {
+    if (retire) {
+      clearTimeout(retire);
+      retire = undefined;
+    }
     const w = win;
     win = null;
     sessionId = null;
@@ -749,6 +767,11 @@ export function createComputerUsePipController(
         input.widthPx > 0 && input.heightPx > 0 ? input.widthPx / input.heightPx : aspect;
       const reshaped = Math.abs(nextAspect - aspect) > 0.01;
       aspect = nextAspect;
+      // A frame means work resumed — whatever retirement was pending is wrong.
+      if (retire) {
+        clearTimeout(retire);
+        retire = undefined;
+      }
       const w = ensure(input.sessionId);
       // A reshape resizes the mirror, and a resized mirror no longer touches
       // the corner it was resting on — so re-seat it rather than leaving it
@@ -771,6 +794,30 @@ export function createComputerUsePipController(
     setCursor(input): void {
       if (!win || sessionId !== input.sessionId) return;
       push('pip:cursor', 'x' in input ? { x: input.x, y: input.y } : { hidden: true });
+    },
+
+    /**
+     * The run finished. Keep the mirror up for a while, then retire it.
+     *
+     * Destroying it the moment the turn ends takes the final state away at
+     * exactly the moment a person wants to look at it: they were watching
+     * background work precisely because they could not see the window, and the
+     * answer arriving is when they look over. Codex holds the tile, plays a
+     * completion effect on it, and removes it thirty seconds later.
+     *
+     * Not the same thing as stopping or deleting a session — those still tear
+     * down immediately, because there the user has said they are done.
+     */
+    complete(endedSessionId: string): void {
+      if (!win || sessionId !== endedSessionId) return;
+      push('pip:completed', {});
+      if (retire) clearTimeout(retire);
+      retire = setTimeout(() => {
+        retire = undefined;
+        if (sessionId === endedSessionId) teardown();
+      }, PIP_COMPLETED_LINGER_MS);
+      // Nothing here is work the process should stay alive for.
+      retire.unref?.();
     },
 
     clearForSession(endedSessionId: string): void {

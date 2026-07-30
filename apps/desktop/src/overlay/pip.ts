@@ -7,6 +7,7 @@ declare global {
       onFrame(cb: (payload: unknown) => void): void;
       onCursor(cb: (payload: unknown) => void): void;
       onControls(cb: (payload: unknown) => void): void;
+      onCompleted(cb: () => void): void;
       send(channel: string, payload?: unknown): void;
     };
   }
@@ -147,3 +148,10 @@ controls.addEventListener('click', (event) => {
 });
 
 export {};
+
+// The run finished. The mirror stays up for a while so the last state can be
+// read; this is the only sign that what it shows has stopped changing.
+window.computerUsePip.onCompleted(() => {
+  cursor.style.display = 'none';
+  document.body.classList.add('pipCompleted');
+});

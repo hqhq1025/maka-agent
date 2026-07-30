@@ -614,6 +614,41 @@ test('Computer Use picture-in-picture mirror', async (t) => {
     assert.equal(framesOf(windows[0]).length, 2);
   });
 
+  await t.test('a finished run keeps its mirror instead of taking it away', () => {
+    // Destroying it the instant the turn ends removes the final state at the
+    // moment a person looks over — they were watching background work because
+    // they could not see the window, and the answer arriving is when they look.
+    const { pip, windows } = makePip();
+    pip.present({ sessionId: 's1', ...FRAME });
+    windows[0]!.fireReady();
+    pip.complete('s1');
+    assert.equal(windows[0]!.destroyed, false, 'the mirror is still there to look at');
+    assert.ok(
+      windows[0]!.sent.some((message) => message.channel === 'pip:completed'),
+      'and it says the picture has stopped changing',
+    );
+  });
+
+  await t.test('a new frame cancels a pending retirement', () => {
+    const { pip, windows } = makePip();
+    pip.present({ sessionId: 's1', ...FRAME });
+    windows[0]!.fireReady();
+    pip.complete('s1');
+    pip.present({ sessionId: 's1', ...FRAME });
+    assert.equal(windows.length, 1, 'the same mirror, not a replacement');
+    assert.equal(windows[0]!.destroyed, false);
+  });
+
+  await t.test('stopping still takes the mirror away at once', () => {
+    // Lingering is for a run that ended on its own. A user who stopped it has
+    // said they are done.
+    const { pip, windows } = makePip();
+    pip.present({ sessionId: 's1', ...FRAME });
+    windows[0]!.fireReady();
+    pip.clearForSession('s1');
+    assert.equal(windows[0]!.destroyed, true);
+  });
+
   await t.test('a different session supersedes the mirror', () => {
     const { pip, windows } = makePip();
     pip.present({ sessionId: 's1', ...FRAME });

@@ -456,7 +456,7 @@ export interface SessionStreamerDeps {
    * calculator. A mirror showing the wrong application is worse than no mirror,
    * because it is read as "this is what the agent is doing".
    */
-  computerUsePip?: { clearForSession(sessionId: string): void };
+  computerUsePip?: { complete(sessionId: string): void };
   computerUseStatusItem?: { clearForSession(sessionId: string): void };
   safeSendToRenderer: (channel: string, ...args: unknown[]) => void;
   emitSessionsChanged: (reason: SessionChangedReason, sessionId?: string) => void;
@@ -524,7 +524,10 @@ export function createSessionStreamer(deps: SessionStreamerDeps): StreamEvents {
         if (isTurnStatusChangingSessionEvent(event)) {
           emitSessionsChanged('turn-status-change', sessionId);
           computerUseOverlay.clearForSession(sessionId);
-          computerUsePip?.clearForSession(sessionId);
+          // The mirror lingers rather than vanishing: a person watching
+          // background work looks over at the moment the answer arrives, which
+          // is the moment this used to destroy the window.
+          computerUsePip?.complete(sessionId);
           computerUseStatusItem?.clearForSession(sessionId);
           computerUseTools.clearSession(sessionId);
         }
