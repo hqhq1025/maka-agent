@@ -995,7 +995,14 @@ describe('cua-driver backend', () => {
     }
   });
 
-  it('refuses semantic input while physical user input is active', async () => {
+  it('an element action runs while the user is typing; a synthesized one does not', async () => {
+    // The guard exists because a synthesized click or keystroke competes for
+    // the one pointer and the one keyboard the user is holding. An element
+    // action competes for neither — it names an element and the accessibility
+    // API actuates it. Standing on that path too, the guard turned "the user
+    // is at their keyboard" into "Computer Use does not work": on a real
+    // matrix run two scenarios burned 22 and 26 calls being refused, and timed
+    // out having done nothing.
     const { backend, logPath } = makeBackend({
       axRole: 'AXButton',
       physicalInputRecentlyActive: () => true,
@@ -1014,7 +1021,7 @@ describe('cua-driver backend', () => {
       signal,
       context,
     );
-    const result = await backend.runSemantic!(
+    const clicked = await backend.runSemantic!(
       {
         type: 'click_element',
         observationId: observation.observationId,
@@ -1023,9 +1030,18 @@ describe('cua-driver backend', () => {
       signal,
       context,
     );
-    assert.equal(result.outcome.ok, false);
-    if (!result.outcome.ok) assert.equal(result.outcome.error, 'user_intervened');
-    assert.equal(toolCalls(await readRecords(logPath), 'click').length, 0);
+    assert.equal(clicked.outcome.ok, true, 'an element action is not physical input');
+    assert.equal(toolCalls(await readRecords(logPath), 'click').length, 1);
+
+    const clicked_by_pixel = await backend.run(
+      { type: 'left_click', coordinate: { x: 600, y: 400 } } as CuAction,
+      signal,
+      { ...context, toolCallId: 'pixel-guard' },
+    );
+    assert.equal(clicked_by_pixel.outcome.ok, false, 'synthesized input still yields to the user');
+    if (!clicked_by_pixel.outcome.ok) {
+      assert.equal(clicked_by_pixel.outcome.error, 'user_intervened');
+    }
   });
 
   it('refetches a unique labeled element when the ephemeral token changes', async () => {

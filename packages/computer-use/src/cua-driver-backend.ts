@@ -361,7 +361,6 @@ export function createCuaDriverBackend(opts: CuaDriverBackendOptions): CuDispatc
   /** cua-driver's `scroll` counts wheel clicks; both executors declare pages. */
   const SCROLL_CLICKS_PER_PAGE = 3;
 
-
   interface KeyboardTarget {
     window: CuaResolvedWindow;
     editable: boolean;
@@ -1867,8 +1866,25 @@ export function createCuaDriverBackend(opts: CuaDriverBackendOptions): CuDispatc
               element_index: refetched.element_index,
               ...(refetched.element_token ? { element_token: refetched.element_token } : {}),
             };
-            const intervention = await physicalInputFailure();
-            if (intervention) return intervention;
+            // No physical-input guard here, and that is the point of this path.
+            //
+            // The guard exists because a synthesized click or keystroke lands
+            // wherever the user's real input has just moved the focus — it
+            // competes for one pointer and one keyboard. An element action
+            // competes for nothing: it names an element and the accessibility
+            // API actuates it, without moving the pointer or taking focus,
+            // which is the whole reason this is the path Maka dispatches on.
+            //
+            // Standing here it turned "the user is at their keyboard" into
+            // "Computer Use does not work" — the probe refuses on any input in
+            // the last second, and each refusal cascades into
+            // `reobserve_required`. On a real matrix run two scenarios spent
+            // 22 and 26 calls that way and timed out having done nothing, while
+            // the user was doing nothing more hostile than typing in another
+            // window. Background operation is the product; a guard that ends it
+            // whenever the machine is in use is not protecting anything here.
+            //
+            // Every path that does synthesize input keeps the guard.
             trace({
               type: 'dispatch',
               toolCallId: context.toolCallId,
