@@ -856,6 +856,47 @@ export function createCuaDriverBackend(opts: CuaDriverBackendOptions): CuDispatc
     return (result?.structuredContent?.windows ?? []) as CuaWindowRecord[];
   }
 
+  /**
+   * The other names a running application answers to.
+   *
+   * A window record carries only `app_name`, which is `kCGWindowOwnerName` —
+   * the LOCALIZED display name. That is why 词典 is the identity and
+   * "Dictionary" matches nothing: no case rule, trim or edit distance bridges
+   * Calculator/计算器 or Font Book/字体册, and on a real matrix run the first
+   * call of nearly every scenario failed here. Twice the model gave up on
+   * Computer Use entirely and drove the app with AppleScript instead.
+   *
+   * The driver's own `list_apps` knows both — it reports `bundle_id` and
+   * `launch_path` per pid — and Maka had never called it, synthesising its app
+   * list from windows instead. Read only when the strict match has already
+   * failed, so the ordinary path costs nothing.
+   */
+  async function appAliasesByPid(signal: AbortSignal): Promise<Map<number, string[]>> {
+    const aliases = new Map<number, string[]>();
+    let result: Awaited<ReturnType<typeof actionClient.callTool>>;
+    try {
+      result = await actionClient.callTool('list_apps', {}, signal);
+    } catch {
+      return aliases;
+    }
+    const apps = (result?.structuredContent?.apps ?? []) as Array<Record<string, unknown>>;
+    for (const app of apps) {
+      const pid = typeof app.pid === 'number' ? app.pid : undefined;
+      if (pid === undefined || app.running === false) continue;
+      const names: string[] = [];
+      if (typeof app.bundle_id === 'string' && app.bundle_id) names.push(app.bundle_id);
+      if (typeof app.launch_path === 'string' && app.launch_path) {
+        // `/System/Applications/Dictionary.app` → `Dictionary`: the bundle's
+        // own name on disk, which is the English one the model reaches for.
+        const base = app.launch_path.split('/').pop() ?? '';
+        const stripped = base.endsWith('.app') ? base.slice(0, -4) : base;
+        if (stripped) names.push(stripped);
+      }
+      if (names.length > 0) aliases.set(pid, names);
+    }
+    return aliases;
+  }
+
   async function pageIdentity(
     window: CuaResolvedWindow,
     target: CuaResolvedPageTextTarget,
@@ -960,6 +1001,12 @@ export function createCuaDriverBackend(opts: CuaDriverBackendOptions): CuDispatc
     windows: readonly CuaWindowRecord[],
     app: string | undefined,
     windowId?: number,
+    /**
+     * Other names each running pid answers to, consulted only after the exact
+     * match has already failed. Absent on the happy path, so nothing about the
+     * ordinary case changes.
+     */
+    aliases?: ReadonlyMap<number, readonly string[]>,
   ): CuaResolvedWindow {
     const eligible = windows
       .flatMap((window) => {
@@ -985,7 +1032,14 @@ export function createCuaDriverBackend(opts: CuaDriverBackendOptions): CuDispatc
         const appId = appIdForWindow(window);
         const title = typeof window.title === 'string' ? window.title : undefined;
         if (windowId !== undefined && window.window_id !== windowId) return [];
-        if (app && app !== appId && app !== `pid:${window.pid}` && app !== title) return [];
+        const aliased =
+          app !== undefined &&
+          (aliases?.get(window.pid) ?? []).some(
+            (candidate) => candidate.trim().toLowerCase() === app.trim().toLowerCase(),
+          );
+        if (app && app !== appId && app !== `pid:${window.pid}` && app !== title && !aliased) {
+          return [];
+        }
         return [
           {
             pid: window.pid,
@@ -1078,8 +1132,31 @@ export function createCuaDriverBackend(opts: CuaDriverBackendOptions): CuDispatc
     context: CuRunContext,
   ): Promise<CuObservation> {
     const records = await listWindowRecords(signal);
-    const window = resolveObservedWindow(records, input.app, input.windowId);
-    return observeResolvedWindow(window, input.includeScreenshot, signal, context, records);
+    let window: CuaResolvedWindow;
+    let alias: string | undefined;
+    try {
+      window = resolveObservedWindow(records, input.app, input.windowId);
+    } catch (error) {
+      // Strict first, aliases only on the branch that was already going to
+      // throw. The observation still reports the canonical name, so the very
+      // next call is back in one namespace.
+      if (!input.app || !/^invalidApp:/.test(String((error as Error)?.message ?? ''))) throw error;
+      window = resolveObservedWindow(
+        records,
+        input.app,
+        input.windowId,
+        await appAliasesByPid(signal),
+      );
+      alias = input.app;
+    }
+    const observed = await observeResolvedWindow(
+      window,
+      input.includeScreenshot,
+      signal,
+      context,
+      records,
+    );
+    return alias ? { ...observed, appAlias: alias } : observed;
   }
 
   /**

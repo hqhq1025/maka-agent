@@ -359,10 +359,16 @@ function stripUnverifiedTargetHints<T extends ComputerParams>(input: T): T {
  */
 function targetHintConflict(
   input: ComputerParams,
-  record: { appId?: string; windowId?: number },
+  record: { appId?: string; appAlias?: string; windowId?: number },
 ): string | undefined {
   const hinted = input as ComputerParams & { app?: string; window_id?: number };
-  if (hinted.app !== undefined && record.appId !== undefined && hinted.app !== record.appId) {
+  if (
+    hinted.app !== undefined &&
+    record.appId !== undefined &&
+    hinted.app !== record.appId &&
+    // The name that resolved this observation is not a contradiction of it.
+    hinted.app !== record.appAlias
+  ) {
     return `maka_computer.${input.action} failed: target_mismatch — this observation is of ${record.appId}, not ${hinted.app}. Observe the app you mean, then act on an element from that observation.`;
   }
   if (
@@ -424,6 +430,8 @@ export function buildComputerUseTools(deps: {
     state: CuaFrameState;
     backendObservationId?: string;
     appId?: string;
+    /** The non-canonical name that resolved this observation, if any. */
+    appAlias?: string;
     windowId?: number;
     elements?: Map<string, CuObservedElement>;
     /** From the last observation: the windows stacked above the target. */
@@ -582,6 +590,7 @@ export function buildComputerUseTools(deps: {
     const frame = record.state.observe(toObservationSnapshot(normalized));
     record.backendObservationId = observation.observationId;
     record.appId = observation.appId;
+    record.appAlias = observation.appAlias;
     record.windowId = observation.windowId;
     record.obscuringRects = observation.obscuringRects;
     record.elements = new Map(normalized.elements.map((element) => [element.elementId, element]));

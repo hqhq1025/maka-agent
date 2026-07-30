@@ -349,8 +349,23 @@ function handle(msg) {
         ] } });
         return;
       case 'list_apps':
-        // No frontmost app → the backend cannot resolve a target pid.
-        reply(id, { content: [], structuredContent: { apps: [{ pid: 4242, frontmost: false }] } });
+        // No frontmost app → the backend cannot resolve a target pid. The
+        // bundle id and launch path are what the alias retry reads: the driver
+        // reports both per pid, and the window list reports neither.
+        reply(id, {
+          content: [],
+          structuredContent: {
+            apps: [
+              {
+                pid: 4242,
+                frontmost: false,
+                running: true,
+                bundle_id: 'com.example.fixture',
+                launch_path: '/Applications/Fixture English.app',
+              },
+            ],
+          },
+        });
         return;
       case 'set_value':
         FIELD_VALUES.set(
@@ -993,6 +1008,41 @@ describe('cua-driver backend', () => {
     if (replay && !replay.outcome.ok) {
       assert.equal(replay.outcome.error, 'stale_frame');
     }
+  });
+
+  it('resolves an app by the name on disk when the display name is localized', async () => {
+    // A window record carries only kCGWindowOwnerName — the LOCALIZED display
+    // name. No case rule or edit distance bridges Dictionary/词典, and on a real
+    // matrix run the first call of nearly every scenario died here; twice the
+    // model abandoned Computer Use and drove the app with AppleScript instead.
+    const { backend } = makeBackend();
+    const signal = new AbortController().signal;
+    const observed = await backend.observeApp!(
+      // The fixture app owns two windows, so naming it alone is ambiguous
+      // whichever name is used — that is the existing contract and not what
+      // this is about.
+      { app: 'Fixture English', windowId: 77, includeScreenshot: false },
+      signal,
+      DEFAULT_RUN_CONTEXT,
+    );
+    assert.equal(observed.windowId, 77);
+    // Canonical name out, so the next call is back in one namespace — and the
+    // name that worked is carried, so repeating it is not a contradiction.
+    assert.equal(observed.appId, 'Fixture');
+    assert.equal(observed.appAlias, 'Fixture English');
+  });
+
+  it('still refuses a name that matches nothing at all', async () => {
+    const { backend } = makeBackend();
+    const signal = new AbortController().signal;
+    await assert.rejects(
+      backend.observeApp!(
+        { app: 'No Such Application', windowId: 77, includeScreenshot: false },
+        signal,
+        DEFAULT_RUN_CONTEXT,
+      ),
+      /invalidApp/,
+    );
   });
 
   it('an element action runs while the user is typing; a synthesized one does not', async () => {

@@ -94,6 +94,16 @@ export interface CuObservation {
   pid: number;
   windowId: number;
   windowTitle?: string;
+  /**
+   * The name the caller used, when it was not the canonical one.
+   *
+   * An app is identified by its localized display name, so "Dictionary"
+   * resolves to 词典 through an alias. A model that got an observation that way
+   * will keep saying "Dictionary" on the next call, and the target-hint check
+   * compares strings — without this it would answer `target_mismatch` to a name
+   * that had just worked.
+   */
+  appAlias?: string;
   capturedAt?: number;
   windowBounds?: { x: number; y: number; width: number; height: number };
   sourceBoundsPx?: { x: number; y: number; width: number; height: number };
