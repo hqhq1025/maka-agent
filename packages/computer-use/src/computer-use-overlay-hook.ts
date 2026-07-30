@@ -146,7 +146,20 @@ export function createComputerUseOverlayHook(controller: OverlayCursorSink): CuO
         });
         return;
       }
-      const screenPoint = result?.resolvedScreenPoint;
+      // Where the executor says the pointer ended, and failing that, where the
+      // cursor was sent.
+      //
+      // Only the coordinate paths report a landing point; `runSemantic` returns
+      // none, because an element action never resolves to a pointer position at
+      // all. Requiring one meant every semantic action — the whole accessibility
+      // path, which is the only path Maka dispatches on by default — ended in
+      // `cancel()`. The cursor flew to the control and was then wiped instead of
+      // landing on it, so what a person saw was an arrow crossing the screen and
+      // vanishing, never touching anything.
+      //
+      // The fallback is not a guess: `presentationScreenPoint` is the point this
+      // same action was addressed to, computed from the element's own frame.
+      const screenPoint = result.resolvedScreenPoint ?? context.presentationScreenPoint;
       if (!screenPoint) {
         controller.cancel({
           actionId: context.toolCallId,

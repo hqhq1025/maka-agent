@@ -876,7 +876,7 @@ interface PipFeedResult {
 function presentToPip(
   pip: ComputerUsePipController,
   result: PipFeedResult | undefined,
-  context: { sessionId?: string } | undefined,
+  context: { sessionId?: string; presentationScreenPoint?: { x: number; y: number } } | undefined,
 ): void {
   const sessionId = context?.sessionId;
   if (!sessionId || !result) return;
@@ -896,7 +896,14 @@ function presentToPip(
   // pixels. Scale through the window rather than subtracting the origin alone,
   // so a Retina capture (wider than the window in points) still lands on the
   // right control instead of a quarter of the way into it.
-  const point = result.resolvedScreenPoint;
+  // The executor reports a landing point only for the coordinate paths. An
+  // element action resolves to an element, not a pointer position, so the point
+  // it was addressed to — the element's own centre, already computed for the
+  // cursor's flight — is what the mirror draws. Without this fallback the
+  // mirror cleared its cursor at the end of every accessibility action, which
+  // is every action Maka dispatches by default: the window the user is watching
+  // showed the app being driven by nothing.
+  const point = result.resolvedScreenPoint ?? context?.presentationScreenPoint;
   const bounds = result.observation?.windowBounds;
   if (!point || !bounds || bounds.width <= 0 || bounds.height <= 0) {
     pip.setCursor({ sessionId });
