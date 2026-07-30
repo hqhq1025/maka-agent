@@ -376,6 +376,17 @@ export function summarizeEvidence(evidence: CuDispatchEvidence | undefined): str
   const path = evidence.path ? safeToken(evidence.path) : undefined;
   if (path) fields.push(`path=${path}`);
   if (evidence.effect) fields.push(`effect=${evidence.effect}`);
+  // Which of several conditions produced the error code, when the host
+  // authored one. `target_changed` alone covers seven different situations —
+  // the window moved, the tree changed under the observation, the element left
+  // the window — and they call for different next moves. Told only the code,
+  // the model re-sent the same scroll four times on a real run.
+  //
+  // Passed through `safeToken`, which is what keeps this from becoming the
+  // driver's free text: only a bounded identifier survives, never an AX label,
+  // a window title, or anything else that was on screen.
+  const reason = evidence.reason ? safeToken(evidence.reason) : undefined;
+  if (reason) fields.push(`reason=${reason}`);
   return fields.length > 0 ? `; dispatch ${fields.join(', ')}` : '';
 }
 

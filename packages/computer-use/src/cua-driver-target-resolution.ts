@@ -231,6 +231,7 @@ export async function validateSemanticElementVisibility(
         ok: false,
         error: 'target_changed',
         message: 'semantic element moved outside the observed target window',
+        evidence: { reason: 'element_left_window' },
       },
     };
   }
@@ -286,6 +287,7 @@ export async function validateStoredWindow(
         ok: false,
         error: 'target_changed',
         message: 'bound target does not match the stored observation',
+        evidence: { reason: 'bound_target_mismatch' },
       },
     };
   }
@@ -318,6 +320,7 @@ export async function validateStoredWindow(
         ok: false,
         error: 'target_changed',
         message: 'observed target identity or geometry changed',
+        evidence: { reason: 'window_moved_or_resized' },
       },
     };
   }
@@ -359,6 +362,7 @@ export async function validateStoredWindow(
           ok: false,
           error: 'target_changed',
           message: 'observed native element structure changed',
+          evidence: { reason: 'tree_changed' },
         },
       };
     }
@@ -373,6 +377,7 @@ export async function validateStoredWindow(
           ok: false,
           error: 'target_changed',
           message: 'observed coordinate transform changed',
+          evidence: { reason: 'display_changed' },
         },
       };
     }
@@ -419,6 +424,7 @@ export async function validateBoundCoordinate(
         ok: false,
         error: 'target_changed',
         message: 'bound target is missing native content identity',
+        evidence: { reason: 'no_content_identity' },
       },
     };
   }
@@ -468,6 +474,7 @@ export async function validateBoundCoordinate(
         ok: false,
         error: 'target_changed',
         message: 'window screenshot scale or layout changed after observation',
+        evidence: { reason: 'capture_scale_changed' },
       },
     };
   }
