@@ -222,6 +222,31 @@ export interface ComputerUseToolSet extends Array<MakaTool> {
   };
 }
 
+/**
+ * Failures after which a fresh observation is the right thing to hand back.
+ *
+ * Only those that mean "the frame you were holding has moved on". A refusal
+ * like `user_intervened` or `screen_locked` is a latch with a deliberate
+ * release — the user has to stop typing, the screen has to be unlocked — and
+ * observing on its behalf would quietly open it. Those keep their old shape:
+ * no observation, and the model has to come back and ask.
+ */
+const REOBSERVABLE_FAILURES = new Set<ComputerUseErrorCode>([
+  'target_changed',
+  'target_missing',
+  'target_occluded',
+  'ambiguous_target',
+  'page_target_changed',
+  'stale_frame',
+  'stale_epoch',
+  'duplicate_action',
+  'invalid_coordinate',
+]);
+
+function shouldReobserveAfter(outcome: CuRunResult['outcome']): boolean {
+  return outcome.ok || REOBSERVABLE_FAILURES.has(outcome.error);
+}
+
 function observationText(observation: CuObservation): string {
   return JSON.stringify({
     observation_id: observation.observationId,
@@ -1387,7 +1412,23 @@ export function buildComputerUseTools(deps: {
             }
             let freshObservation: CuObservation | undefined;
             try {
-              freshObservation = result.outcome.ok
+              // A failure needs a fresh observation more than a success does.
+              //
+              // Only successes used to get one, so every refusal — the frame
+              // moved, the tree changed, the element was not where it was —
+              // left the model holding a frame it had just been told is stale,
+              // and its only move was to spend another call on `observe`.
+              //
+              // Measured across a real seven-application matrix: 97 calls, 51
+              // of them failures, and 42% of every call made was pure
+              // observation. Between one and five calls in twenty actually did
+              // anything; six of seven scenarios ran out of time. Tool time was
+              // never the cost — the median call took 734ms — the round trips
+              // were.
+              //
+              // The observation is what makes a failure recoverable in place.
+              // Nothing about it is less true because the action was refused.
+              freshObservation = shouldReobserveAfter(result.outcome)
                 ? await freshFullObservation(state, record, result, abortSignal, {
                     ...runCtx,
                     boundAction: binding,
@@ -1516,8 +1557,12 @@ export function buildComputerUseTools(deps: {
             }
             let freshObservation: CuObservation | undefined;
             try {
+              // Same on the coordinate path: a refused action leaves the model
+              // needing a current frame, and making it spend a round trip to
+              // ask for one is the cost this whole result shape exists to
+              // avoid.
               freshObservation =
-                actionLease && result.outcome.ok
+                actionLease && shouldReobserveAfter(result.outcome)
                   ? await freshFullObservation(state, record, result, abortSignal, {
                       ...runCtx,
                       boundAction,

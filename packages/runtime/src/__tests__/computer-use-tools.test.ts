@@ -968,6 +968,60 @@ describe('buildComputerUseTools — the `maka_computer` MakaTool', () => {
     assert.doesNotMatch(result.text, /failed validation/);
   });
 
+  test('a stale frame comes back with a current one, a latched refusal does not', async () => {
+    // 97 calls across a real seven-application matrix, 51 of them failures, and
+    // 42% of every call made was pure observation: between one and five calls
+    // in twenty actually did anything, and six of seven scenarios ran out of
+    // time. Only successes carried a fresh observation, so every refusal left
+    // the model holding a frame it had just been told was stale, with one move
+    // available — spend another round trip asking to look again.
+    //
+    // `user_intervened` is different and stays different: it is a latch whose
+    // release is the user stopping, and observing on its behalf would open it.
+    const observationCalls: string[] = [];
+    const backend = fakeBackend() as CuDispatchBackend & {
+      observeApp: NonNullable<CuDispatchBackend['observeApp']>;
+      captureObservation: NonNullable<CuDispatchBackend['captureObservation']>;
+      runSemantic: NonNullable<CuDispatchBackend['runSemantic']>;
+    };
+    let failure: 'target_changed' | 'user_intervened' = 'target_changed';
+    backend.observeApp = async () => observation();
+    backend.captureObservation = async () => {
+      observationCalls.push('capture');
+      return observation();
+    };
+    backend.runSemantic = async () => ({
+      outcome: { ok: false, error: failure, message: 'refused' },
+    });
+    const [tool] = buildComputerUseTools({ backend });
+    const observed = (await tool.impl(
+      { action: 'observe', app: 'Fixture', window_id: 7 } as never,
+      ctx(),
+    )) as { text: string };
+    const observationId = JSON.parse(observed.text).observation_id as string;
+
+    const stale = (await tool.impl(
+      { action: 'click_element', observation_id: observationId, element_id: '5' } as never,
+      ctx(undefined, { toolCallId: 'stale' }),
+    )) as { text: string; modelText?: string };
+    assert.match(stale.modelText ?? stale.text, /Fresh observation/);
+
+    const reobserved = (await tool.impl(
+      { action: 'observe', app: 'Fixture', window_id: 7 } as never,
+      ctx(undefined, { toolCallId: 'observe-2' }),
+    )) as { text: string };
+    failure = 'user_intervened';
+    const latched = (await tool.impl(
+      {
+        action: 'click_element',
+        observation_id: JSON.parse(reobserved.text).observation_id,
+        element_id: '5',
+      } as never,
+      ctx(undefined, { toolCallId: 'latched' }),
+    )) as { text: string; modelText?: string };
+    assert.doesNotMatch(latched.modelText ?? latched.text, /Fresh observation/);
+  });
+
   test('scroll_element reaches the executor at all', async () => {
     // It was in the action union, in the approval classes and in the semantic
     // dispatch branch — and missing from the one list that grants an action
