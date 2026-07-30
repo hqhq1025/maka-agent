@@ -291,6 +291,25 @@ try {
         last.screenY <= w.bounds.y + w.bounds.height,
     );
     const pip = (last.overlay.others ?? []).find((w) => w.kind === 'pip');
+    // The overlay's own window level, read from the main process. `floating`
+    // (3) is above every ordinary application window, which is what made a
+    // resting cursor hang over whatever the user was reading. Ordered against
+    // the target it should be at normal level (0) instead.
+    const restingLevel = await app
+      .evaluate(({ BrowserWindow }) => {
+        const w = BrowserWindow.getAllWindows().find((win) =>
+          win.webContents.getURL().includes('cursor-overlay'),
+        );
+        return w ? { alwaysOnTop: w.isAlwaysOnTop() } : null;
+      })
+      .catch(() => null);
+    if (restingLevel) {
+      verdict.push({
+        label: 'the resting cursor is not pinned above every application window',
+        pass: restingLevel.alwaysOnTop === false,
+        detail: `alwaysOnTop=${restingLevel.alwaysOnTop}`,
+      });
+    }
     verdict.push({
       label: 'the cursor is drawn somewhere the user can connect to the target',
       pass: covering.length === 0,
