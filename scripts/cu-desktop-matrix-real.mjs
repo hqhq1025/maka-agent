@@ -400,6 +400,18 @@ try {
     const results = new Map(
       messages.filter((m) => m.type === 'tool_result').map((m) => [m.toolUseId, m]),
     );
+    // Every tool, not only Computer Use. A scenario the model completed by
+    // shelling out to osascript changes the world exactly the way the oracle
+    // wants, and would otherwise be scored a pass for a chain that was never
+    // exercised.
+    const allCalls = messages
+      .filter((m) => m.type === 'tool_call')
+      .map((m) => ({
+        tool: m.toolName,
+        argsHead: JSON.stringify(m.args ?? null)
+          .replace(/\s+/g, ' ')
+          .slice(0, 200),
+      }));
     const calls = messages
       .filter((m) => m.type === 'tool_call' && m.toolName === 'maka_computer')
       .map((m) => {
@@ -435,6 +447,25 @@ try {
         pass: calls.length > 0,
         detail: `${calls.length} calls`,
       },
+      {
+        // Anything that can run a command can drive an app without Computer
+        // Use — `osascript`, `open`, a script file. When that happens the world
+        // changes, the oracle is satisfied, and nothing about the chain under
+        // test was proven.
+        label: 'it did not reach the app by some other route',
+        pass: !allCalls.some(
+          (c) =>
+            c.tool !== 'maka_computer' &&
+            /osascript|System Events|applescript|\bopen -|cliclick|screencapture/i.test(
+              `${c.tool} ${c.argsHead}`,
+            ),
+        ),
+        detail:
+          allCalls
+            .filter((c) => c.tool !== 'maka_computer')
+            .map((c) => c.tool)
+            .join(', ') || 'no other tools',
+      },
       ...(after.error
         ? [{ label: 'the target app survived the turn', pass: false, detail: after.error }]
         : await scenario.verify(after, before)),
@@ -457,6 +488,7 @@ try {
       timedOut,
       checks,
       calls,
+      otherCalls: allCalls.filter((c) => c.tool !== 'maka_computer'),
       assistantTail: assistantText.slice(-1200),
       before: { windows: before.window_count, elements: before.element_count },
       after: after.error
@@ -464,6 +496,10 @@ try {
         : { windows: after.window_count, elements: after.element_count },
     });
 
+    // Written after every scenario, not once at the end: a run this long is
+    // read while it is still going, and a crash in scenario six must not take
+    // the evidence from the first five with it.
+    await writeFile(join(OUT, 'report.json'), JSON.stringify(report, null, 2), 'utf8');
     await scenario.teardown?.();
   }
 } catch (error) {
