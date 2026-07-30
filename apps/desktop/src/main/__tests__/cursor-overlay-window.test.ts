@@ -33,6 +33,11 @@ class FakeCursorOverlayWindow {
     this.rec('setAlwaysOnTop', flag, level, relativeLevel);
   }
   setVisibleOnAllWorkspaces(v: boolean, o?: unknown): void { this.rec('setVisibleOnAllWorkspaces', v, o); }
+  moveAboveThrows = false;
+  moveAbove(mediaSourceId: string): void {
+    this.rec('moveAbove', mediaSourceId);
+    if (this.moveAboveThrows) throw new TypeError('Invalid media source id');
+  }
   async loadFile(p: string): Promise<void> { this.rec('loadFile', p); }
   showInactive(): void { this.rec('showInactive'); }
   isDestroyed(): boolean { return this.destroyed; }
@@ -142,12 +147,70 @@ test('the cursor sinks a level once its motion settles over an exposed target', 
   await fence.finished;
   const levels = w.calls.filter((c) => c.m === 'setAlwaysOnTop').map((c) => c.args);
   assert.deepEqual(levels.at(-1), [true, 'floating', 0]);
-  // Never `setAlwaysOnTop(false)`: normal level from a background app puts the
-  // cursor behind the window it points at.
+  // The fallback, and only the fallback. With no window to order against there
+  // is nothing to sit above, so the level is all that is left — and dropping it
+  // would put the cursor behind the window it points at. When there IS a window
+  // (the test below) the level comes off and the cursor is ordered instead,
+  // which is what stops it hanging over the user's own windows.
   assert.ok(
     levels.every((args) => args[0] === true),
-    'the overlay is never taken off always-on-top',
+    'with no target to order against, the overlay stays on always-on-top',
   );
+});
+
+test('with a target window, the resting cursor is ordered above it instead of floating over everything', async () => {
+  // `'floating'` is above every ordinary application window, which is how the
+  // cursor came to hang over whatever the user was reading while pointing at a
+  // window buried behind it. Codex sinks to the target's own order; so does
+  // this, now that `moveAbove` turns out to be the same AppKit primitive.
+  const { controller, created } = harness();
+  const fence = controller.move({
+    actionId: 'a1',
+    sessionId: 's',
+    screenX: 400,
+    screenY: 300,
+    kind: 'click',
+    keepElevated: false,
+    targetWindowId: 4321,
+  });
+  const w = created[0];
+  w.fireReady();
+  w.firePresentation('a1', 'finished');
+  await fence.finished;
+
+  const ordering = w.calls
+    .filter((c) => c.m === 'setAlwaysOnTop' || c.m === 'moveAbove')
+    .map((c) => [c.m, ...c.args]);
+  // Both calls, in this order: AppKit confines ordering to a window level, so
+  // the level has to come off first, and dropping the level alone leaves the
+  // overlay at the front of its layer covering exactly what it should not.
+  assert.deepEqual(ordering.slice(-2), [
+    ['setAlwaysOnTop', false, undefined, undefined],
+    ['moveAbove', 'window:4321:0'],
+  ]);
+});
+
+test('a target that went away leaves the cursor visible rather than stranded', async () => {
+  const { controller, created } = harness();
+  const fence = controller.move({
+    actionId: 'a1',
+    sessionId: 's',
+    screenX: 400,
+    screenY: 300,
+    kind: 'click',
+    keepElevated: false,
+    targetWindowId: 4321,
+  });
+  const w = created[0];
+  w.moveAboveThrows = true;
+  w.fireReady();
+  w.firePresentation('a1', 'finished');
+  await fence.finished;
+
+  const levels = w.calls.filter((c) => c.m === 'setAlwaysOnTop').map((c) => c.args);
+  // Without putting the level back, a window destroyed between the action and
+  // the settle leaves the cursor at normal level, buried, until the next action.
+  assert.deepEqual(levels.at(-1), [true, 'floating', 0]);
 });
 
 test('a covered target keeps the cursor elevated after it settles', async () => {

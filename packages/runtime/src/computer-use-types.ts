@@ -182,6 +182,14 @@ export interface CuOverlayHookContext {
   toolCallId: string;
   presentationScreenPoint?: CuPoint;
   /**
+   * The window this action is bound to, so a resting cursor can be ordered
+   * directly above it instead of floating over everything.
+   *
+   * Comes from the bound action and nowhere else: frame binding is what keeps
+   * the presentation and the dispatch talking about the same window.
+   */
+  targetWindowId?: number;
+  /**
    * How the target window sits relative to everything else, for deciding how
    * HIGH to draw the cursor rather than whether to draw it at all.
    *

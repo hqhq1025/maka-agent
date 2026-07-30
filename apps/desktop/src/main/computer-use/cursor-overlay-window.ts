@@ -39,6 +39,8 @@ import type {
 export interface CursorOverlayWindowLike {
   setIgnoreMouseEvents(ignore: boolean, options?: { forward?: boolean }): void;
   setAlwaysOnTop(flag: boolean, level?: string, relativeLevel?: number): void;
+  /** `orderWindow(.above, relativeTo:)`, by media source id (`window:<id>:0`). */
+  moveAbove(mediaSourceId: string): void;
   setVisibleOnAllWorkspaces(visible: boolean, options?: { visibleOnFullScreen?: boolean }): void;
   loadFile(path: string): Promise<void>;
   showInactive(): void;
@@ -101,17 +103,34 @@ export interface CursorOverlayController {
  * unconditionally — is 1000, high enough to paint over the screen saver and
  * over system alerts.
  *
- * REST is where Electron runs out of rope. Codex sinks the cursor to the TARGET
- * window's own level and calls `orderWindow(.above, relativeTo:)` with the
- * target's window number, so a window later raised over the target covers the
- * cursor too. Electron exposes no ordering relative to a foreign window, and
- * `setAlwaysOnTop(false)` would drop the overlay to normal level with no
- * ordering guarantee at all — from a background app that reliably puts the
- * cursor BEHIND the window it is pointing at, which is the disappearance this
- * whole change removes. `'floating'` (3) is the closest expressible thing:
- * above every ordinary application window, below menus, status items and
- * pop-ups. So a resting cursor yields to system UI the way Codex's does, but it
- * cannot be covered by another application's window the way Codex's can.
+ * REST is Codex's ordering, done the way Codex does it. Codex sinks the cursor
+ * to the TARGET window's own level and calls `orderWindow(.above, relativeTo:)`
+ * with the target's window number, so a window later raised over the target
+ * covers the cursor too.
+ *
+ * This comment used to say Electron exposes no ordering relative to a foreign
+ * window, and settled for `'floating'` (3) — above every ordinary application
+ * window. That is the level a person reported twice as the cursor "leaking to
+ * the foreground": an arrow hanging over whatever they were reading, pointing
+ * at a window buried behind it.
+ *
+ * The claim was false for this Electron. `BrowserWindow.moveAbove(mediaSourceId)`
+ * parses `window:<CGWindowID>:<n>` and calls
+ * `orderWindowByShuffling:NSWindowAbove relativeTo:` — the same AppKit
+ * primitive. Verified against foreign windows owned by other processes:
+ *
+ *   - `moveAbove` while always-on-top is a silent no-op. AppKit ordering is
+ *     confined within a window level, so the level has to go first.
+ *   - `setAlwaysOnTop(false)` alone is also not enough: it drops to layer 0 but
+ *     leaves the overlay at the FRONT of it, still covering everything.
+ *   - The two together both promote and demote, landing the overlay
+ *     immediately above the named window, still unfocused.
+ *   - An id that no longer names a window throws; a window that is alive but
+ *     not in the ordered list (hidden, minimised, another Space) returns ok and
+ *     orders the overlay to the front of its layer.
+ *
+ * `CURSOR_LEVEL.rest` therefore stays, as the fallback for the two cases where
+ * ordering cannot be done: no usable target id, and a reorder that threw.
  */
 const CURSOR_LEVEL = {
   flight: { name: 'pop-up-menu', relative: 1 },
@@ -192,6 +211,14 @@ export function createCursorOverlayController(
    * a renderer that goes away), because staying up is the safe direction.
    */
   let mayRest = false;
+  /**
+   * The window the resting cursor should sit directly above.
+   *
+   * Held rather than passed, because the rest transition happens later than the
+   * move that knows it: the renderer reports `'finished'` and only then does the
+   * cursor sink.
+   */
+  let restTargetWindowId: number | null = null;
   let queue: Array<{ channel: string; payload: unknown }> = [];
   let unsubscribeDisplayChanges: (() => void) | undefined;
   let presentation:
@@ -227,11 +254,29 @@ export function createCursorOverlayController(
 
   function applyLevel(next: CursorLevel): void {
     if (!win || level === next) return;
+    // Resting on top of the window it is pointing at, when there is one to
+    // point at. Both calls are needed and the order matters: the level has to
+    // come off before AppKit will order across it, and dropping the level
+    // without ordering leaves the overlay at the front of the layer, covering
+    // exactly what it was supposed to stop covering.
+    if (next === 'rest' && restTargetWindowId !== null) {
+      win.setAlwaysOnTop(false);
+      try {
+        win.moveAbove(`window:${restTargetWindowId}:0`);
+      } catch {
+        // The target went away between the action and the settle. Without
+        // putting the level back the cursor is stranded at normal level,
+        // buried, and stays there until the next action.
+        win.setAlwaysOnTop(true, CURSOR_LEVEL.rest.name, CURSOR_LEVEL.rest.relative);
+      }
+      level = next;
+      return;
+    }
     level = next;
     const { name, relative } = CURSOR_LEVEL[next];
-    // Always `true`: the flag decides whether a level applies at all, and
-    // `false` would reset the overlay to normal level with no ordering
-    // guarantee against the app being driven.
+    // The flag decides whether a level applies at all. `false` here would drop
+    // the overlay to normal level with no ordering guarantee against the app
+    // being driven — which is what the rest branch above pairs with an order.
     win.setAlwaysOnTop(true, name, relative);
   }
 
@@ -244,6 +289,7 @@ export function createCursorOverlayController(
     ready = false;
     level = null;
     mayRest = false;
+    restTargetWindowId = null;
     queue = [];
     unsubscribeDisplayChanges?.();
     unsubscribeDisplayChanges = undefined;
@@ -340,6 +386,9 @@ export function createCursorOverlayController(
     ensure(input.sessionId);
     settlePresentation();
     actionId = input.actionId;
+    restTargetWindowId = Number.isInteger(input.targetWindowId) && input.targetWindowId! > 0
+      ? input.targetWindowId!
+      : null;
     // A launch: up while it flies, and it stays up unless this action's
     // observation positively said the target is exposed right where the cursor
     // lands. Silence is not that evidence.
@@ -419,6 +468,10 @@ function defaultCreateOverlayWindow(options: BrowserWindowConstructorOptions): C
     setIgnoreMouseEvents: (ignore, opts) => bw.setIgnoreMouseEvents(ignore, opts),
     setAlwaysOnTop: (flag, level, relativeLevel) =>
       bw.setAlwaysOnTop(flag, level as Parameters<typeof bw.setAlwaysOnTop>[1], relativeLevel),
+    // The id is built by hand rather than taken from `desktopCapturer`: that
+    // would raise a Screen Recording prompt for a string the frame binding
+    // already gave us.
+    moveAbove: (mediaSourceId) => bw.moveAbove(mediaSourceId),
     setVisibleOnAllWorkspaces: (visible, opts) => bw.setVisibleOnAllWorkspaces(visible, opts),
     loadFile: (path) => bw.loadFile(path),
     showInactive: () => bw.showInactive(),

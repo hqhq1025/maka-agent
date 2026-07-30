@@ -912,10 +912,17 @@ export function buildComputerUseTools(deps: {
       ? presentationScreenPoint(context.boundAction)
       : undefined;
     const obscuringRects = observations.get(context.sessionId)?.obscuringRects;
+    // `requireTarget` uses { pid: -1, windowId: -1 } as its miss sentinel, and
+    // -1 is not undefined — an unguarded field would hand `window:-1:0` to the
+    // reorder and rely on it throwing.
+    const targetWindowId = context.boundAction?.target.windowId;
     const overlayContext: CuOverlayHookContext = {
       sessionId: context.sessionId,
       toolCallId: context.toolCallId,
       ...(cursorPoint ? { presentationScreenPoint: cursorPoint } : {}),
+      ...(Number.isInteger(targetWindowId) && (targetWindowId as number) > 0
+        ? { targetWindowId: targetWindowId as number }
+        : {}),
       ...(obscuringRects
         ? {
             targetStacking: {

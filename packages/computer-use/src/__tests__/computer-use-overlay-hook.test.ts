@@ -54,6 +54,27 @@ test('presentation starts from the Runtime-bound screen point', () => {
   ]);
 });
 
+test('a window to order against replaces the level as what keeps the cursor visible', () => {
+  // Elevation was the only tool available while ordering relative to a foreign
+  // window looked impossible. It is not: with a target id the cursor sits
+  // directly above that window, and staying elevated on top of that would put
+  // it back over the user's own windows — the thing being fixed.
+  const { controller, moves } = fakeController();
+  const hook = createComputerUseOverlayHook(controller as never);
+  hook.onActionBegin(
+    { type: 'left_click', coordinate: { x: 400, y: 300 } },
+    {
+      sessionId: 's1',
+      toolCallId: 'a1',
+      presentationScreenPoint: { x: 201, y: 151 },
+      targetWindowId: 4321,
+      targetStacking: { frontmost: true, destinationCovered: true },
+    },
+  );
+  assert.equal((moves[0] as { keepElevated: boolean }).keepElevated, false);
+  assert.equal((moves[0] as { targetWindowId?: number }).targetWindowId, 4321);
+});
+
 test('a covered destination keeps the cursor elevated instead of hiding it', () => {
   const { controller, moves, ensured } = fakeController();
   const hook = createComputerUseOverlayHook(controller as never);

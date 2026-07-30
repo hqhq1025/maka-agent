@@ -18,6 +18,13 @@ export interface CursorMoveInput {
    * target is exposed, and an unseen cursor is the worse failure.
    */
   keepElevated?: boolean;
+  /**
+   * The window a resting cursor should be ordered directly above.
+   *
+   * Absent when the action is not bound to a window, in which case the cursor
+   * falls back to resting at a fixed level.
+   */
+  targetWindowId?: number;
 }
 
 export interface CursorCompleteInput extends CursorMoveInput {
@@ -113,6 +120,11 @@ function kindOf(action: CuAction): CursorActionKind {
  * an unseen cursor is the failure this whole path exists to avoid.
  */
 function keepElevated(context: CuOverlayHookContext): boolean {
+  // With a window to order against, the level is not what decides visibility
+  // any more — position in the z-order is, exactly as it is for Codex. Staying
+  // elevated on top of that would put the cursor back over the user's own
+  // windows, which is the thing being fixed.
+  if (context.targetWindowId !== undefined) return false;
   const stacking = context.targetStacking;
   if (!stacking) return true;
   return stacking.frontmost || stacking.destinationCovered;
@@ -135,6 +147,7 @@ export function createComputerUseOverlayHook(controller: OverlayCursorSink): CuO
         kind: kindOf(action),
         instant: action.type !== 'mouse_move',
         keepElevated: keepElevated(context),
+        ...(context.targetWindowId !== undefined ? { targetWindowId: context.targetWindowId } : {}),
       });
     },
     onActionEnd(action, result, context) {
@@ -175,6 +188,9 @@ export function createComputerUseOverlayHook(controller: OverlayCursorSink): CuO
         screenY: screenPoint.y,
         kind,
         pulse: result.outcome.ok && (kind === 'click' || kind === 'drag'),
+        // `complete` raises the cursor for the landing, so it has to know
+        // where to come back down to.
+        ...(context.targetWindowId !== undefined ? { targetWindowId: context.targetWindowId } : {}),
       });
     },
   };
