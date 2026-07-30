@@ -258,6 +258,56 @@ function persistedObservationText(observation: CuObservation): string {
   });
 }
 
+/**
+ * The action minus any target the host has not confirmed.
+ *
+ * `app` and `window_id` may accompany an element action as redundant hints.
+ * They are accepted so a careful model is not rejected for supplying them, but
+ * until the observation they name is the active frame they are unverified
+ * claims — and the approval summary built from these arguments is what a person
+ * reads before allowing the action.
+ */
+function stripUnverifiedTargetHints<T extends ComputerParams>(input: T): T {
+  if (!('observation_id' in input)) return input;
+  if (!('app' in input) && !('window_id' in input)) return input;
+  const {
+    app: _app,
+    window_id: _windowId,
+    ...rest
+  } = input as T & {
+    app?: string;
+    window_id?: number;
+  };
+  return rest as T;
+}
+
+/**
+ * Says so when a redundant target hint disagrees with the frame the action is
+ * bound to.
+ *
+ * A hint that agrees is free — dispatch resolves through the observation
+ * either way. A hint that disagrees means the model believes it is driving a
+ * different window than the one it is about to act on, and ignoring it quietly
+ * would let it keep that belief through every retry.
+ */
+function targetHintConflict(
+  input: ComputerParams,
+  record: { appId?: string; windowId?: number },
+): string | undefined {
+  const hinted = input as ComputerParams & { app?: string; window_id?: number };
+  if (hinted.app !== undefined && record.appId !== undefined && hinted.app !== record.appId) {
+    return `maka_computer.${input.action} failed: target_mismatch — this observation is of ${record.appId}, not ${hinted.app}. Observe the app you mean, then act on an element from that observation.`;
+  }
+  if (
+    hinted.window_id !== undefined &&
+    record.windowId !== undefined &&
+    hinted.window_id !== record.windowId
+  ) {
+    return `maka_computer.${input.action} failed: target_mismatch — this observation is of window ${record.windowId}, not ${hinted.window_id}. Observe that window, then act on an element from that observation.`;
+  }
+  return undefined;
+}
+
 export function buildComputerUseTools(deps: {
   backend: CuDispatchBackend;
   overlay?: CuOverlayHook;
@@ -864,7 +914,12 @@ export function buildComputerUseTools(deps: {
         !record.appId ||
         !record.windowId
       ) {
-        return input;
+        // Nothing confirms the target here, so a model-supplied `app` or
+        // `window_id` is a claim, not a fact. Drop it: the approval summary is
+        // what a person reads before allowing the action, and it must never
+        // show a target the host has not resolved itself. (The action is bound
+        // to its observation, so this costs dispatch nothing.)
+        return stripUnverifiedTargetHints(input);
       }
       return {
         ...input,
@@ -1152,6 +1207,8 @@ export function buildComputerUseTools(deps: {
               };
             }
             const record = sessionObservation(sessionId, turnId);
+            const hintConflict = targetHintConflict(input, record);
+            if (hintConflict) return { text: hintConflict };
             const modelAction: CuSemanticAction =
               input.action === 'click_element'
                 ? {

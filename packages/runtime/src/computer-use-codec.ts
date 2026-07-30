@@ -4,6 +4,27 @@ import type { CuDispatchEvidence, CuRunResult, CuSemanticAction } from './comput
 
 export const coordinate = z.tuple([z.number().int().nonnegative(), z.number().int().nonnegative()]);
 export const text = z.string().max(8000);
+/**
+ * The target hints a model may repeat on an action that already names its
+ * target through `observation_id`.
+ *
+ * The tool schema the model is shown is one flat object: `app` and `window_id`
+ * are top-level optional parameters described as "exact window_id from
+ * list_apps or observe", so a model being careful about which window it is
+ * driving supplies them. This union then rejected them as unrecognized keys.
+ *
+ * On a real desktop run that cost six of eleven calls: the model repeated the
+ * same shape three times, was told only "arguments failed validation", guessed
+ * a different shape, and abandoned the arithmetic half-finished.
+ *
+ * They are accepted and then checked against the observation the action is
+ * bound to — never trusted as the target. Dispatch still resolves through the
+ * frame, and a hint that contradicts the frame is reported rather than ignored.
+ */
+const redundantTargetHints = {
+  app: z.string().min(1).max(512).optional(),
+  window_id: z.number().int().positive().optional(),
+} as const;
 const pointerAction = <
   T extends 'left_click' | 'right_click' | 'middle_click' | 'double_click' | 'triple_click',
 >(
@@ -44,6 +65,7 @@ export const computerParams = z.discriminatedUnion('action', [
       action: z.literal('click_element'),
       observation_id: z.string().min(1).max(256),
       element_id: z.string().min(1).max(256),
+      ...redundantTargetHints,
     })
     .strict(),
   z
@@ -52,6 +74,7 @@ export const computerParams = z.discriminatedUnion('action', [
       observation_id: z.string().min(1).max(256),
       element_id: z.string().min(1).max(256),
       value: text,
+      ...redundantTargetHints,
     })
     .strict(),
   z
@@ -60,6 +83,7 @@ export const computerParams = z.discriminatedUnion('action', [
       observation_id: z.string().min(1).max(256),
       element_id: z.string().min(1).max(256),
       text,
+      ...redundantTargetHints,
     })
     .strict(),
   z
@@ -68,6 +92,7 @@ export const computerParams = z.discriminatedUnion('action', [
       observation_id: z.string().min(1).max(256),
       element_id: z.string().min(1).max(256),
       text,
+      ...redundantTargetHints,
     })
     .strict(),
   z
@@ -77,6 +102,7 @@ export const computerParams = z.discriminatedUnion('action', [
       element_id: z.string().min(1).max(256),
       scroll_direction: z.enum(['up', 'down', 'left', 'right']),
       scroll_amount: z.number().int().min(0).max(100).optional(),
+      ...redundantTargetHints,
     })
     .strict(),
   z
@@ -84,6 +110,7 @@ export const computerParams = z.discriminatedUnion('action', [
       action: z.literal('press_key'),
       observation_id: z.string().min(1).max(256),
       text,
+      ...redundantTargetHints,
     })
     .strict(),
   z
@@ -184,6 +211,52 @@ export const computerParams = z.discriminatedUnion('action', [
     .strict(),
 ]);
 export type ComputerParams = z.infer<typeof computerParams>;
+
+/**
+ * What was wrong with the arguments, in terms of the argument names only.
+ *
+ * Computer Use replaced the generic formatter with a fixed string, because the
+ * generic one hands the model whatever the error carries and these arguments
+ * can hold typed text. The cost was a model that could not learn: told only
+ * "arguments failed validation", it re-sent the identical call three times in a
+ * row on a real desktop run before guessing at a different shape.
+ *
+ * Field names and the schema's own constraints are the model's own input
+ * vocabulary, not screen content, so they are safe to name. Values never are,
+ * and none are read here — only `issue.path` and the issue's kind.
+ */
+export function describeComputerUseArgsViolation(error: unknown): string | undefined {
+  const issues = (error as { issues?: unknown })?.issues;
+  if (!Array.isArray(issues) || issues.length === 0) return undefined;
+  const parts: string[] = [];
+  for (const raw of issues.slice(0, 6)) {
+    const issue = raw as { code?: string; keys?: unknown; path?: unknown; expected?: unknown };
+    const path = Array.isArray(issue.path) ? issue.path.filter((p) => typeof p === 'string') : [];
+    const field = path.length > 0 ? path.join('.') : undefined;
+    if (issue.code === 'unrecognized_keys' && Array.isArray(issue.keys)) {
+      const keys = issue.keys.filter((k): k is string => typeof k === 'string');
+      if (keys.length > 0) {
+        parts.push(`this action does not take ${keys.map((k) => `\`${k}\``).join(', ')}`);
+        continue;
+      }
+    }
+    if (issue.code === 'invalid_type' && field) {
+      parts.push(
+        typeof issue.expected === 'string'
+          ? `\`${field}\` must be ${issue.expected}`
+          : `\`${field}\` has the wrong type`,
+      );
+      continue;
+    }
+    if (field) {
+      parts.push(`\`${field}\` is missing or out of range`);
+      continue;
+    }
+    parts.push('the argument shape does not match this action');
+  }
+  const unique = [...new Set(parts)];
+  return unique.length > 0 ? unique.join('; ') : undefined;
+}
 
 const point = (c?: [number, number]): CuPoint | undefined => (c ? { x: c[0], y: c[1] } : undefined);
 

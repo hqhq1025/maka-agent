@@ -929,6 +929,94 @@ describe('buildComputerUseTools — the `maka_computer` MakaTool', () => {
     );
   });
 
+  test('an element action may repeat the target it already named, and the host still resolves it', async () => {
+    // The tool schema the model reads is one flat object: `window_id` is a
+    // documented top-level parameter. A model being careful about which window
+    // it drives supplies it, and the action union used to reject that as an
+    // unrecognized key — six of eleven calls on a real desktop run, with only
+    // "arguments failed validation" to go on.
+    const backend = fakeBackend() as CuDispatchBackend & {
+      observeApp: NonNullable<CuDispatchBackend['observeApp']>;
+      runSemantic: NonNullable<CuDispatchBackend['runSemantic']>;
+    };
+    backend.observeApp = async () => observation();
+    backend.runSemantic = async () => ({ outcome: { ok: true, tier: 'ax', verified: true } });
+    const [tool] = buildComputerUseTools({ backend });
+    const observed = (await tool.impl(
+      { action: 'observe', app: 'Fixture', window_id: 7 } as never,
+      ctx(),
+    )) as { text: string };
+    const observationId = JSON.parse(observed.text).observation_id as string;
+
+    const result = (await tool.impl(
+      {
+        action: 'click_element',
+        observation_id: observationId,
+        element_id: '5',
+        app: 'Fixture',
+        window_id: 7,
+      } as never,
+      ctx(undefined, { toolCallId: 'click-with-hints' }),
+    )) as { text: string };
+    assert.match(result.text, /ok via ax/);
+  });
+
+  test('a target hint that disagrees with the observation is reported, not ignored', async () => {
+    const backend = fakeBackend() as CuDispatchBackend & {
+      observeApp: NonNullable<CuDispatchBackend['observeApp']>;
+      runSemantic: NonNullable<CuDispatchBackend['runSemantic']>;
+    };
+    let dispatched = 0;
+    backend.observeApp = async () => observation();
+    backend.runSemantic = async () => {
+      dispatched += 1;
+      return { outcome: { ok: true, tier: 'ax', verified: true } };
+    };
+    const [tool] = buildComputerUseTools({ backend });
+    const observed = (await tool.impl(
+      { action: 'observe', app: 'Fixture', window_id: 7 } as never,
+      ctx(),
+    )) as { text: string };
+    const observationId = JSON.parse(observed.text).observation_id as string;
+
+    const result = (await tool.impl(
+      {
+        action: 'click_element',
+        observation_id: observationId,
+        element_id: '5',
+        window_id: 999,
+      } as never,
+      ctx(undefined, { toolCallId: 'click-wrong-window' }),
+    )) as { text: string };
+    assert.match(result.text, /target_mismatch/);
+    assert.match(result.text, /window 7/);
+    assert.equal(dispatched, 0, 'a contradicted target must not be dispatched');
+  });
+
+  test('an unverified target hint never reaches the approval summary', async () => {
+    // The approval summary is what a person reads before allowing the action.
+    // With no active frame confirming it, `app` here is the model's claim.
+    const backend = fakeBackend();
+    const [tool] = buildComputerUseTools({ backend });
+    assert.deepEqual(
+      tool.permissionArgs?.(
+        {
+          action: 'click_element',
+          observation_id: 'no-such-frame',
+          element_id: '5',
+          app: 'Some Other App',
+          window_id: 4242,
+        } as never,
+        { sessionId: 's1', turnId: 't1', toolCallId: 'unbound' },
+      ),
+      {
+        action: 'click_element',
+        observation_id: 'no-such-frame',
+        element_id: '5',
+      },
+    );
+  });
+
   test('semantic action uses the runtime observation id, forwards identity hints, and returns fresh state', async () => {
     const seen: Array<{ action: unknown; context: CuRunContext }> = [];
     const backend = fakeBackend() as CuDispatchBackend & {
