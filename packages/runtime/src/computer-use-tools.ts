@@ -107,7 +107,7 @@ const computerWireParams = z
         ...CU_ACTION_TYPES,
       ] as [string, ...string[]])
       .describe(
-        'Operation to perform. Required fields by action: launch_app requires app; observe/screenshot require app or window_id; click_element requires observation_id and element_id; set_value requires observation_id, element_id, and value; select_text/secondary_action require observation_id, element_id, and text; press_key requires observation_id and text; coordinate actions require observation_id plus their coordinate fields.',
+        'Operation to perform. Required fields by action: launch_app requires app; observe/screenshot require app or window_id; click_element requires observation_id and element_id; set_value requires observation_id, element_id, and value; select_text/secondary_action require observation_id, element_id, and text; scroll_element requires observation_id, element_id, and scroll_direction, with optional scroll_amount; press_key requires observation_id and text; coordinate actions require observation_id plus their coordinate fields.',
       ),
     // "Exact" was already in this description and was not enough. On a real
     // desktop chain the model asked for "Calculator" and got nothing, because
@@ -163,8 +163,16 @@ const computerWireParams = z
     scroll_direction: z
       .enum(['up', 'down', 'left', 'right'])
       .optional()
-      .describe('Direction for scroll.'),
-    scroll_amount: z.number().int().min(0).max(100).optional().describe('Amount for scroll.'),
+      .describe('Direction for scroll and scroll_element.'),
+    scroll_amount: z
+      .number()
+      .int()
+      .min(0)
+      .max(100)
+      .optional()
+      .describe(
+        `Amount for scroll and scroll_element, in tenths of a page (${SCROLL_UNITS_PER_PAGE} = one page).`,
+      ),
     duration: z
       .number()
       .min(0)
