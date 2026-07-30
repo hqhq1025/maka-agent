@@ -22,4 +22,24 @@ describe('Computer Use model tool visibility', () => {
       ['Bash', 'maka_computer'],
     );
   });
+
+  it('withholds the tools entirely until the user turns Computer Use on', () => {
+    // A different reason from the vision filter, and a heavier one: a model
+    // without vision would waste the turn, but a user who has not turned this
+    // on has not agreed to Maka reading their screen and pressing their buttons
+    // at all. Withheld from the surface rather than refused at dispatch, so a
+    // model never sees a capability it may not use.
+    assert.deepEqual(
+      computerUseToolsForModel([shell, computer], [computer], true, false).map(
+        (candidate) => candidate.name,
+      ),
+      ['Bash'],
+    );
+    assert.deepEqual(
+      computerUseToolsForModel([shell, computer], [computer], true, true).map(
+        (candidate) => candidate.name,
+      ),
+      ['Bash', 'maka_computer'],
+    );
+  });
 });

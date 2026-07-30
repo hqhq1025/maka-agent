@@ -1,6 +1,8 @@
 import type { OnboardingMilestone } from './onboarding.js';
 import { sanitizeOnboardingMilestones } from './onboarding.js';
 import type { WebSearchSettingsPatch, WebSearchSettings } from './web-search.js';
+import type { ComputerUseSettings, ComputerUseSettingsPatch } from './computer-use.js';
+import { defaultComputerUseSettings, mergeComputerUseSettings } from './computer-use.js';
 import type { BotChatSettings, BotChatSettingsPatch } from './bot-chat-settings.js';
 import {
   createDefaultBotChatSettings,
@@ -297,6 +299,7 @@ export interface AppSettings {
   onboarding: OnboardingSettings;
   openGateway: OpenGatewaySettings;
   webSearch: WebSearchSettings;
+  computerUse: ComputerUseSettings;
   localMemory: LocalMemorySettings;
   workspaceInstructions: WorkspaceInstructionsSettings;
   privacy: PrivacySettings;
@@ -381,6 +384,7 @@ export type UpdateAppSettingsInput = Partial<{
   notifications: Partial<NotificationSettings>;
   system: Partial<SystemSettings>;
   webSearch: WebSearchSettingsPatch;
+  computerUse: ComputerUseSettingsPatch;
 }>;
 
 export type PersonalizationSettingsWarning =
@@ -449,6 +453,7 @@ export function createDefaultSettings(): AppSettings {
       token: '',
     },
     webSearch: defaultWebSearchSettings(),
+    computerUse: defaultComputerUseSettings(),
     localMemory: defaultLocalMemorySettings(),
     workspaceInstructions: {
       enabled: true,
@@ -524,6 +529,7 @@ export function mergeSettings(current: AppSettings, patch: UpdateAppSettingsInpu
       ...(patch.system ?? {}),
     },
     webSearch: mergeWebSearchSettings(current.webSearch, patch.webSearch),
+    computerUse: mergeComputerUseSettings(current.computerUse, patch.computerUse),
   };
 }
 

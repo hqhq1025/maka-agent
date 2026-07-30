@@ -451,3 +451,39 @@ function ownDataProperty(record: Record<string, unknown>, key: string): unknown 
   }
   return descriptor.value;
 }
+
+/**
+ * Whether the model may drive the machine at all.
+ *
+ * Computer Use is gated by the tool, not by the application it is pointed at.
+ * That is how everything else in Maka is gated — `load_tools` admits tools,
+ * plan mode strips them, the tool surface is assembled per turn — and adding an
+ * application axis would be a second dimension nothing else has, paid for with
+ * a per-app grant store and a revocation screen, to ask a question ("allow Maka
+ * to use 词典?") that a person cannot weigh and will answer yes to.
+ *
+ * It also is not a substitute for the macOS grants. Accessibility and Screen
+ * Recording are what actually let anything happen; this decides whether Maka
+ * offers the capability to the model in the first place.
+ *
+ * Off by default. Turning on a capability that reads the screen and presses
+ * buttons is a decision, not a migration.
+ */
+export interface ComputerUseSettings {
+  readonly enabled: boolean;
+}
+
+export type ComputerUseSettingsPatch = Partial<{ enabled: boolean }>;
+
+export function defaultComputerUseSettings(): ComputerUseSettings {
+  return { enabled: false };
+}
+
+export function mergeComputerUseSettings(
+  current: ComputerUseSettings | undefined,
+  patch: ComputerUseSettingsPatch | undefined,
+): ComputerUseSettings {
+  const base = current ?? defaultComputerUseSettings();
+  if (!patch) return base;
+  return { enabled: typeof patch.enabled === 'boolean' ? patch.enabled : base.enabled };
+}

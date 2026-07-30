@@ -53,6 +53,27 @@ export function GeneralSettingsPage(props: {
           app, not how the app looks. The component keeps its save flow. */}
       <PersonalizationSettingsPage settings={props.settings} onUpdate={props.onUpdate} />
       <SettingsRows>
+        {/* Off by default, and read per turn: the tool is withheld from the
+            model's surface entirely until this is on, rather than offered and
+            refused. Turning on a capability that reads the screen and presses
+            buttons is a decision, so it is made here and nowhere else — Maka
+            gates Computer Use by the tool, not by which application it is
+            pointed at. */}
+        <div className="settingsFormRow">
+          <div>
+            <strong>{copy.computerUse}</strong>
+            <small>{copy.computerUseHelp}</small>
+          </div>
+          <Switch
+            ariaLabel={copy.enableComputerUse}
+            checked={props.settings.computerUse.enabled}
+            onChange={(enabled) => {
+              props.onUpdate({ computerUse: { enabled } }).catch((error: unknown) => {
+                toast.error(copy.computerUseFailed, settingsActionErrorMessage(error, locale));
+              });
+            }}
+          />
+        </div>
         <div className="settingsFormRow">
           <div>
             <strong>{copy.incognito}</strong>

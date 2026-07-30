@@ -472,6 +472,8 @@ export type {
   ComputerUseApprovalClass,
   ComputerUseApprovalSummary,
   ComputerUseModelCallArgs,
+  ComputerUseSettings,
+  ComputerUseSettingsPatch,
   ComputerUseDispatchEvidence,
   ComputerUseDispatchTier,
   ComputerUseDisplayIdentity,
@@ -503,6 +505,8 @@ export {
   computerUseApprovalScopeKey,
   computerUseApprovalSummary,
   computerUseModelCallArgs,
+  defaultComputerUseSettings,
+  mergeComputerUseSettings,
   isComputerUseErrorCode,
 } from './computer-use.js';
 

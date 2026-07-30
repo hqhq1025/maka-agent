@@ -699,6 +699,9 @@ const desktopBackendToolSurfaceDeps = {
   taskLedgerStore,
   deepResearchTools,
   computerUseTools,
+  // Read per turn rather than captured once: a person who turns Computer Use on
+  // expects their next message to have it, not their next launch.
+  isComputerUseEnabled: async () => (await settingsStore.get()).computerUse.enabled,
   agentTeamLeadTools,
   builtinTools,
   toolEconomy: desktopProductToolSurface.identity.policy.economy,

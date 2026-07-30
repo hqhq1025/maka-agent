@@ -49,6 +49,11 @@ export interface DesktopBackendToolSurfaceDeps {
   taskLedgerStore: TaskLedgerStore;
   deepResearchTools: readonly MakaTool[];
   computerUseTools: readonly MakaTool[];
+  /**
+   * Whether the user has turned Computer Use on. Read per turn, so flipping the
+   * switch takes effect on the next message.
+   */
+  isComputerUseEnabled?: () => Promise<boolean>;
   agentTeamLeadTools: readonly MakaTool[];
   builtinTools: readonly MakaTool[];
   toolEconomy: boolean;
@@ -247,6 +252,7 @@ export async function resolveDesktopBackendToolSurface(
     [...candidateTools, ...planControlTools],
     deps.computerUseTools,
     supportsVision,
+    (await deps.isComputerUseEnabled?.()) ?? true,
   );
   const selectedTools = selectCollaborationTools({
     mode: collaborationMode,
