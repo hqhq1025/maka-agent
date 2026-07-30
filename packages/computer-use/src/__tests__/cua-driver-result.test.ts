@@ -172,6 +172,23 @@ describe('normalizeCuaDriverOutcome', () => {
     if (!untyped.ok) {
       assert.equal(untyped.error, 'capture_failed');
       assert.equal(untyped.message, 'opaque driver failure');
+      // The code was guessed, and the model is told so. `capture_failed` alone
+      // reads as "the screenshot glitched, try again", and on a real run a model
+      // read it that way five times in a row for the same rejected key.
+      assert.equal(untyped.evidence?.reason, 'driver_rejected');
+    }
+  });
+
+  it('leaves a mapped code and the driver\u2019s own reason alone', () => {
+    const mapped = normalizeCuaDriverOutcome({
+      isError: true,
+      content: [{ type: 'text', text: 'window went away' }],
+      structuredContent: { error: 'target_missing', reason: 'window_closed' },
+    });
+    assert.equal(mapped.ok, false);
+    if (!mapped.ok) {
+      assert.equal(mapped.error, 'target_missing');
+      assert.equal(mapped.evidence?.reason, 'window_closed');
     }
   });
 });

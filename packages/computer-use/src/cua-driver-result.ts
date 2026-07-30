@@ -114,11 +114,24 @@ export function normalizeCuaDriverOutcome(
   if (result.isError) {
     const rawError = structuredContent?.error;
     const message = resultText(result, 'cua-driver reported an error');
+    const mapped = isComputerUseErrorCode(rawError);
+    // Say when a code is a fallback rather than a finding.
+    //
+    // An unmapped driver rejection still lands on `capture_failed`, which reads
+    // to a model as "the screenshot glitched, try again" — and on a real run it
+    // did exactly that, sending the same `press_key` five times. The driver's
+    // own message cannot be forwarded (it can carry window titles and screen
+    // text), but the fact that the code was guessed can be, and that is the
+    // part that says stop.
+    const reasoned =
+      mapped || evidence?.reason !== undefined
+        ? evidence
+        : { ...(evidence ?? {}), reason: 'driver_rejected' };
     return {
       ok: false,
-      error: isComputerUseErrorCode(rawError) ? rawError : classifyUnmappedDriverError(message),
+      error: mapped ? rawError : classifyUnmappedDriverError(message),
       message,
-      ...(evidence ? { evidence } : {}),
+      ...(reasoned ? { evidence: reasoned } : {}),
     };
   }
 
