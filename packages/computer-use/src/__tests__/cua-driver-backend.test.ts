@@ -1010,6 +1010,56 @@ describe('cua-driver backend', () => {
     }
   });
 
+  it('focuses the control a key is meant for, instead of posting at the app', async () => {
+    // The driver's own contract: "with element_index it focuses that AX element
+    // first". Without one, a key is posted to the application and lands on
+    // whatever holds focus — the guess the model was trying to replace when it
+    // sent an element id and was told the field did not exist.
+    const { backend, logPath } = makeBackend({ axRole: 'AXTextField' });
+    const signal = new AbortController().signal;
+    const context = { sessionId: 's1', turnId: 't1', toolCallId: 'keyed' };
+    const observation = await backend.observeApp!(
+      { app: 'Fixture', windowId: 77, includeScreenshot: false },
+      signal,
+      context,
+    );
+    const result = await backend.runSemantic!(
+      {
+        type: 'press_key',
+        observationId: observation.observationId,
+        key: 'Return',
+        elementId: '7',
+        elementIdentity: observation.elements[0]?.identity,
+      },
+      signal,
+      { ...context, boundAction: boundElementAction(observation, '7') },
+    );
+    assert.equal(result.outcome.ok, true);
+    const call = toolCall(await readRecords(logPath), 'press_key');
+    assert.ok(call, 'the key went through the driver');
+    assert.equal(call!.element_index, 7, 'addressed to the element, not just the app');
+    assert.equal(call!.window_id, 77);
+  });
+
+  it('a key with no element named still goes to the window, as before', async () => {
+    const { backend, logPath } = makeBackend();
+    const signal = new AbortController().signal;
+    const context = { sessionId: 's1', turnId: 't1', toolCallId: 'unkeyed' };
+    const observation = await backend.observeApp!(
+      { app: 'Fixture', windowId: 77, includeScreenshot: false },
+      signal,
+      context,
+    );
+    await backend.runSemantic!(
+      { type: 'press_key', observationId: observation.observationId, key: 'Return' },
+      signal,
+      context,
+    );
+    const call = toolCall(await readRecords(logPath), 'press_key');
+    assert.ok(call);
+    assert.equal(call!.element_index, undefined);
+  });
+
   it('resolves an app by the name on disk when the display name is localized', async () => {
     // A window record carries only kCGWindowOwnerName — the LOCALIZED display
     // name. No case rule or edit distance bridges Dictionary/词典, and on a real

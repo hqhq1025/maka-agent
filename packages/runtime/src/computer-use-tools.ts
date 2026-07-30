@@ -109,7 +109,7 @@ const computerWireParams = z
         ...CU_ACTION_TYPES,
       ] as [string, ...string[]])
       .describe(
-        'Operation to perform. Required fields by action: launch_app requires app; observe/screenshot require app or window_id; click_element requires observation_id and element_id; set_value requires observation_id, element_id, and value; select_text/secondary_action require observation_id, element_id, and text; scroll_element requires observation_id, element_id, and scroll_direction, with optional scroll_amount; element_sequence requires observation_id and steps, where each step names a control by the label it shows and optionally its role — prefer it whenever several controls must be operated in order, since it costs one call instead of one per control; press_key requires observation_id and text; coordinate actions require observation_id plus their coordinate fields.',
+        'Operation to perform. Required fields by action: launch_app requires app; observe/screenshot require app or window_id; click_element requires observation_id and element_id; set_value requires observation_id, element_id, and value; select_text/secondary_action require observation_id, element_id, and text; scroll_element requires observation_id, element_id, and scroll_direction, with optional scroll_amount; element_sequence requires observation_id and steps, where each step names a control by the label it shows and optionally its role — prefer it whenever several controls must be operated in order, since it costs one call instead of one per control; press_key requires observation_id and text, and takes an optional element_id — supply it and the control is focused before the key is posted, omit it and the key lands on whatever the observed window already has focused; coordinate actions require observation_id plus their coordinate fields.',
       ),
     // "Exact" was already in this description and was not enough. On a real
     // desktop chain the model asked for "Calculator" and got nothing, because
@@ -1048,7 +1048,11 @@ export function buildComputerUseTools(deps: {
         ...input,
         app: record.appId,
         window_id: record.windowId,
-        ...('element_id' in input && record.elements?.get(input.element_id)?.identity
+        // `element_id` is optional on press_key, so its presence in the shape no
+        // longer means it has a value.
+        ...('element_id' in input &&
+        input.element_id !== undefined &&
+        record.elements?.get(input.element_id)?.identity
           ? { element_identity: record.elements.get(input.element_id)!.identity }
           : {}),
       };
@@ -1581,6 +1585,13 @@ export function buildComputerUseTools(deps: {
                                 type: 'press_key' as const,
                                 observationId: input.observation_id,
                                 key: input.text,
+                                ...(input.element_id
+                                  ? {
+                                      elementId: input.element_id,
+                                      elementIdentity: record.elements?.get(input.element_id)
+                                        ?.identity,
+                                    }
+                                  : {}),
                               }),
                     };
             const binding = claimBoundAction(record, input.observation_id, modelAction);

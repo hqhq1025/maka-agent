@@ -1857,14 +1857,59 @@ export function createCuaDriverBackend(opts: CuaDriverBackendOptions): CuDispatc
               if (opts.allowCompatibilityInputDispatch !== true) {
                 return compatibilityInputBlocked(action.type);
               }
+              // Both gates stay. Delivery is still `CGEventPostToPid` whether or
+              // not an element is named — the driver focuses the element first
+              // and then synthesizes — so the reasoning that took this guard off
+              // the element-CLICK path does not carry: that path synthesizes
+              // nothing at all.
               const intervention = await physicalInputFailure();
               if (intervention) return intervention;
+              // Which control the key is for, when the model said.
+              //
+              // The driver's own contract: "with element_index it focuses that
+              // AX element first". Without one the key is posted to the
+              // application and lands on whatever happens to hold focus — a
+              // guess, and the one the model was trying to replace when it sent
+              // an element id and was told the field did not exist.
+              let element: Awaited<ReturnType<typeof refetchSemanticElement>> | undefined;
+              const keyElementId = action.elementId;
+              if (keyElementId !== undefined) {
+                element = await refetchSemanticElement(
+                  targetResolutionDeps,
+                  observation,
+                  { ...action, elementId: keyElementId },
+                  signal,
+                );
+                if ('outcome' in element) return element;
+                const visibilityFailure = await validateSemanticElementVisibility(
+                  targetResolutionDeps,
+                  validated,
+                  element,
+                  signal,
+                );
+                if (visibilityFailure) return visibilityFailure;
+                trace({
+                  type: 'dispatch',
+                  toolCallId: context.toolCallId,
+                  actionType: action.type,
+                  tool: 'press_key',
+                  pid: validated.pid,
+                  windowId: validated.windowId,
+                  address: 'ax',
+                });
+              }
               const result = await actionClient.callTool(
                 'press_key',
                 {
                   pid: validated.pid,
                   window_id: validated.windowId,
                   key: action.key,
+                  ...(element && !('outcome' in element)
+                    ? {
+                        element_index: element.element_index,
+                        ...(element.element_token ? { element_token: element.element_token } : {}),
+                      }
+                    : {}),
                 },
                 signal,
               );

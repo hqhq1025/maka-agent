@@ -150,6 +150,16 @@ export const computerParams = z.discriminatedUnion('action', [
       action: z.literal('press_key'),
       observation_id: z.string().min(1).max(256),
       text,
+      /**
+       * Which control the key is for.
+       *
+       * Optional, and not a hint: the driver focuses the named element through
+       * accessibility before posting the key. Without it a key is posted to the
+       * application and lands on whatever happens to have focus, which is a
+       * guess the model was already trying to replace — it sent `element_id`
+       * and was told only that the field was unknown.
+       */
+      element_id: z.string().min(1).max(256).optional(),
       ...redundantTargetHints,
     })
     .strict(),
@@ -276,7 +286,16 @@ export function describeComputerUseArgsViolation(error: unknown): string | undef
     if (issue.code === 'unrecognized_keys' && Array.isArray(issue.keys)) {
       const keys = issue.keys.filter((k): k is string => typeof k === 'string');
       if (keys.length > 0) {
-        parts.push(`this action does not take ${keys.map((k) => `\`${k}\``).join(', ')}`);
+        // Naming the rejected key is half an answer. A model that reached for
+        // `element_id` on `press_key` was trying to say where the key should
+        // land, and telling it only that the field is unknown leaves it to
+        // guess again — which on a real run it did.
+        const recovery = keys.includes('element_id')
+          ? ' — name the control through the action that acts on it, or click_element it first'
+          : '';
+        parts.push(
+          `this action does not take ${keys.map((k) => `\`${k}\``).join(', ')}${recovery}`,
+        );
         continue;
       }
     }

@@ -173,6 +173,9 @@ export type CuSemanticAction =
       type: 'press_key';
       observationId: string;
       key: string;
+      /** The control to focus before the key is posted, when the model named one. */
+      elementId?: string;
+      elementIdentity?: CuObservedElement['identity'];
     };
 
 export interface CuRunContext {

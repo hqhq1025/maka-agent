@@ -543,7 +543,10 @@ export async function coordinateTarget(
 export async function refetchSemanticElement(
   deps: CuaTargetResolutionDeps,
   observation: CuaStoredObservation,
-  action: Exclude<CuSemanticAction, { type: 'press_key' }>,
+  // Every semantic action that names an element. `press_key` used to be
+  // excluded because it never did; it may now, and when it does the element is
+  // what the driver focuses before the key is posted.
+  action: CuSemanticAction & { elementId: string },
   signal: AbortSignal,
 ): Promise<CuaNormalizedElement | CuRunResult> {
   const state = await deps.getWindowState(

@@ -1050,7 +1050,9 @@ describe('buildComputerUseTools — the `maka_computer` MakaTool', () => {
       return keypad();
     };
     backend.runSemantic = async (action) => {
-      dispatched.push('elementId' in action ? action.elementId : action.type);
+      dispatched.push(
+        'elementId' in action && action.elementId !== undefined ? action.elementId : action.type,
+      );
       return { outcome: { ok: true, tier: 'ax', verified: true } };
     };
     const [tool] = buildComputerUseTools({ backend });
