@@ -46,7 +46,7 @@ describe('Desktop Computer Use production wiring', () => {
     assert.match(main, /onMainWindowClose = \(\) => \{[\s\S]*computerUsePip\.destroyAll/);
   });
 
-  it('reports scoped approval and live service health instead of binary-only healthy', async () => {
+  it('reports the approval that exists and live service health, not a gate that was removed', async () => {
     const [snapshot, main] = await Promise.all([
       readFile(resolve(ROOT, 'apps/desktop/src/main/capability-snapshot.ts'), 'utf8'),
       readMainProcessCombinedSource(),
@@ -55,7 +55,13 @@ describe('Desktop Computer Use production wiring', () => {
       /function computerUseCapability[\s\S]*?(?=function staticCapability)/,
     )?.[0];
     assert.ok(capability, 'Computer Use capability block must exist');
-    assert.match(capability, /required_scoped_lease/);
+    // The per-tool permission engine this used to name was removed when tool
+    // permissions became session sandbox boundaries, which cover the filesystem
+    // and the network and cannot express driving another application. The
+    // Permission Center is the screen a person opens to learn what protects
+    // them; it must not describe a gate that no longer runs.
+    assert.match(capability, /'not_required'/);
+    assert.doesNotMatch(capability, /required_scoped_lease/);
     assert.match(capability, /input\?\.health\.state/);
     assert.match(capability, /未找到通过完整性检查的 cua-driver artifact/);
     assert.match(capability, /等待.*权限/);

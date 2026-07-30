@@ -157,8 +157,18 @@ function computerUseCapability(
       { id: 'accessibility', required: true, status: permissions.accessibility.status },
       { id: 'screen_recording', required: true, status: permissions.screen_recording.status },
     ],
+    // Nothing asks. The per-tool permission engine that this described was
+    // removed when tool permissions became session sandbox boundaries, and
+    // those cover the filesystem and the network — there is no boundary that
+    // can express driving another application. Saying "authorized by target and
+    // action category" here described a gate that no longer exists, in the one
+    // screen a person opens to find out what protects them.
+    //
+    // What actually stands between a model and the machine: the two macOS
+    // grants above, re-probed at the start of every action; the frame binding,
+    // which keeps an action on the thing that was observed; and stop.
     actionApproval: {
-      state: 'required_scoped_lease',
+      state: 'not_required',
       source: 'capability_policy',
     },
     memoryAcceptance: { state: 'not_applicable', source: 'not_applicable' },

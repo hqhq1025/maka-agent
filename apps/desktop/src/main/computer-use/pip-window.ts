@@ -24,11 +24,20 @@ import {
  * The agent cursor can only be seen when the target window is. During ordinary
  * background work it is not: the user is looking at something else and the
  * driven window is underneath it. Codex answers this with
- * `CUAServiceRemoteHostedPIPController` — a live mirror of the backgrounded
- * app, with the agent cursor drawn into it — under a setting worded "Show
- * backgrounded apps that Computer Use is working on in Picture-in-Picture
- * mode." That is the real fix for occlusion: stop competing for the user's
- * screen and give the work its own small window.
+ * `CUAServiceRemoteHostedPIPController` — a live mirror of the window being
+ * driven, with the agent cursor drawn into it. That is the real fix for
+ * occlusion: stop competing for the user's screen and give the work its own
+ * small window.
+ *
+ * This comment used to attribute that to a setting worded "Show backgrounded
+ * apps that Computer Use is working on in Picture-in-Picture mode", and to
+ * describe the mirror as gated on the app being backgrounded. Neither survives
+ * inspection: that sentence has zero matches anywhere in the shipped app, the
+ * real preference is an opt-OUT named `computerUseAlwaysHidePictureInPicture`
+ * ("Always hide picture in picture"), and the trigger contains no occlusion
+ * term at all — a notification when a new skyshot arrives, admitted when a turn
+ * is active and that window has no stream yet. Occlusion appears nowhere in the
+ * controller or in the host's visibility predicate.
  *
  * Codex streams via ScreenCaptureKit across XPC. Maka does not need either.
  * Every mutating action already returns a fresh screenshot of the target
