@@ -329,6 +329,9 @@ const SEMANTIC_ACTIONS = new Set([
   // It is still a mutation of the target's state, and it is the semantic twin
   // of the coordinate `scroll` that already sits in POINTER_ACTIONS.
   'scroll_element',
+  // A sequence of element actions is still element actions: same class, same
+  // approval, one call.
+  'element_sequence',
   // Starting an app changes what is on screen. It touches no element, but it
   // is not a read, and letting it fall through to the default would have
   // classified it correctly by accident rather than on purpose.
@@ -344,6 +347,7 @@ const APPROVAL_ACTIONS = new Set([
   'select_text',
   'secondary_action',
   'scroll_element',
+  'element_sequence',
   'press_key',
   ...CU_ACTION_TYPES,
 ]);

@@ -1022,6 +1022,99 @@ describe('buildComputerUseTools — the `maka_computer` MakaTool', () => {
     assert.doesNotMatch(latched.modelText ?? latched.text, /Fresh observation/);
   });
 
+  test('a sequence takes four presses in one call, looking again between each', async () => {
+    // `element_id` is an index into one snapshot, spent the moment anything
+    // happens, so pressing 7 × 8 = cost four observations and four actions.
+    // A label is not an index: it is true of the control before and after the
+    // press, so the host can take a step, look again with its own eyes, and
+    // take the next.
+    const dispatched: string[] = [];
+    let captures = 0;
+    const backend = fakeBackend() as CuDispatchBackend & {
+      observeApp: NonNullable<CuDispatchBackend['observeApp']>;
+      captureObservation: NonNullable<CuDispatchBackend['captureObservation']>;
+      runSemantic: NonNullable<CuDispatchBackend['runSemantic']>;
+    };
+    const keypad = (): CuObservation =>
+      observation({
+        elements: ['7', '×', '8', '='].map((label, index) => ({
+          elementId: String(index + 1),
+          role: 'AXButton',
+          label,
+          identity: { role: 'AXButton', label },
+        })),
+      });
+    backend.observeApp = async () => keypad();
+    backend.captureObservation = async () => {
+      captures += 1;
+      return keypad();
+    };
+    backend.runSemantic = async (action) => {
+      dispatched.push('elementId' in action ? action.elementId : action.type);
+      return { outcome: { ok: true, tier: 'ax', verified: true } };
+    };
+    const [tool] = buildComputerUseTools({ backend });
+    const observed = (await tool.impl(
+      { action: 'observe', app: 'Fixture', window_id: 7 } as never,
+      ctx(),
+    )) as { text: string };
+
+    const result = (await tool.impl(
+      {
+        action: 'element_sequence',
+        observation_id: JSON.parse(observed.text).observation_id,
+        steps: [{ label: '7' }, { label: '×' }, { label: '8' }, { label: '=' }],
+      } as never,
+      ctx(undefined, { toolCallId: 'sequence' }),
+    )) as { text: string; modelText?: string };
+
+    assert.deepEqual(dispatched, ['1', '2', '3', '4']);
+    // Three re-observations between the four steps, plus the closing one.
+    assert.equal(captures, 4);
+    assert.match(result.text, /ok \(4 of 4 steps\)/);
+  });
+
+  test('a sequence stops at the step it cannot resolve, and says which', async () => {
+    const backend = fakeBackend() as CuDispatchBackend & {
+      observeApp: NonNullable<CuDispatchBackend['observeApp']>;
+      captureObservation: NonNullable<CuDispatchBackend['captureObservation']>;
+      runSemantic: NonNullable<CuDispatchBackend['runSemantic']>;
+    };
+    let dispatched = 0;
+    const twoButtons = (): CuObservation =>
+      observation({
+        elements: [
+          {
+            elementId: '1',
+            role: 'AXButton',
+            label: 'Yes',
+            identity: { role: 'AXButton', label: 'Yes' },
+          },
+        ],
+      });
+    backend.observeApp = async () => twoButtons();
+    backend.captureObservation = async () => twoButtons();
+    backend.runSemantic = async () => {
+      dispatched += 1;
+      return { outcome: { ok: true, tier: 'ax', verified: true } };
+    };
+    const [tool] = buildComputerUseTools({ backend });
+    const observed = (await tool.impl(
+      { action: 'observe', app: 'Fixture', window_id: 7 } as never,
+      ctx(),
+    )) as { text: string };
+    const result = (await tool.impl(
+      {
+        action: 'element_sequence',
+        observation_id: JSON.parse(observed.text).observation_id,
+        steps: [{ label: 'Yes' }, { label: 'Nope' }, { label: 'Yes' }],
+      } as never,
+      ctx(undefined, { toolCallId: 'sequence-stop' }),
+    )) as { text: string; modelText?: string };
+    assert.equal(dispatched, 1, 'nothing after the unresolved step runs');
+    assert.match(result.text, /stopped at step 2 of 3: target_missing/);
+  });
+
   test('scroll_element reaches the executor at all', async () => {
     // It was in the action union, in the approval classes and in the semantic
     // dispatch branch — and missing from the one list that grants an action

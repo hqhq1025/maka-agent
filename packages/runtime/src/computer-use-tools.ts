@@ -104,11 +104,12 @@ const computerWireParams = z
         'select_text',
         'secondary_action',
         'scroll_element',
+        'element_sequence',
         'press_key',
         ...CU_ACTION_TYPES,
       ] as [string, ...string[]])
       .describe(
-        'Operation to perform. Required fields by action: launch_app requires app; observe/screenshot require app or window_id; click_element requires observation_id and element_id; set_value requires observation_id, element_id, and value; select_text/secondary_action require observation_id, element_id, and text; scroll_element requires observation_id, element_id, and scroll_direction, with optional scroll_amount; press_key requires observation_id and text; coordinate actions require observation_id plus their coordinate fields.',
+        'Operation to perform. Required fields by action: launch_app requires app; observe/screenshot require app or window_id; click_element requires observation_id and element_id; set_value requires observation_id, element_id, and value; select_text/secondary_action require observation_id, element_id, and text; scroll_element requires observation_id, element_id, and scroll_direction, with optional scroll_amount; element_sequence requires observation_id and steps, where each step names a control by the label it shows and optionally its role — prefer it whenever several controls must be operated in order, since it costs one call instead of one per control; press_key requires observation_id and text; coordinate actions require observation_id plus their coordinate fields.',
       ),
     // "Exact" was already in this description and was not enough. On a real
     // desktop chain the model asked for "Calculator" and got nothing, because
@@ -180,6 +181,24 @@ const computerWireParams = z
       .max(60)
       .optional()
       .describe('Duration in seconds for wait or hold_key.'),
+    steps: z
+      .array(
+        z
+          .object({
+            label: z.string().min(1).max(256),
+            role: z.string().min(1).max(64).optional(),
+            do: z.enum(['click', 'set_value']).optional(),
+            value: text.optional(),
+          })
+          .strict(),
+      )
+      .min(1)
+      .max(12)
+      .optional()
+      .describe(
+        'Required only for element_sequence. Each step names a control by the label it shows in the observation (and its role when the label alone is ambiguous). ' +
+          '`do` defaults to click; use set_value with `value` to write into a field. The host re-observes before every step, so labels — not element_ids — are what carry across.',
+      ),
     region: z
       .tuple([
         z.number().int().nonnegative(),
@@ -245,6 +264,20 @@ const REOBSERVABLE_FAILURES = new Set<ComputerUseErrorCode>([
 
 function shouldReobserveAfter(outcome: CuRunResult['outcome']): boolean {
   return outcome.ok || REOBSERVABLE_FAILURES.has(outcome.error);
+}
+
+/**
+ * The pointer-shaped stand-in a semantic action shows the presentation layer.
+ *
+ * The cursor overlay and the mirror speak in clicks and coordinates; a semantic
+ * action has an element. This is the same translation the single-action path
+ * already does inline, named so a sequence can reuse it.
+ */
+function summarySemanticAction(action: CuSemanticAction, binding: CuaBoundAction): CuAction {
+  const coordinate = binding.sourceCoordinate ?? { x: 0, y: 0 };
+  return action.type === 'set_value'
+    ? { type: 'type', text: action.value }
+    : { type: 'left_click', coordinate };
 }
 
 function observationText(observation: CuObservation): string {
@@ -1070,6 +1103,200 @@ export function buildComputerUseTools(deps: {
             };
           }
           const runCtx: CuRunContext = { sessionId, turnId, toolCallId };
+          if (input.action === 'element_sequence') {
+            if (!deps.backend.runSemantic || !deps.backend.captureObservation) {
+              return { text: 'maka_computer.element_sequence failed: unsupported_action' };
+            }
+            if (!tcc.screenRecording) {
+              return {
+                text: 'maka_computer.element_sequence failed: permission_missing — Screen Recording not granted (System Settings → Privacy & Security → Screen Recording)',
+              };
+            }
+            const record = sessionObservation(sessionId, turnId);
+            const hintConflict = targetHintConflict(input, record);
+            if (hintConflict) return { text: hintConflict };
+            if (!record.appId || !record.windowId) return bindingFailure('no_active_frame');
+            const active = record.state.activeObservation();
+            if (!active || active.frameId !== input.observation_id) {
+              return bindingFailure('stale_frame');
+            }
+            let current: CuObservation | undefined = record.elements
+              ? {
+                  observationId: input.observation_id,
+                  appId: record.appId,
+                  pid: 0,
+                  windowId: record.windowId,
+                  elements: [...record.elements.values()],
+                }
+              : undefined;
+            const done: Array<{ step: number; label: string; ok: boolean; detail?: string }> = [];
+            let stopped: string | undefined;
+            for (const [index, step] of input.steps.entries()) {
+              // Every step after the first looks again first. The host is the
+              // one holding the frame here, and it is a frame it captured a
+              // moment ago — which is the situation frame binding exists to
+              // create, not the one it exists to prevent.
+              if (index > 0) {
+                const lease = state.beforeObservation();
+                if (!lease.ok) {
+                  stopped = lease.reason;
+                  break;
+                }
+                let recaptured: CuObservation;
+                try {
+                  recaptured = await deps.backend.captureObservation(
+                    { app: record.appId, windowId: record.windowId, includeScreenshot: true },
+                    abortSignal,
+                    runCtx,
+                  );
+                } catch {
+                  stopped = 'capture_failed';
+                  break;
+                }
+                current = registerObservation(record, recaptured);
+                // A frame the host just captured is a live frame. Without this
+                // the session stays in `reobserve_required` from the previous
+                // step and the next action is refused — the sequence would take
+                // exactly one step and stop.
+                state.freshObservationSucceeded();
+              }
+              const wanted = step.label.trim().toLowerCase();
+              const matches = (current?.elements ?? []).filter(
+                (element) =>
+                  (element.label ?? '').trim().toLowerCase() === wanted &&
+                  (step.role === undefined || element.role === step.role) &&
+                  element.enabled !== false,
+              );
+              if (matches.length === 0) {
+                stopped = 'target_missing';
+                done.push({
+                  step: index + 1,
+                  label: step.label,
+                  ok: false,
+                  detail: 'no control with that label',
+                });
+                break;
+              }
+              if (matches.length > 1) {
+                stopped = 'ambiguous_target';
+                done.push({
+                  step: index + 1,
+                  label: step.label,
+                  ok: false,
+                  detail: `${matches.length} controls share that label; add a role`,
+                });
+                break;
+              }
+              const element = matches[0]!;
+              const actionLeaseResult = state.beforeAction();
+              if (!actionLeaseResult.ok) {
+                stopped = actionLeaseResult.reason;
+                break;
+              }
+              const semantic: CuSemanticAction =
+                step.do === 'set_value'
+                  ? {
+                      type: 'set_value',
+                      observationId: current!.observationId,
+                      elementId: element.elementId,
+                      value: step.value ?? '',
+                      ...(element.identity ? { elementIdentity: element.identity } : {}),
+                    }
+                  : {
+                      type: 'click_element',
+                      observationId: current!.observationId,
+                      elementId: element.elementId,
+                      ...(element.identity ? { elementIdentity: element.identity } : {}),
+                    };
+              const binding = claimBoundAction(record, current!.observationId, semantic);
+              if ('rejection' in binding) {
+                stopped = binding.rejection;
+                break;
+              }
+              if (!record.backendObservationId) {
+                stopped = 'stale_frame';
+                break;
+              }
+              const operationContext = { ...runCtx, boundAction: binding };
+              let stepResult: CuRunResult | undefined;
+              let presentation: Awaited<ReturnType<typeof runWithPresentation>> | undefined;
+              try {
+                presentation = await runWithPresentation(
+                  summarySemanticAction(semantic, binding),
+                  operationContext,
+                  abortSignal,
+                  () =>
+                    deps.backend.runSemantic!(
+                      { ...semantic, observationId: record.backendObservationId! },
+                      abortSignal,
+                      operationContext,
+                    ),
+                  undefined,
+                  invocationGeneration,
+                );
+                if (presentation.blocked) return presentation.blocked;
+                stepResult = presentation.result;
+              } finally {
+                consumeBoundAction(record, binding);
+                state.reobserveRequired();
+              }
+              presentation?.finish(stepResult);
+              if (!stepResult || !stepResult.outcome.ok) {
+                if (stepResult) applyTypedOutcomeState(state, stepResult.outcome);
+                stopped =
+                  stepResult && !stepResult.outcome.ok
+                    ? stepResult.outcome.error
+                    : 'capture_failed';
+                done.push({ step: index + 1, label: step.label, ok: false });
+                break;
+              }
+              done.push({ step: index + 1, label: step.label, ok: true });
+            }
+            // One observation at the end, whatever happened: the model needs a
+            // current frame either to carry on or to work out what went wrong.
+            let final: CuObservation | undefined;
+            try {
+              const lease = state.beforeObservation();
+              if (lease.ok) {
+                final = registerObservation(
+                  record,
+                  await deps.backend.captureObservation(
+                    { app: record.appId, windowId: record.windowId, includeScreenshot: true },
+                    abortSignal,
+                    runCtx,
+                  ),
+                );
+              }
+            } catch {
+              final = undefined;
+            }
+            const headline = stopped
+              ? `computer.element_sequence stopped at step ${done.length} of ${input.steps.length}: ${stopped}`
+              : `computer.element_sequence ok (${done.length} of ${input.steps.length} steps)`;
+            const persistedTail = final
+              ? `\nFresh observation: ${persistedObservationText(final)}`
+              : '';
+            const modelTail = final ? `\nFresh observation:\n${observationText(final)}` : '';
+            const stepLines = done
+              .map(
+                (entry) =>
+                  `  ${entry.step}. ${entry.ok ? 'ok' : 'failed'}${entry.detail ? ` — ${entry.detail}` : ''}`,
+              )
+              .join('\n');
+            return {
+              text: `${headline}${persistedTail}`,
+              modelText: `${headline}\n${stepLines}${modelTail}`,
+              ...(stopped && isComputerUseErrorCode(stopped) ? { error: stopped } : {}),
+              ...(final?.screenshot
+                ? {
+                    screenshot: {
+                      base64: final.screenshot.base64,
+                      mimeType: final.screenshot.mimeType,
+                    },
+                  }
+                : {}),
+            };
+          }
           if (input.action === 'launch_app') {
             if (!deps.backend.launchApp) {
               return { text: 'maka_computer.launch_app failed: unsupported_action' };

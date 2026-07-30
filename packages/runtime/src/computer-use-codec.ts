@@ -105,6 +105,46 @@ export const computerParams = z.discriminatedUnion('action', [
       ...redundantTargetHints,
     })
     .strict(),
+  /**
+   * Several element actions described the way a person would describe them,
+   * carried out one at a time by the host.
+   *
+   * `element_id` is an index into one snapshot: it is spent the moment anything
+   * happens, so every action costs the model a round trip to look again. On a
+   * real seven-application matrix that came to 97 calls for at most five useful
+   * actions per scenario, and six of seven ran out of time — with a median tool
+   * call of 734ms. The round trips were the whole cost.
+   *
+   * A label is not an index. "Press 7, then multiply, then 8, then equals" is
+   * true of the calculator before and after each press, so the host can take
+   * one step, look again with its own eyes, find the next control, and take the
+   * next — which is what frame binding wants. It exists to stop the MODEL
+   * acting on a view that has moved on; the host acting on a view it captured
+   * a moment ago is the case it was built to allow.
+   *
+   * Stops at the first step it cannot resolve unambiguously or cannot dispatch,
+   * and says which one.
+   */
+  z
+    .object({
+      action: z.literal('element_sequence'),
+      observation_id: z.string().min(1).max(256),
+      steps: z
+        .array(
+          z
+            .object({
+              label: z.string().min(1).max(256),
+              role: z.string().min(1).max(64).optional(),
+              do: z.enum(['click', 'set_value']).optional(),
+              value: text.optional(),
+            })
+            .strict(),
+        )
+        .min(1)
+        .max(12),
+      ...redundantTargetHints,
+    })
+    .strict(),
   z
     .object({
       action: z.literal('press_key'),

@@ -1,4 +1,4 @@
-import { TOOL_OUTPUT_DELTA_MAX_CHARS } from '@maka/core/events';
+import { TOOL_OUTPUT_DELTA_MAX_CHARS, type ToolActivityKind } from '@maka/core/events';
 import {
   assertExactKeys,
   requireCount,
@@ -112,16 +112,11 @@ export type SessionToolEvent =
       type: 'tool_start';
       toolName: string;
       operationId?: string;
-      activityKind?:
-        | 'read'
-        | 'search'
-        | 'websearch'
-        | 'webfetch'
-        | 'edit'
-        | 'command'
-        | 'explore'
-        | 'browser'
-        | 'tool';
+      // The list itself, not a copy of it. A second hand-written union drifts
+      // the moment a kind is added — adding `computer` broke this build, which
+      // is the cheap version of the failure; the expensive one is a kind that
+      // silently fails to cross the protocol.
+      activityKind?: ToolActivityKind;
       displayName?: string;
       stepId?: string;
     })
