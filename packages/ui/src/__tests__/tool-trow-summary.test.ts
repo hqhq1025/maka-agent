@@ -196,6 +196,23 @@ describe('processing block summary (#1307)', () => {
     assert.equal(summarizeProcessing(children, { live: true }), '正在运行测试，1 个失败');
   });
 
+  it('names what the agent is doing, not what the tool is called', () => {
+    // The live line is a verb phrase and the fallback is the tool's display
+    // name, which is a noun. "Maka Computer" made it read "正在Maka Computer".
+    const children = [
+      tools([
+        {
+          toolUseId: 'c1',
+          toolName: 'maka_computer',
+          activityKind: 'computer',
+          status: 'running',
+          args: {},
+        },
+      ]),
+    ];
+    assert.equal(summarizeProcessing(children, { live: true }), '正在操作电脑');
+  });
+
   it('live summary without failures stays a bare current-activity line', () => {
     const children = [
       tools([{ toolUseId: 'b1', toolName: 'Bash', activityKind: 'command', status: 'running', args: {}, intent: '运行测试' }]),

@@ -246,8 +246,15 @@ function currentProcessingActivity(
           tool.status === 'running' || tool.status === 'pending' || tool.status === 'waiting_permission',
       );
     if (activeTool) {
-      return formatUserVisibleToolText(activeTool.intent ?? '', locale)
-        || resolveToolDisplayName(activeTool, locale);
+      // The tool's own words first, then the verb for what it is doing, then
+      // its name. The name is a noun and this line is a verb phrase, which is
+      // how "Maka Computer" became "正在Maka Computer".
+      const kind = trowActivityKind(activeTool.toolName, activeTool.activityKind);
+      return (
+        formatUserVisibleToolText(activeTool.intent ?? '', locale)
+        || getToolActivityCopy(locale).summary.activity[kind]
+        || resolveToolDisplayName(activeTool, locale)
+      );
     }
   }
   return undefined;

@@ -45,6 +45,15 @@ export interface ToolActivityCopy {
     sandboxBlocked: (count: number) => string;
     join: (clauses: readonly string[]) => string;
     live: (summary: string) => string;
+    /**
+     * What the agent is doing, for the line that says it is doing it.
+     *
+     * The live line is a verb phrase — `正在…` / `Working: …` — and it falls back
+     * to the tool's display name, which is a noun. Most read acceptably;
+     * "Maka Computer" does not, and "正在Maka Computer" was reported as reading
+     * wrong. A kind with an entry here supplies the verb instead.
+     */
+    activity: Partial<Record<ToolActivityKind, string>>;
     /** Live current-activity label when a processing group's tools are done
      *  and only reasoning is still streaming. */
     thinkingActivity: string;
@@ -169,7 +178,7 @@ const TOOL_ACTIVITY_COPY = {
     sandboxBlocked: { title: '操作可能被沙箱阻止', description: '沙箱可能阻止了该调用中的至少一项操作。失败前可能已经产生部分结果，请检查输出和工作区状态后再决定是否重试。', copyAriaLabel: (label) => `${label}沙箱诊断信息` },
     summary: {
       kind: { read: (n) => `读取 ${n} 个文件`, search: (n) => `搜索 ${n} 次`, websearch: (n) => `联网搜索 ${n} 次`, webfetch: (n) => `抓取 ${n} 个网页`, edit: (n) => `编辑 ${n} 个文件`, command: (n) => `运行 ${n} 条命令`, explore: (n) => `探索 ${n} 次`, browser: (n) => `浏览器操作 ${n} 次`, computer: (n) => `操作电脑 ${n} 次`, tool: (n) => `调用 ${n} 个工具` },
-      failed: (n) => `${n} 个失败`, sandboxBlocked: (n) => `${n} 个可能被沙箱阻止`, join: (clauses) => clauses.join('，'), live: (summary) => `正在${summary}`,
+      failed: (n) => `${n} 个失败`, sandboxBlocked: (n) => `${n} 个可能被沙箱阻止`, join: (clauses) => clauses.join('，'), live: (summary) => `正在${summary}`, activity: { computer: '操作电脑' },
       thinkingActivity: '深度思考',
     },
     automation: { created: (name) => `自动化任务已创建：${name}`, nextFire: (value) => `下次触发：${value}`, deleted: '自动化任务已删除', notFound: '未找到该任务（可能已完成或已删除）', list: (count) => `自动化任务列表 (${count})`, empty: '当前会话暂无自动化任务' },
@@ -201,7 +210,7 @@ const TOOL_ACTIVITY_COPY = {
     sandboxBlocked: { title: 'Operation may have been blocked by sandbox', description: 'The sandbox may have blocked at least one action in this call. Some effects may have occurred before it failed; check the output and workspace state before retrying.', copyAriaLabel: (label) => `${label} sandbox diagnostics` },
     summary: {
       kind: { read: (n) => `Read ${n} ${n === 1 ? 'file' : 'files'}`, search: (n) => `Searched ${n} ${n === 1 ? 'time' : 'times'}`, websearch: (n) => `Ran ${n} web ${n === 1 ? 'search' : 'searches'}`, webfetch: (n) => `Fetched ${n} web ${n === 1 ? 'page' : 'pages'}`, edit: (n) => `Edited ${n} ${n === 1 ? 'file' : 'files'}`, command: (n) => `Ran ${n} ${n === 1 ? 'command' : 'commands'}`, explore: (n) => `Explored ${n} ${n === 1 ? 'time' : 'times'}`, browser: (n) => `Performed ${n} browser ${n === 1 ? 'action' : 'actions'}`, computer: (n) => `Used the computer ${n} ${n === 1 ? 'time' : 'times'}`, tool: (n) => `Called ${n} ${n === 1 ? 'tool' : 'tools'}` },
-      failed: (n) => `${n} failed`, sandboxBlocked: (n) => `${n} possibly blocked by sandbox`, join: (clauses) => clauses.join(', '), live: (summary) => `Working: ${summary}`,
+      failed: (n) => `${n} failed`, sandboxBlocked: (n) => `${n} possibly blocked by sandbox`, join: (clauses) => clauses.join(', '), live: (summary) => `Working: ${summary}`, activity: { computer: 'using the computer' },
       thinkingActivity: 'Thinking',
     },
     automation: { created: (name) => `Automation created: ${name}`, nextFire: (value) => `Next run: ${value}`, deleted: 'Automation deleted', notFound: 'Automation not found (it may have completed or been deleted)', list: (count) => `Automations (${count})`, empty: 'No automations in this conversation' },
