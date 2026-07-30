@@ -44,6 +44,7 @@ import { redactSecrets } from '@maka/core/redaction';
 import { TOOL_BOUNDARY_PROTOCOL_V1, type RuntimeEvent } from '@maka/core';
 
 import { recordToolArtifactsSafely, type ToolArtifactRecorder } from './tool-artifacts.js';
+import { describeComputerUseArgsViolation } from './computer-use-codec.js';
 import { createToolOutputDeltaEmitter } from './tool-output-delta.js';
 import { truncateToolOutput } from './tool-output.js';
 import { stableHash } from './request-shape.js';
@@ -856,9 +857,19 @@ export class ToolRuntime {
         ? computerUseSemanticSignature(permissionArgs)
         : undefined;
     if (permissionArgsError !== undefined) {
+      // Computer Use keeps its own formatter: the generic one relays whatever
+      // the error carries, and these arguments can hold typed text. The
+      // replacement names the offending fields and nothing else, so a model
+      // that got the shape wrong can fix it instead of re-sending it.
+      const violation =
+        tool.categoryHint === 'computer_use'
+          ? describeComputerUseArgsViolation(permissionArgsError)
+          : undefined;
       const msg =
         tool.categoryHint === 'computer_use'
-          ? 'Computer Use arguments failed validation'
+          ? violation
+            ? `Computer Use arguments failed validation: ${violation}`
+            : 'Computer Use arguments failed validation'
           : formatSyntheticToolErrorText(permissionArgsError);
       await this.writeSyntheticToolResult(toolUseId, turnId, msg, queue);
       this.input.recordToolInvocation?.({
