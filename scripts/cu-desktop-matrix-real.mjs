@@ -1,0 +1,490 @@
+#!/usr/bin/env node
+// A matrix of real Computer Use work: the actual Maka app, a real model, and
+// several real applications, one scenario after another in one launch.
+//
+// `cu-desktop-chain-real.mjs` proved the chain exists by asking for two steps
+// against one app. This asks for the kind of thing a person would actually
+// want — a sum computed by pressing keys, a sentence typed into a document, a
+// search field filled and its results read, a list scrolled — across apps that
+// differ in the ways that break automation: a grid of buttons with no titles,
+// a text area that cannot be pressed, a search field that filters as it types,
+// a scroll area taller than its window.
+//
+// Two rules the earlier harnesses learned the hard way:
+//
+//   1. Never read the result back through the thing being tested. Every check
+//      here consults `cu-ax-oracle.swift`, a separate process walking the
+//      system accessibility tree. When the model says it typed and the oracle
+//      finds an empty document, the model is wrong — and a driver reporting
+//      success on a control it never touched cannot hide behind its own
+//      observation.
+//   2. Judge the outcome, not the transcript. A turn that ends with "完成" and
+//      changed nothing is the failure this is looking for.
+//
+// Only harmless targets: no documents are saved, no messages sent, nothing
+// touched that the user would miss. TextEdit works in an unsaved scratch
+// window; Calculator has no state; Font Book and Dictionary are read-only.
+//
+// Run: node scripts/cu-desktop-matrix-real.mjs [scenario-name ...]
+import { _electron as electron } from 'playwright';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
+import { writeFile, mkdir } from 'node:fs/promises';
+import { join, dirname } from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+const exec = promisify(execFile);
+const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
+const DESKTOP = join(ROOT, 'apps', 'desktop');
+const ORACLE = join(ROOT, 'scripts', 'cu-ax-oracle.swift');
+const OUT = process.env.CU_MATRIX_OUT ?? '/tmp/cu-desktop-matrix';
+const TURN_TIMEOUT_MS = Number(process.env.CU_MATRIX_TURN_TIMEOUT ?? 300_000);
+
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+const log = (line) => console.log(line);
+
+/**
+ * The accessibility tree as a process that has never heard of cua-driver sees
+ * it. Compiled fresh each call — `swift <file>` costs about a second, which is
+ * nothing next to a model turn, and it keeps the oracle a script rather than a
+ * build artifact that could drift from its source.
+ */
+async function oracle(bundleId, args = []) {
+  try {
+    const { stdout } = await exec('swift', [ORACLE, bundleId, ...args], {
+      timeout: 120_000,
+      maxBuffer: 32 * 1024 * 1024,
+    });
+    return JSON.parse(stdout);
+  } catch (error) {
+    return { error: 'oracle_failed', detail: String(error?.message ?? error).slice(0, 400) };
+  }
+}
+
+/** Every element the oracle found, flattened to one searchable string. */
+const oracleText = (tree) =>
+  (tree.elements ?? [])
+    .map((e) => [e.title, e.description, e.value].filter(Boolean).join(' '))
+    .join('\n');
+
+const displayValue = (tree, role) =>
+  (tree.elements ?? []).filter((e) => e.role === role).map((e) => e.value ?? e.title ?? '');
+
+async function quit(bundleId) {
+  await exec('osascript', ['-e', `tell application id "${bundleId}" to quit saving no`]).catch(
+    () => {},
+  );
+  await sleep(800);
+}
+
+async function launchBackground(appName) {
+  await exec('open', ['-g', '-a', appName]).catch(() => {});
+  await sleep(2000);
+}
+
+// ---------------------------------------------------------------------------
+// The scenarios.
+//
+// `prompt` is what a person would type. `verify` gets the oracle's reading of
+// the target app after the turn and returns the checks — each one a claim
+// about the world, not about the conversation.
+// ---------------------------------------------------------------------------
+const SCENARIOS = [
+  {
+    name: 'calculator-arithmetic',
+    app: 'Calculator',
+    bundleId: 'com.apple.calculator',
+    // Restart it so the display starts from a known place: a scenario that
+    // passes because the previous run left the answer on screen is worthless.
+    async setup() {
+      await quit('com.apple.calculator');
+      await launchBackground('Calculator');
+    },
+    prompt:
+      '用 computer use 操作计算器这个应用：先按 7，再按乘号，再按 8，最后按等号，' +
+      '然后告诉我屏幕上显示的结果。计算器现在在后台，不要把它切到前台。',
+    async verify(tree) {
+      const shown = displayValue(tree, 'AXStaticText').join(' ');
+      return [
+        {
+          label: 'the calculator display reads 56',
+          pass: /\b56\b/.test(shown.replace(/[,\s]/g, ' ')),
+          detail: `display: ${shown.trim() || '(empty)'}`,
+        },
+      ];
+    },
+  },
+  {
+    name: 'textedit-typing',
+    app: 'TextEdit',
+    bundleId: 'com.apple.TextEdit',
+    // A scratch window with nothing in it, and nothing on disk to lose.
+    async setup() {
+      await quit('com.apple.TextEdit');
+      await exec('osascript', [
+        '-e',
+        'tell application id "com.apple.TextEdit" to make new document',
+        '-e',
+        'tell application "System Events" to set visible of process "TextEdit" to false',
+      ]).catch(() => {});
+      await sleep(2000);
+    },
+    prompt:
+      '用 computer use 在文本编辑（TextEdit）的空白文稿里写入这一行文字：' +
+      'the quick brown fox。写完确认一下文稿里确实有这行字。不要保存，也不要把它切到前台。',
+    async verify(tree) {
+      const text = oracleText(tree);
+      return [
+        {
+          label: 'the document contains the requested sentence',
+          pass: /the quick brown fox/i.test(text),
+          detail: text.replace(/\s+/g, ' ').slice(0, 200) || '(no text found)',
+        },
+      ];
+    },
+  },
+  {
+    name: 'fontbook-search',
+    app: 'Font Book',
+    bundleId: 'com.apple.FontBook',
+    async setup() {
+      await quit('com.apple.FontBook');
+      await launchBackground('Font Book');
+    },
+    prompt:
+      '用 computer use 在字体册（Font Book）的搜索框里搜索 Courier，' +
+      '然后告诉我结果列表里出现了哪些字体。它在后台，不要切到前台。',
+    async verify(tree) {
+      const text = oracleText(tree);
+      return [
+        {
+          label: 'the search field holds the query',
+          pass: /courier/i.test(text),
+          detail: (text.match(/.{0,40}[Cc]ourier.{0,40}/) ?? ['(not found)'])[0],
+        },
+      ];
+    },
+  },
+  {
+    name: 'dictionary-lookup',
+    app: 'Dictionary',
+    bundleId: 'com.apple.Dictionary',
+    async setup() {
+      await quit('com.apple.Dictionary');
+      await launchBackground('Dictionary');
+    },
+    prompt:
+      '用 computer use 在词典（Dictionary）里查 serendipity 这个词，' +
+      '然后把它的释义念给我听。它在后台，不要切到前台。',
+    async verify(tree) {
+      const text = oracleText(tree);
+      return [
+        {
+          label: 'the dictionary is showing the looked-up word',
+          pass: /serendipity/i.test(text),
+          detail: (text.match(/.{0,60}[Ss]erendipity.{0,60}/) ?? ['(not found)'])[0],
+        },
+      ];
+    },
+  },
+  {
+    name: 'dictionary-scroll',
+    app: 'Dictionary',
+    bundleId: 'com.apple.Dictionary',
+    // Scrolling is the action that most needs the semantic path: the
+    // coordinate `scroll` aims at a pixel and needs the window visible to
+    // convert, which is exactly the case Computer Use exists for. The oracle
+    // here is the scroll bar's own value — 0 at the top, 1 at the bottom — read
+    // from the accessibility tree rather than from the driver's report.
+    async setup() {
+      await quit('com.apple.Dictionary');
+      await launchBackground('Dictionary');
+      await sleep(1500);
+    },
+    prompt:
+      '用 computer use 在词典（Dictionary）里查 computer 这个词，' +
+      '然后把释义内容向下滚动两页，让我看到后面的内容。它在后台，不要切到前台。',
+    async verify(after, before) {
+      const scrollOf = (tree) =>
+        (tree.elements ?? [])
+          .filter((e) => e.role === 'AXScrollBar')
+          .map((e) => Number(e.value))
+          .filter((n) => Number.isFinite(n));
+      const start = scrollOf(before);
+      const end = scrollOf(after);
+      return [
+        {
+          label: 'the content scrolled down',
+          pass: end.some((v) => v > 0.001),
+          detail: `scroll bar before [${start.join(', ')}] after [${end.join(', ')}]`,
+        },
+      ];
+    },
+  },
+  {
+    name: 'calculator-menu',
+    app: 'Calculator',
+    bundleId: 'com.apple.calculator',
+    // The menu bar is the one part of an app that is not in any window, and
+    // switching Calculator to its scientific layout is the cheapest reversible
+    // proof that a menu item can be reached at all.
+    async setup() {
+      await quit('com.apple.calculator');
+      await launchBackground('Calculator');
+    },
+    prompt:
+      '用 computer use 把计算器切换到「科学型」模式（在「显示」菜单里）。' +
+      '切完之后观察一下，确认窗口里出现了科学计算的按钮。它在后台，不要切到前台。',
+    async verify(tree) {
+      const buttons = displayValue(tree, 'AXButton');
+      const width = tree.windows?.[0]?.frame?.w ?? 0;
+      return [
+        {
+          label: 'the calculator switched to the scientific layout',
+          pass: buttons.length > 25 || width > 400,
+          detail: `${buttons.length} buttons, window width ${width}`,
+        },
+      ];
+    },
+    async teardown() {
+      // Put it back the way it was found.
+      await exec('osascript', [
+        '-e',
+        'tell application "System Events" to tell process "计算器" to click menu item 1 of menu 1 of menu bar item 4 of menu bar 1',
+      ]).catch(() => {});
+    },
+  },
+  {
+    name: 'multi-app-survey',
+    app: 'Calculator',
+    bundleId: 'com.apple.calculator',
+    async setup() {
+      await launchBackground('Calculator');
+      await launchBackground('TextEdit');
+    },
+    prompt:
+      '用 computer use 看一下我现在开着哪些应用，然后分别观察计算器和文本编辑这两个应用的窗口，' +
+      '告诉我它们各自的窗口标题和大概有多少个可交互的控件。都在后台，不要切换。',
+    // Nothing in the world changes, so the checks live entirely in the ledger
+    // (below): did it list apps, and did it observe two different ones.
+    async verify() {
+      return [];
+    },
+    ledgerChecks(calls) {
+      const observed = new Set(
+        calls
+          .filter((c) => c.action === 'observe')
+          .map((c) => String(c.args?.app ?? '').toLowerCase())
+          .filter(Boolean),
+      );
+      return [
+        {
+          label: 'it enumerated the running apps instead of guessing',
+          pass: calls.some((c) => c.action === 'list_apps'),
+          detail: calls.map((c) => c.action).join(' → ') || '(no computer calls)',
+        },
+        {
+          label: 'it observed two different applications',
+          pass: observed.size >= 2,
+          detail: [...observed].join(', ') || '(none)',
+        },
+      ];
+    },
+  },
+];
+
+const selected = process.argv.slice(2).length
+  ? SCENARIOS.filter((s) => process.argv.slice(2).includes(s.name))
+  : SCENARIOS;
+if (selected.length === 0) {
+  console.log(`no scenario matched. known: ${SCENARIOS.map((s) => s.name).join(', ')}`);
+  process.exit(64);
+}
+
+await mkdir(OUT, { recursive: true });
+
+// The lock check first, always: it is one syscall, and every tree on the
+// machine is wrong while it is true.
+{
+  const probe = await oracle('com.apple.finder');
+  if (probe.error === 'screen_locked') {
+    console.log(
+      'the screen is locked — every observation would return a menu-only tree. Unlock and re-run.',
+    );
+    process.exit(2);
+  }
+}
+
+const app = await electron.launch({ args: ['.'], cwd: DESKTOP });
+const mainLogs = [];
+app.on('console', (m) => mainLogs.push(m.text()));
+const report = [];
+
+try {
+  const page = await app.firstWindow();
+  page.on('console', (m) => {
+    if (m.type() === 'error') mainLogs.push(`[renderer] ${m.text()}`);
+  });
+  await page.waitForSelector('.maka-composer-textarea', { timeout: 60_000 });
+  await sleep(1500);
+  log('app up\n');
+
+  for (const scenario of selected) {
+    log(`\n${'='.repeat(70)}\n${scenario.name}  (${scenario.app})\n${'='.repeat(70)}`);
+    await scenario.setup?.();
+
+    const before = await oracle(scenario.bundleId);
+    if (before.error) {
+      log(`  target unavailable: ${before.error} — skipping`);
+      report.push({ scenario: scenario.name, skipped: before.error });
+      continue;
+    }
+    log(`  before: ${before.window_count} window(s), ${before.element_count} elements`);
+
+    // A fresh conversation per scenario, so a ledger belongs to one prompt.
+    const knownSessions = new Set(
+      await page.evaluate(async () => (await window.maka.sessions.list()).map((s) => s.id)),
+    );
+    const newTask = page.getByRole('button', { name: '新任务' });
+    if (await newTask.count()) {
+      await newTask.first().click();
+      await sleep(1200);
+    }
+
+    await page.click('.maka-composer-textarea');
+    await page.fill('.maka-composer-textarea', scenario.prompt);
+    await page.keyboard.press('Enter');
+    const startedAt = Date.now();
+
+    const stopButton = page.getByRole('button', { name: '停止' });
+    let started = false;
+    const startBy = Date.now() + 60_000;
+    while (Date.now() < startBy) {
+      if ((await stopButton.count().catch(() => 0)) > 0) {
+        started = true;
+        break;
+      }
+      await sleep(400);
+    }
+    const endBy = Date.now() + TURN_TIMEOUT_MS;
+    let timedOut = false;
+    while (started) {
+      if ((await stopButton.count().catch(() => 0)) === 0) break;
+      if (Date.now() > endBy) {
+        timedOut = true;
+        await page
+          .evaluate(async () => {
+            const sessions = await window.maka.sessions.list();
+            if (sessions[0]) await window.maka.sessions.stop(sessions[0].id);
+          })
+          .catch(() => {});
+        break;
+      }
+      await sleep(500);
+    }
+    const elapsedMs = Date.now() - startedAt;
+    await sleep(2500); // let the last action's effect land in the target app
+
+    // The ledger: what the model actually asked the computer to do.
+    const sessionId = await page.evaluate(
+      async (known) => {
+        const sessions = await window.maka.sessions.list();
+        const fresh = sessions.find((s) => !known.includes(s.id));
+        return (fresh ?? sessions[0])?.id ?? null;
+      },
+      [...knownSessions],
+    );
+    const messages = sessionId
+      ? await page.evaluate((id) => window.maka.sessions.readMessages(id), sessionId)
+      : [];
+    const results = new Map(
+      messages.filter((m) => m.type === 'tool_result').map((m) => [m.toolUseId, m]),
+    );
+    const calls = messages
+      .filter((m) => m.type === 'tool_call' && m.toolName === 'maka_computer')
+      .map((m) => {
+        const result = results.get(m.id);
+        const text =
+          typeof result?.content === 'string'
+            ? result.content
+            : JSON.stringify(result?.content ?? '');
+        return {
+          action: m.args?.action ?? '?',
+          args: m.args,
+          isError: result?.isError ?? false,
+          durationMs: result?.durationMs,
+          // Failures are reported inside the text, not only by isError.
+          failed: result?.isError === true || /\bfailed:|unsupported_action|blocked/.test(text),
+          resultHead: text.replace(/\s+/g, ' ').slice(0, 220),
+        };
+      });
+    const assistantText = messages
+      .filter((m) => m.type === 'assistant')
+      .map((m) => m.text ?? '')
+      .join('\n');
+
+    const after = await oracle(scenario.bundleId);
+    const checks = [
+      {
+        label: 'the turn finished on its own',
+        pass: started && !timedOut,
+        detail: `${Math.round(elapsedMs / 1000)}s${timedOut ? ' — timed out and was stopped' : ''}`,
+      },
+      {
+        label: 'it used Computer Use at all',
+        pass: calls.length > 0,
+        detail: `${calls.length} calls`,
+      },
+      ...(after.error
+        ? [{ label: 'the target app survived the turn', pass: false, detail: after.error }]
+        : await scenario.verify(after, before)),
+      ...(scenario.ledgerChecks?.(calls) ?? []),
+    ];
+
+    for (const c of checks)
+      log(`  [${c.pass ? 'PASS' : 'FAIL'}] ${c.label}${c.detail ? ` — ${c.detail}` : ''}`);
+    const failedCalls = calls.filter((c) => c.failed);
+    log(`  calls: ${calls.map((c) => c.action).join(' → ') || '(none)'}`);
+    if (failedCalls.length) {
+      log(`  ${failedCalls.length} call(s) came back a failure:`);
+      for (const c of failedCalls.slice(0, 6)) log(`      ${c.action}: ${c.resultHead}`);
+    }
+
+    report.push({
+      scenario: scenario.name,
+      app: scenario.app,
+      elapsedMs,
+      timedOut,
+      checks,
+      calls,
+      assistantTail: assistantText.slice(-1200),
+      before: { windows: before.window_count, elements: before.element_count },
+      after: after.error
+        ? { error: after.error }
+        : { windows: after.window_count, elements: after.element_count },
+    });
+
+    await scenario.teardown?.();
+  }
+} catch (error) {
+  log(`\n[ERROR] ${error?.stack ?? error?.message ?? error}`);
+  report.push({ harnessError: String(error?.message ?? error) });
+} finally {
+  await app.close().catch(() => {});
+}
+
+await writeFile(join(OUT, 'report.json'), JSON.stringify(report, null, 2), 'utf8');
+await writeFile(join(OUT, 'main-logs.txt'), mainLogs.join('\n'), 'utf8');
+
+const all = report.flatMap((r) => r.checks ?? []);
+const failed = all.filter((c) => !c.pass);
+log(`\n${'='.repeat(70)}`);
+for (const r of report) {
+  if (!r.checks) continue;
+  const bad = r.checks.filter((c) => !c.pass).length;
+  log(
+    `  ${bad === 0 ? 'OK  ' : 'FAIL'} ${r.scenario}  ${r.checks.length - bad}/${r.checks.length}`,
+  );
+}
+log(`${all.length - failed.length}/${all.length} checks passed — evidence in ${OUT}`);
+process.exit(failed.length === 0 ? 0 : 1);
