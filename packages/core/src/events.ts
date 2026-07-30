@@ -43,6 +43,11 @@ export const TOOL_ACTIVITY_KINDS = [
   'command',
   'explore',
   'browser',
+  // Driving the user's own machine is not "a tool call". It has its own risk,
+  // its own approval classes and its own place in a transcript, and reading it
+  // under the same gear icon as everything else hides the one activity a person
+  // most wants to pick out at a glance.
+  'computer',
   'tool',
 ] as const;
 export type ToolActivityKind = (typeof TOOL_ACTIVITY_KINDS)[number];

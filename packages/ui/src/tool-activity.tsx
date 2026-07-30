@@ -8,6 +8,7 @@ import {
   Copy,
   FileText,
   Globe,
+  Monitor,
   Repeat,
   Search,
   Settings,
@@ -381,6 +382,7 @@ const TROW_KIND_ICON: Record<TrowActivityKind, ComponentType<LucideProps>> = {
   command: Terminal,
   explore: Search,
   browser: Globe,
+  computer: Monitor,
   tool: Settings,
 };
 

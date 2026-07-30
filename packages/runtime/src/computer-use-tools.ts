@@ -917,6 +917,11 @@ export function buildComputerUseTools(deps: {
   const tool: MakaTool<ComputerParams, ComputerToolResult> = {
     name: 'maka_computer',
     displayName: 'Maka Computer',
+    // Its own row identity. Driving the user's machine is not the same kind of
+    // event as calling a tool, and it read as one: the same gear icon as
+    // everything else, in a transcript where it is the line a person most wants
+    // to find.
+    activityKind: 'computer',
     description:
       'Maka semantic computer harness. Use action=observe to read the current computer state before acting, then use the same function ' +
       'for semantic element actions, exact Electron page actions, wait, zoom, or another observation. Every successful mutating action returns a fresh screenshot when available ' +

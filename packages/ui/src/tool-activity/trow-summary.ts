@@ -62,6 +62,7 @@ export function trowActivityKind(
   if (activityKind && KNOWN_ACTIVITY_KINDS.has(activityKind)) return activityKind;
   const name = toolName.toLowerCase();
   if (name.startsWith('browser_')) return 'browser';
+  if (name === 'maka_computer') return 'computer';
   switch (name) {
     case 'read':
     case 'list':
