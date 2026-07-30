@@ -1251,6 +1251,8 @@ const streamEvents = createSessionStreamer({
   openGateway,
   computerUseOverlay,
   computerUseTools,
+  ...(computerUsePip ? { computerUsePip } : {}),
+  ...(computerUseStatusItem ? { computerUseStatusItem } : {}),
   safeSendToRenderer,
   emitSessionsChanged,
   interruptActivePlanExecution: (sessionId, reason) =>

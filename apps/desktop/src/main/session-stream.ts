@@ -446,6 +446,18 @@ export interface SessionStreamerDeps {
   openGateway: OpenGatewayService;
   computerUseOverlay: AssembledTools['computerUseOverlay'];
   computerUseTools: AssembledTools['computerUseTools'];
+  /**
+   * The mirror and the menu-bar item, retired on the same signal as the cursor.
+   *
+   * They were only cleared when a session was stopped, archived or deleted —
+   * never when a turn simply ended. So the mirror outlived the run it belonged
+   * to and kept showing that run's last frame: on a real matrix run it sat
+   * there displaying Font Book while the next turn was pressing buttons in the
+   * calculator. A mirror showing the wrong application is worse than no mirror,
+   * because it is read as "this is what the agent is doing".
+   */
+  computerUsePip?: { clearForSession(sessionId: string): void };
+  computerUseStatusItem?: { clearForSession(sessionId: string): void };
   safeSendToRenderer: (channel: string, ...args: unknown[]) => void;
   emitSessionsChanged: (reason: SessionChangedReason, sessionId?: string) => void;
   interruptActivePlanExecution?: (sessionId: string, reason: string) => Promise<unknown>;
@@ -476,6 +488,8 @@ export function createSessionStreamer(deps: SessionStreamerDeps): StreamEvents {
     openGateway,
     computerUseOverlay,
     computerUseTools,
+    computerUsePip,
+    computerUseStatusItem,
     safeSendToRenderer,
     emitSessionsChanged,
     interruptActivePlanExecution,
@@ -510,6 +524,8 @@ export function createSessionStreamer(deps: SessionStreamerDeps): StreamEvents {
         if (isTurnStatusChangingSessionEvent(event)) {
           emitSessionsChanged('turn-status-change', sessionId);
           computerUseOverlay.clearForSession(sessionId);
+          computerUsePip?.clearForSession(sessionId);
+          computerUseStatusItem?.clearForSession(sessionId);
           computerUseTools.clearSession(sessionId);
         }
         options.observeEvent?.(event);
