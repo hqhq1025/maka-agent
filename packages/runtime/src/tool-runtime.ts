@@ -36,7 +36,7 @@ import type {
   UserQuestionResponse,
   UserQuestionResult,
 } from '@maka/core/user-question';
-import { computerUseApprovalSummary } from '@maka/core';
+import { computerUseApprovalSummary, computerUseModelCallArgs } from '@maka/core';
 import type { SessionHeader } from '@maka/core/session';
 import type { ToolInvocationRecord } from '@maka/core/usage-stats/types';
 import type { EffectiveOrchestration } from '@maka/core/orchestration';
@@ -782,6 +782,15 @@ export class ToolRuntime {
       tool.categoryHint === 'computer_use'
         ? snapshotToolArgs(computerUseApprovalSummary(permissionArgs))
         : permissionArgs;
+    // What the model will read back as its own call. The approval summary is
+    // the host's projection for deciding a permission, and using it here taught
+    // the model to call the tool with `approvalClass`, `rememberForTurnAllowed`
+    // and `windowId` — two fields it does not take and one key in a dialect it
+    // rejects. Same privacy boundary, names the tool accepts.
+    const modelFacingArgs =
+      tool.categoryHint === 'computer_use'
+        ? snapshotToolArgs(computerUseModelCallArgs(permissionArgs))
+        : persistedArgs;
     const now = this.input.now();
     const toolIntent = describeToolIntent(tool, persistedArgs);
     const trace = this.input.getRunTrace?.() ?? null;
@@ -992,6 +1001,7 @@ export class ToolRuntime {
         tool,
         startEvent: startEv,
         persistedArgs,
+        modelFacingArgs,
         abortSignal: ctx.abortSignal,
         ...(invocationId ? { invocationId } : {}),
         ...(runId ? { runId } : {}),
@@ -1322,6 +1332,8 @@ export class ToolRuntime {
     tool: MakaTool;
     startEvent: ToolStartEvent;
     persistedArgs: unknown;
+    /** The projection the model replays as its own call. */
+    modelFacingArgs: unknown;
     abortSignal: AbortSignal;
     invocationId?: string;
     runId?: string;
@@ -1365,7 +1377,7 @@ export class ToolRuntime {
         kind: 'function_call',
         id: input.startEvent.toolUseId,
         name: input.tool.name,
-        args: structuredClone(input.persistedArgs),
+        args: structuredClone(input.modelFacingArgs),
         ...(input.startEvent.providerOptions !== undefined
           ? { providerOptions: structuredClone(input.startEvent.providerOptions) }
           : {}),

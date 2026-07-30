@@ -9,7 +9,7 @@ import type {
   ToolResultMessage,
   TurnStateMessage,
 } from '@maka/core';
-import { createRuntimeEventId } from '@maka/core';
+import { computerUseModelCallArgs, createRuntimeEventId } from '@maka/core';
 
 export const RUNTIME_EVENT_BACKFILL_STATE_KEY = 'makaRuntimeRecovery';
 
@@ -147,7 +147,14 @@ export function backfillRuntimeEventsFromStoredMessages(
             kind: 'function_call',
             id: message.id,
             name: message.toolName,
-            args: message.args,
+            // Recovered from storage, where a Computer Use call is kept as the
+            // host's approval projection. Replayed to the model as-is it teaches
+            // a dialect the tool rejects, so it is translated back into the
+            // names the tool accepts — the same projection the live path emits.
+            args:
+              message.toolName === 'maka_computer'
+                ? computerUseModelCallArgs(message.args)
+                : message.args,
             ...(message.providerOptions !== undefined
               ? { providerOptions: structuredClone(message.providerOptions) }
               : {}),

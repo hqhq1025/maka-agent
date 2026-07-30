@@ -471,6 +471,7 @@ export type {
   ComputerUseActionOutcome,
   ComputerUseApprovalClass,
   ComputerUseApprovalSummary,
+  ComputerUseModelCallArgs,
   ComputerUseDispatchEvidence,
   ComputerUseDispatchTier,
   ComputerUseDisplayIdentity,
@@ -501,6 +502,7 @@ export {
   CU_SCROLL_DIRECTIONS,
   computerUseApprovalScopeKey,
   computerUseApprovalSummary,
+  computerUseModelCallArgs,
   isComputerUseErrorCode,
 } from './computer-use.js';
 

@@ -251,6 +251,60 @@ export interface ComputerUseApprovalSummary {
   observationId?: string;
 }
 
+/**
+ * The call as the model should read it back: its own arguments, in the names
+ * the tool accepts.
+ *
+ * The approval summary above is the host's projection for deciding and
+ * displaying a permission. It was also being written into the model-facing
+ * record of the call, and that had a cost nobody was watching for: the model's
+ * transcript said it had called `maka_computer` with `approvalClass`,
+ * `rememberForTurnAllowed` and `windowId` — two host-only fields and a key in a
+ * dialect the tool rejects — so it went on calling it that way. A real desktop
+ * run failed six of eleven calls on shapes copied from its own history, and the
+ * telemetry file on this machine holds 29 such rejections.
+ *
+ * Same privacy boundary as the summary: typed text, written values and
+ * coordinates are screen-derived and stay out. Element ids do not — an element
+ * id is an index into one observation, and withholding it is what left the
+ * model unable to see which control it had just acted on.
+ *
+ * Accepts either dialect on input, so it can project raw arguments or an
+ * approval summary recovered from storage.
+ */
+export interface ComputerUseModelCallArgs {
+  action: string;
+  app?: string;
+  window_id?: number;
+  observation_id?: string;
+  element_id?: string;
+}
+
+export function computerUseModelCallArgs(args: unknown): ComputerUseModelCallArgs {
+  const record = asRecord(args);
+  const rawAction = ownDataProperty(record, 'action');
+  const action =
+    typeof rawAction === 'string' && APPROVAL_ACTIONS.has(rawAction) ? rawAction : 'unknown';
+  const app = ownDataProperty(record, 'app');
+  const windowId = ownDataProperty(record, 'window_id') ?? ownDataProperty(record, 'windowId');
+  const observationId =
+    ownDataProperty(record, 'observation_id') ?? ownDataProperty(record, 'observationId');
+  const elementId = ownDataProperty(record, 'element_id') ?? ownDataProperty(record, 'elementId');
+  return {
+    action,
+    ...(typeof app === 'string' && app.length > 0
+      ? { app: boundedDisplay(redactSecrets(app), 256) }
+      : {}),
+    ...(typeof windowId === 'number' && Number.isInteger(windowId) ? { window_id: windowId } : {}),
+    ...(typeof observationId === 'string' && stableIdentifier(observationId)
+      ? { observation_id: stableIdentifier(observationId) }
+      : {}),
+    ...(typeof elementId === 'string' && elementId.length > 0
+      ? { element_id: boundedDisplay(redactSecrets(elementId), 256) }
+      : {}),
+  };
+}
+
 const POINTER_ACTIONS = new Set([
   'mouse_move',
   'left_click',

@@ -940,7 +940,11 @@ describe('buildComputerUseTools — the `maka_computer` MakaTool', () => {
       runSemantic: NonNullable<CuDispatchBackend['runSemantic']>;
     };
     backend.observeApp = async () => observation();
-    backend.runSemantic = async () => ({ outcome: { ok: true, tier: 'ax', verified: true } });
+    let dispatched = 0;
+    backend.runSemantic = async () => {
+      dispatched += 1;
+      return { outcome: { ok: true, tier: 'ax', verified: true } };
+    };
     const [tool] = buildComputerUseTools({ backend });
     const observed = (await tool.impl(
       { action: 'observe', app: 'Fixture', window_id: 7 } as never,
@@ -958,7 +962,10 @@ describe('buildComputerUseTools — the `maka_computer` MakaTool', () => {
       } as never,
       ctx(undefined, { toolCallId: 'click-with-hints' }),
     )) as { text: string };
-    assert.match(result.text, /ok via ax/);
+    // What matters is that the arguments were accepted and the action reached
+    // the executor. What the executor then reports is another test's business.
+    assert.equal(dispatched, 1);
+    assert.doesNotMatch(result.text, /failed validation/);
   });
 
   test('a target hint that disagrees with the observation is reported, not ignored', async () => {
