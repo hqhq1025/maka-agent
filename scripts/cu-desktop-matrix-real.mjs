@@ -77,9 +77,30 @@ async function quit(bundleId) {
   await sleep(800);
 }
 
-async function launchBackground(appName) {
+/**
+ * Start the app without letting it take the screen.
+ *
+ * `open -g` is the honest version of that, but some apps open no window at all
+ * when launched that way — Font Book came up with zero windows and every
+ * observation after it read `target_missing`, which looks exactly like a bug in
+ * the thing being tested. So: try quietly, and if nothing opened, launch it
+ * properly and put the front window back where it was.
+ */
+async function launchBackground(appName, bundleId) {
   await exec('open', ['-g', '-a', appName]).catch(() => {});
   await sleep(2000);
+  if (!bundleId) return;
+  const quiet = await oracle(bundleId);
+  if ((quiet.window_count ?? 0) > 0) return;
+  await exec('open', ['-a', appName]).catch(() => {});
+  await sleep(2500);
+  // Back to whoever was in front, so the turn still starts with the target
+  // behind something — the case Computer Use exists for.
+  await exec('osascript', [
+    '-e',
+    'tell application "System Events" to set frontmost of (first process whose name contains "Electron" or name contains "Maka") to true',
+  ]).catch(() => {});
+  await sleep(1200);
 }
 
 // ---------------------------------------------------------------------------
@@ -98,7 +119,7 @@ const SCENARIOS = [
     // passes because the previous run left the answer on screen is worthless.
     async setup() {
       await quit('com.apple.calculator');
-      await launchBackground('Calculator');
+      await launchBackground('Calculator', 'com.apple.calculator');
     },
     prompt:
       '用 computer use 操作计算器这个应用：先按 7，再按乘号，再按 8，最后按等号，' +
@@ -120,24 +141,39 @@ const SCENARIOS = [
     bundleId: 'com.apple.TextEdit',
     // A scratch window with nothing in it, and nothing on disk to lose.
     async setup() {
+      // Hiding the process was worse than useless: it left TextEdit with no
+      // visible window, so a later scenario asking to observe it got
+      // `target_missing` and the run blamed the tool.
       await quit('com.apple.TextEdit');
       await exec('osascript', [
         '-e',
         'tell application id "com.apple.TextEdit" to make new document',
-        '-e',
-        'tell application "System Events" to set visible of process "TextEdit" to false',
       ]).catch(() => {});
       await sleep(2000);
+      await exec('osascript', [
+        '-e',
+        'tell application "System Events" to set frontmost of (first process whose name contains "Electron" or name contains "Maka") to true',
+      ]).catch(() => {});
+      await sleep(1000);
     },
     prompt:
       '用 computer use 在文本编辑（TextEdit）的空白文稿里写入这一行文字：' +
       'the quick brown fox。写完确认一下文稿里确实有这行字。不要保存，也不要把它切到前台。',
-    async verify(tree) {
-      const text = oracleText(tree);
+    async verify(after, before) {
+      const text = oracleText(after);
+      // A document that already said it is not evidence that anything was
+      // typed. One earlier run passed this on leftover text from a previous
+      // session.
+      const wasThereBefore = /the quick brown fox/i.test(oracleText(before));
       return [
         {
+          label: 'the document did not already contain the sentence',
+          pass: !wasThereBefore,
+          detail: wasThereBefore ? 'left over from an earlier run' : 'started clean',
+        },
+        {
           label: 'the document contains the requested sentence',
-          pass: /the quick brown fox/i.test(text),
+          pass: /the quick brown fox/i.test(text) && !wasThereBefore,
           detail: text.replace(/\s+/g, ' ').slice(0, 200) || '(no text found)',
         },
       ];
@@ -149,7 +185,7 @@ const SCENARIOS = [
     bundleId: 'com.apple.FontBook',
     async setup() {
       await quit('com.apple.FontBook');
-      await launchBackground('Font Book');
+      await launchBackground('Font Book', 'com.apple.FontBook');
     },
     prompt:
       '用 computer use 在字体册（Font Book）的搜索框里搜索 Courier，' +
@@ -171,7 +207,7 @@ const SCENARIOS = [
     bundleId: 'com.apple.Dictionary',
     async setup() {
       await quit('com.apple.Dictionary');
-      await launchBackground('Dictionary');
+      await launchBackground('Dictionary', 'com.apple.Dictionary');
     },
     prompt:
       '用 computer use 在词典（Dictionary）里查 serendipity 这个词，' +
@@ -198,7 +234,7 @@ const SCENARIOS = [
     // from the accessibility tree rather than from the driver's report.
     async setup() {
       await quit('com.apple.Dictionary');
-      await launchBackground('Dictionary');
+      await launchBackground('Dictionary', 'com.apple.Dictionary');
       await sleep(1500);
     },
     prompt:
@@ -230,7 +266,7 @@ const SCENARIOS = [
     // proof that a menu item can be reached at all.
     async setup() {
       await quit('com.apple.calculator');
-      await launchBackground('Calculator');
+      await launchBackground('Calculator', 'com.apple.calculator');
     },
     prompt:
       '用 computer use 把计算器切换到「科学型」模式（在「显示」菜单里）。' +
@@ -259,8 +295,8 @@ const SCENARIOS = [
     app: 'Calculator',
     bundleId: 'com.apple.calculator',
     async setup() {
-      await launchBackground('Calculator');
-      await launchBackground('TextEdit');
+      await launchBackground('Calculator', 'com.apple.calculator');
+      await launchBackground('TextEdit', 'com.apple.TextEdit');
     },
     prompt:
       '用 computer use 看一下我现在开着哪些应用，然后分别观察计算器和文本编辑这两个应用的窗口，' +
