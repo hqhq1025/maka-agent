@@ -81,7 +81,6 @@ export function createComputerUseHost(input: {
     }
     return {
       selected: selectComputerUseBackend({
-        backendId: 'maka-cu',
         binaryPath: executorPath,
         expectedBinarySha256: executorSha256,
         ...(input.compressFrame ? { compressFrame: input.compressFrame } : {}),
@@ -90,6 +89,7 @@ export function createComputerUseHost(input: {
           : {}),
         ...(input.screenLocked ? { screenLocked: input.screenLocked } : {}),
         ...(input.overlay ? { overlay: input.overlay } : {}),
+        allowCompatibilityInputDispatch: true,
       }),
       binaryPath: executorPath,
       expectedBinarySha256: executorSha256,
@@ -136,7 +136,6 @@ export function createComputerUseHost(input: {
     }
     return {
       selected: selectComputerUseBackend({
-        backendId: 'maka-cu',
         binaryPath,
         expectedBinarySha256,
         ...(input.compressFrame ? { compressFrame: input.compressFrame } : {}),
@@ -144,9 +143,14 @@ export function createComputerUseHost(input: {
           ? { physicalInputRecentlyActive: input.physicalInputRecentlyActive }
           : {}),
         ...(input.screenLocked ? { screenLocked: input.screenLocked } : {}),
-        ...(input.onTrace ? { onMakaCuTrace: input.onTrace } : {}),
+        ...(input.onTrace ? { onTrace: input.onTrace } : {}),
         ...(input.debug ? { debug: input.debug } : {}),
         ...(input.overlay ? { overlay: input.overlay } : {}),
+        // Typing and scrolling are the product, not an extra. maka.cu posts
+        // them pid-bound, so enabling them does not hand anything a global
+        // event tap; the physical-input guard above still refuses each of
+        // those paths while the user is actually at the keyboard.
+        allowCompatibilityInputDispatch: true,
       }),
       binaryPath,
       expectedBinarySha256,

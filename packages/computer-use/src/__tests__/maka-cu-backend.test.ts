@@ -1106,35 +1106,33 @@ describe('maka-cu backend', () => {
 });
 
 describe('maka-cu backend selection', () => {
-  it('is off unless it is asked for by name', () => {
+  it('is the executor, and refuses to be one without a pinned digest', () => {
     if (process.platform !== 'darwin') return;
-    let madeMakaCu = 0;
-    let madeCuaDriver = 0;
+    let made = 0;
     const stub = () => ({
       preflight: async () => ({ accessibility: false, screenRecording: false }),
     });
-    const deps = {
-      binaryPath: '/tmp/does-not-matter',
-      expectedBinarySha256: 'deadbeef',
-      createBackend: () => {
-        madeCuaDriver += 1;
-        return stub() as never;
-      },
-      createMakaCuBackend: () => {
-        madeMakaCu += 1;
-        return stub() as never;
-      },
+    const createBackend = () => {
+      made += 1;
+      return stub() as never;
     };
 
-    const byDefault = selectComputerUseBackend(deps);
-    assert.equal(byDefault.backendId, 'cua-driver');
-    assert.equal(madeMakaCu, 0);
-    assert.equal(madeCuaDriver, 1);
+    const selected = selectComputerUseBackend({
+      binaryPath: '/tmp/does-not-matter',
+      expectedBinarySha256: 'deadbeef',
+      createBackend,
+    });
+    assert.equal(selected.backendId, 'maka-cu');
+    assert.equal(made, 1);
 
-    const explicit = selectComputerUseBackend({ ...deps, backendId: 'maka-cu' as const });
-    assert.equal(explicit.backendId, 'maka-cu');
-    assert.equal(madeMakaCu, 1);
-    assert.equal(madeCuaDriver, 1);
+    // No digest, no executor — and `'none'` rather than a backend that would
+    // spawn whatever happens to be at that path.
+    const unpinned = selectComputerUseBackend({
+      binaryPath: '/tmp/does-not-matter',
+      createBackend,
+    });
+    assert.equal(unpinned.backendId, 'none');
+    assert.equal(made, 1);
   });
 });
 

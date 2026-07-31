@@ -1,33 +1,4 @@
 {
-  "cuaDriver": {
-    "repo": "trycua/cua",
-    "version": "v0.12.6",
-    "expectedVersion": "0.12.6",
-    "expectedProtocolVersion": "2025-06-18",
-    "tag": "cua-driver-rs-v0.12.6",
-    "asset": "cua-driver-rs-0.12.6-darwin-universal-binary.tar.gz",
-    "binaryName": "cua-driver",
-    "upstreamTag": "cua-driver-rs-v0.12.6",
-    "upstreamCommit": "e9852cb68494e9f521c7734206f638773dbc3299",
-    "architectures": [
-      "arm64",
-      "x86_64"
-    ],
-    "signature": "developer-id",
-    "archiveSizeBytes": 32831352,
-    "binarySizeBytes": 49466304,
-    "licenseSizeBytes": 1069,
-    "sourceSizeBytes": 509,
-    "archiveSha256": "0adbe362aae2ca4bc966c62a22e360d020a6abb7d235aa5c67d32f62a473b3a3",
-    "binarySha256": "3ee06efc14bb4ec501a4a8d8963514150684332f0281cc224c51b3dba3ef76ea",
-    "licenseSha256": "c0779290c1d4783169aa3dbfb55feb505e563ef8a004bbf55298ceffcfbda8d9",
-    "sourceSha256": "647d644017980f113b28a5562f4903a6a1085dd386ec6f09a37a9685147d99de",
-    "buildProvenance": "upstream-release",
-    "artifactAttestation": "missing",
-    "thirdPartyNotices": "missing",
-    "notarization": "missing",
-    "distributionReady": false
-  },
   "makaCu": {
     "repo": "hqhq1025/maka-cu",
     "branch": "maka/base",

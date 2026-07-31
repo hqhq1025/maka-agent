@@ -18,7 +18,8 @@ skills-lock.json
 apps/desktop/tests/screenshots/
 deepseek.key
 
-# Generated cua-driver release artifact; provenance metadata stays tracked.
+# The maka-cu executor is built from source by scripts/prepare-maka-cu.mjs; the
+# pinned digest in bundled-tools.json is what stays tracked, not the binary.
 apps/desktop/resources/bin/
 
 # Generated desktop release inputs and outputs.
