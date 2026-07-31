@@ -458,13 +458,25 @@ export class MakaCuService {
         request.stage === 'writing' || request.stage === 'delivered'
           ? new MakaCuLifecycleError(
               'outcome_unknown',
-              'maka-cu exited after request delivery',
+              // Why the child is gone, not just that it is. The host kills it
+              // on its own deadline as well as on a crash, and both arrived
+              // here saying "exited after request delivery" — which reads as
+              // "the executor died" and sends whoever is looking at it to the
+              // wrong side. Observing an app whose front window is a file
+              // dialog costs about eighteen seconds against a twenty-second
+              // deadline, so this is the message a busy machine produces, for
+              // an executor that was alive and working.
+              reason === 'request_timeout'
+                ? 'maka-cu did not answer within the host deadline and was terminated'
+                : 'maka-cu exited after request delivery',
               this.generation,
               request.stage,
             )
           : new MakaCuLifecycleError(
               'service_unavailable',
-              'maka-cu exited before request delivery',
+              reason === 'request_timeout'
+                ? 'maka-cu did not answer within the host deadline and was terminated'
+                : 'maka-cu exited before request delivery',
               this.generation,
               request.stage,
             ),

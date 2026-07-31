@@ -145,7 +145,22 @@ try {
   check('the tree reaches real controls', buttons.length > 0, `${buttons.length} buttons`);
 
   // ── 3. element actions, the advertised set ───────────────────────────────
-  const clickTarget = buttons[0];
+  //
+  // The first AXButton in a window's tree is usually one of the traffic lights,
+  // and pressing it closes the window this run is measuring — or, in an app
+  // that is not a calculator, sends something. A harness that can be pointed at
+  // an arbitrary app has to refuse the controls whose effect is not local, and
+  // say so rather than picking one anyway.
+  const DESTRUCTIVE =
+    /关闭|关掉|退出|结束|删除|清除|清空|移除|废纸篓|丢弃|不存储|不保存|发送|提交|购买|支付|注销|重置|恢复出厂|close|quit|exit|delete|remove|discard|trash|send|submit|reset|sign\s*out|log\s*out|buy|pay|don'?t save/i;
+  const inert = (element) => {
+    const label = String(element.label ?? '').trim();
+    // An unlabelled button cannot be judged, and the traffic lights are often
+    // exactly that. Unknown effect is treated as unsafe, not as safe.
+    if (!label) return false;
+    return !DESTRUCTIVE.test(label);
+  };
+  const clickTarget = buttons.find(inert);
   if (clickTarget) {
     const obs = await observe();
     const again = obs.elements.find((e) => e.label === clickTarget.label);
@@ -176,13 +191,20 @@ try {
       replay?.outcome.ok ? 'IT WENT THROUGH' : replay?.outcome.error,
     );
   } else {
-    skip('click_element', 'no button in the tree');
+    skip(
+      'click_element',
+      buttons.length > 0
+        ? `${buttons.length} buttons, none of them safe to press here`
+        : 'no button in the tree',
+    );
   }
 
   // set_value, on whatever text field the app exposes.
   const fieldObs = await observe();
   const field = fieldObs.elements.find((e) => e.role === 'AXTextField' || e.role === 'AXTextArea');
   if (field) {
+    // Whatever was in the field belongs to the user, not to this run.
+    const previous = typeof field.value === 'string' ? field.value : '';
     const typed = `mcu-${call}`;
     const written = await backend.runSemantic(
       {
@@ -219,6 +241,31 @@ try {
         describe(selected.outcome),
       );
     }
+
+    // Put back what was there. A matrix that leaves `mcu-7` in a field the user
+    // was typing in has stopped being read-only about their work, and the next
+    // run would then measure against its own leftovers.
+    const restoreObs = await observe();
+    const restoreField = restoreObs.elements.find(
+      (e) => e.role === field.role && e.label === field.label,
+    );
+    if (restoreField) {
+      const restored = await backend.runSemantic(
+        {
+          type: 'set_value',
+          observationId: restoreObs.observationId,
+          elementId: restoreField.elementId,
+          value: previous,
+        },
+        signal,
+        ctx(),
+      );
+      check(
+        'the field is left as it was found',
+        restored.outcome.ok === true,
+        `restored ${JSON.stringify(previous)}`,
+      );
+    }
   } else {
     skip('set_value / select_text', 'no text field in the tree');
   }
@@ -226,7 +273,7 @@ try {
   // secondary_action, named from the protocol's closed set rather than left
   // undefined — an undefined action proves the argument check, not the action.
   const secondaryObs = await observe();
-  const secondaryTarget = secondaryObs.elements.find((e) => e.role === 'AXButton');
+  const secondaryTarget = secondaryObs.elements.filter((e) => e.role === 'AXButton').find(inert);
   if (secondaryTarget) {
     const out = await backend.runSemantic(
       {
@@ -279,7 +326,13 @@ try {
   // press_key naming the control it is for. The executor takes focus only when
   // the host asks it to, so this is the path the tool description promises.
   const keyObs = await observe();
-  const keyTarget = keyObs.elements.find((e) => e.role === 'AXButton') ?? keyObs.elements[0];
+  // A text field is the control this promise is actually about, and it is also
+  // the one whose digest does not cover half the window — naming a container
+  // means any unrelated change refuses the key, which measures the frame
+  // binding rather than the focus policy.
+  const keyTarget =
+    keyObs.elements.find((e) => e.role === 'AXTextField' || e.role === 'AXTextArea') ??
+    keyObs.elements.filter((e) => e.role === 'AXButton').find(inert);
   if (keyTarget) {
     const out = await backend.runSemantic(
       {
@@ -296,12 +349,19 @@ try {
       out.outcome.ok === true || typeof out.outcome.error === 'string',
       describe(out.outcome),
     );
+    // Either it reached the executor with the focus policy the promise implies,
+    // or it was refused for a reason the model can act on. What must not happen
+    // is a key that quietly does nothing.
     const keyDispatch = traces.filter((t) => t.type === 'dispatch' && t.method === 'dispatch.key');
     check(
-      'a key that names a control asks the executor to acquire focus',
-      keyDispatch.length > 0,
-      `${keyDispatch.length} key dispatches`,
+      'a key that names a control either acquires focus or says why not',
+      out.outcome.ok === true
+        ? keyDispatch.length > 0
+        : typeof out.outcome.error === 'string' && out.outcome.error.length > 0,
+      out.outcome.ok === true ? `${keyDispatch.length} key dispatches` : describe(out.outcome),
     );
+  } else {
+    skip('press_key with an element id', 'no field or safe control to aim at');
   }
 
   // ── 4. a sheet is a window to CGWindowList and a child to accessibility ──

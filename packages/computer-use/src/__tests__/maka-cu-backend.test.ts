@@ -61,6 +61,7 @@ const SESSION_ERROR = process.env.MAKACU_MOCK_SESSION_ERROR || '';
 const WINDOW_LIST_ERROR = process.env.MAKACU_MOCK_WINDOW_LIST_ERROR || '';
 const MALFORMED = process.env.MAKACU_MOCK_MALFORMED || '';
 const LAUNCH_ERROR = process.env.MAKACU_MOCK_LAUNCH_ERROR || '';
+const HANG_OBSERVE = process.env.MAKACU_MOCK_HANG_OBSERVE === '1';
 const LAUNCH_TOOK_FOREGROUND = process.env.MAKACU_MOCK_LAUNCH_FOREGROUND === '1';
 const WINDOW_ORIGIN_Y = Number(process.env.MAKACU_MOCK_WINDOW_ORIGIN_Y || '25');
 const NONCE = crypto.randomBytes(16).toString('hex');
@@ -247,6 +248,9 @@ function handle(msg) {
         MALFORMED === 'launch_no_foreground' ? { foregroundTaken: undefined } : {}));
       return;
     case 'observe':
+      // Alive, and simply slower than the host's deadline — the shape a real
+      // executor takes while walking a file dialog's accessibility tree.
+      if (HANG_OBSERVE) return;
       ok(id, { snapshot: snapshot(params.includeImage !== false) });
       return;
     case 'screen.capture':
@@ -321,6 +325,8 @@ function makeBackend(
     windowListError?: string;
     malformed?: string;
     launchError?: string;
+    hangObserve?: boolean;
+    timeoutMs?: number;
     launchTookForeground?: boolean;
     windowOriginY?: number;
     physicalInputRecentlyActive?: MakaCuBackendOptions['physicalInputRecentlyActive'];
@@ -347,12 +353,13 @@ function makeBackend(
   process.env.MAKACU_MOCK_WINDOW_LIST_ERROR = opts.windowListError ?? '';
   process.env.MAKACU_MOCK_MALFORMED = opts.malformed ?? '';
   process.env.MAKACU_MOCK_LAUNCH_ERROR = opts.launchError ?? '';
+  process.env.MAKACU_MOCK_HANG_OBSERVE = opts.hangObserve ? '1' : '';
   process.env.MAKACU_MOCK_LAUNCH_FOREGROUND = opts.launchTookForeground ? '1' : '';
   process.env.MAKACU_MOCK_WINDOW_ORIGIN_Y = String(opts.windowOriginY ?? 25);
   const backend = createMakaCuBackend({
     binaryPath: mockPath,
     imageDir,
-    timeoutMs: 5000,
+    timeoutMs: opts.timeoutMs ?? 5000,
     handshakeTimeoutMs: 5000,
     maxRestartAttempts: 2,
     restartBackoffMs: 5,
@@ -718,6 +725,21 @@ describe('maka-cu backend', () => {
     const { backend } = makeBackend({ launchTookForeground: true });
     const launched = await backend.launchApp!({ app: 'Launched' }, signal(), RUN_CONTEXT);
     assert.equal(launched.focusHeld, false);
+  });
+
+  it('says the host deadline killed the executor, not that it exited on its own', async () => {
+    // The host kills the child on its own deadline as well as on a crash, and
+    // both used to say "exited after request delivery" — which reads as a
+    // dead executor and sends the reader to the wrong side. Observing an app
+    // whose front window is a file dialog costs about eighteen seconds against
+    // a twenty-second deadline, so this is the message a busy machine makes.
+    const { backend } = makeBackend({ hangObserve: true, timeoutMs: 300 });
+    await assert.rejects(
+      backend.captureObservation!({ windowId: 90210, includeScreenshot: true }, signal(), {
+        ...RUN_CONTEXT,
+      }),
+      /host deadline/,
+    );
   });
 
   it('reports a refused launch with its mapped code, not a raw executor refusal', async () => {
