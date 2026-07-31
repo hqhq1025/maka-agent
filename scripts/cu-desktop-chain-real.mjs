@@ -127,7 +127,20 @@ if (!targetPid) {
 }
 console.log(`target ${TARGET_APP} pid=${targetPid}\n`);
 
-const app = await electron.launch({ args: ['.'], cwd: DESKTOP });
+// A separate user data directory when asked for. The default workspace is the
+// developer's real one, and it can refuse to open on its own — a disk-identity
+// check puts up a native "repair this workspace?" dialog before any window
+// exists, and a harness has nobody to click it. That looked exactly like a
+// startup regression: the app launched, the event loop idled, and no window
+// ever arrived. Pointing somewhere else answers the question in one run.
+const userDataDir = process.env.CU_USER_DATA_DIR;
+const app = await electron.launch({
+  args: userDataDir ? ['.', `--user-data-dir=${userDataDir}`] : ['.'],
+  cwd: DESKTOP,
+  // A cold Electron start on a loaded machine takes longer than the 30s default,
+  // and a timeout here reads as "the app is broken" rather than "it was slow".
+  timeout: 120_000,
+});
 const mainLogs = [];
 app.on('console', (m) => mainLogs.push(m.text()));
 

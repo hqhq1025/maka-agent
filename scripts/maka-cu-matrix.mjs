@@ -22,7 +22,8 @@ import { readFileSync } from 'node:fs';
 
 const ROOT = process.env.MAKA_ROOT ?? process.cwd();
 const BINARY =
-  process.env.MAKA_CU_BINARY ?? '/Users/haoqing/Documents/Github/maka-cu/.build/release/OpenComputerUse';
+  process.env.MAKA_CU_BINARY ??
+  '/Users/haoqing/Documents/Github/maka-cu/.build/release/OpenComputerUse';
 const APP_ID = process.argv[2] ?? 'com.openai.codex.cualab';
 
 const { selectComputerUseBackend } = await import(`${ROOT}/packages/computer-use/dist/index.js`);
@@ -31,7 +32,10 @@ const frontmost = () => {
   try {
     return execFileSync(
       'osascript',
-      ['-e', 'tell application "System Events" to get unix id of first process whose frontmost is true'],
+      [
+        '-e',
+        'tell application "System Events" to get unix id of first process whose frontmost is true',
+      ],
       { encoding: 'utf8', timeout: 5000 },
     ).trim();
   } catch {
@@ -89,11 +93,17 @@ async function onElement(label, build) {
 }
 
 const describe = (outcome) =>
-  outcome.ok ? `tier=${outcome.tier} verified=${outcome.verified}` : `${outcome.error}: ${outcome.message ?? ''}`;
+  outcome.ok
+    ? `tier=${outcome.tier} verified=${outcome.verified}`
+    : `${outcome.error}: ${outcome.message ?? ''}`;
 
 try {
   const tcc = await backend.preflight(signal);
-  check('Accessibility and Screen Recording are already granted', tcc.accessibility === true, JSON.stringify(tcc));
+  check(
+    'Accessibility and Screen Recording are already granted',
+    tcc.accessibility === true,
+    JSON.stringify(tcc),
+  );
   if (!tcc.accessibility) {
     console.log('stopping rather than prompting.');
     process.exit(2);
@@ -108,7 +118,11 @@ try {
     process.exit(2);
   }
   const before = frontmost();
-  check('the target is in the background', String(before) !== String(target.pid), `${before} ≠ ${target.pid}`);
+  check(
+    'the target is in the background',
+    String(before) !== String(target.pid),
+    `${before} ≠ ${target.pid}`,
+  );
 
   // ── 2. observation ───────────────────────────────────────────────────────
   const first = await observe();
@@ -122,7 +136,10 @@ try {
     'every element id is distinct',
     new Set(first.elements.map((e) => e.elementId)).size === first.elements.length,
   );
-  check('the observation carries the window it describes', Boolean(first.windowTitle ?? first.windowBounds));
+  check(
+    'the observation carries the window it describes',
+    Boolean(first.windowTitle ?? first.windowBounds),
+  );
 
   const buttons = byRole(first, 'AXButton');
   check('the tree reaches real controls', buttons.length > 0, `${buttons.length} buttons`);
@@ -139,7 +156,11 @@ try {
           ctx(),
         )
       : null;
-    check('click_element on a real control', clicked?.outcome.ok === true, clicked ? describe(clicked.outcome) : 'not found again');
+    check(
+      'click_element on a real control',
+      clicked?.outcome.ok === true,
+      clicked ? describe(clicked.outcome) : 'not found again',
+    );
 
     // The binding: the same observation may not be spent twice.
     const replay = again
@@ -164,14 +185,23 @@ try {
   if (field) {
     const typed = `mcu-${call}`;
     const written = await backend.runSemantic(
-      { type: 'set_value', observationId: fieldObs.observationId, elementId: field.elementId, value: typed },
+      {
+        type: 'set_value',
+        observationId: fieldObs.observationId,
+        elementId: field.elementId,
+        value: typed,
+      },
       signal,
       ctx(),
     );
     check('set_value on a real text field', written.outcome.ok === true, describe(written.outcome));
     const readBack = await observe();
     const same = readBack.elements.find((e) => e.label === field.label && e.role === field.role);
-    check('the written value survives a fresh observation', same?.value === typed, `reads ${JSON.stringify(same?.value ?? '')}`);
+    check(
+      'the written value survives a fresh observation',
+      same?.value === typed,
+      `reads ${JSON.stringify(same?.value ?? '')}`,
+    );
 
     // select_text and secondary_action are advertised; exercise them where the
     // element supports them rather than asserting a universal success.
@@ -219,7 +249,8 @@ try {
   // coordinate action and is not an element action; asking for it here passed
   // by naming its own absence, which is not a test of anything.
   const scrollObs = await observe();
-  const scrollable = scrollObs.elements.find((e) => e.role === 'AXScrollArea') ?? scrollObs.elements[0];
+  const scrollable =
+    scrollObs.elements.find((e) => e.role === 'AXScrollArea') ?? scrollObs.elements[0];
   if (scrollable) {
     const out = await backend.runSemantic(
       {
@@ -303,7 +334,11 @@ try {
         signal,
         ctx(),
       );
-      check('and they can be pressed, so the run leaves nothing open', dismissed.outcome.ok === true, describe(dismissed.outcome));
+      check(
+        'and they can be pressed, so the run leaves nothing open',
+        dismissed.outcome.ok === true,
+        describe(dismissed.outcome),
+      );
     }
   }
 
@@ -323,7 +358,11 @@ try {
   const staleObs = await observe();
   const staleTarget = staleObs.elements[0];
   const bogus = await backend.runSemantic(
-    { type: 'click_element', observationId: 'observation-that-never-existed', elementId: staleTarget.elementId },
+    {
+      type: 'click_element',
+      observationId: 'observation-that-never-existed',
+      elementId: staleTarget.elementId,
+    },
     signal,
     ctx(),
   );
@@ -366,10 +405,15 @@ try {
       launched.windows.length > 0,
       `${launched.windows.length} windows`,
     );
+    // `focusHeld` was a vacuous pass until the executor stopped reading a frozen
+    // `frontmostApplication`: it could only ever answer "no foreground taken",
+    // so asserting that answer proved nothing. The independent check is the
+    // host's own frontmost reading across the launch, which is why both are here.
+    const afterLaunch = frontmost();
     check(
       'launching did not take the foreground',
-      launched.focusHeld === true && frontmost() === beforeLaunch,
-      `focusHeld=${launched.focusHeld}, frontmost ${beforeLaunch} → ${frontmost()}`,
+      launched.focusHeld === true && afterLaunch === beforeLaunch,
+      `focusHeld=${launched.focusHeld}, frontmost ${beforeLaunch} → ${afterLaunch}`,
     );
   } else {
     skip('launch_app', 'the backend exposes no launchApp');
