@@ -53,3 +53,38 @@ test('a successful call is unchanged', () => {
   assert.match(text, /computer\.click_element/);
   assert.doesNotMatch(text, /failed/);
 });
+
+test('a dispatch that changed nothing does not start with the word ok', () => {
+  // Measured on a real run: `cmd+p` came back `ok ... suspected_noop` seven
+  // times and the model sent it seven times, then switched to `key` and sent it
+  // twice more; another model did the same four times with `ctrl+f2`. It was
+  // not guessing at the schema — it read `ok` and believed it.
+  const text = summarize(
+    { type: 'press_key' },
+    {
+      outcome: {
+        ok: true,
+        tier: 'coordinate-background',
+        verified: false,
+        evidence: { path: 'cg_event_pid', effect: 'suspected_noop' },
+      },
+    },
+  );
+  assert.match(text, /delivered but nothing changed/);
+  assert.doesNotMatch(text, /computer\.press_key ok/);
+});
+
+test('a dispatch that did change something still reads as ok', () => {
+  const text = summarize(
+    { type: 'set_value' },
+    {
+      outcome: {
+        ok: true,
+        tier: 'ax',
+        verified: true,
+        evidence: { path: 'ax_attribute', effect: 'confirmed' },
+      },
+    },
+  );
+  assert.match(text, /computer\.set_value ok/);
+});

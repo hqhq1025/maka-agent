@@ -498,8 +498,21 @@ export function summarize(action: ComputerSummaryAction, result: CuRunResult): s
     action.type === 'cursor_position' && result.resolvedScreenPoint
       ? `; screen_point=${result.resolvedScreenPoint.x},${result.resolvedScreenPoint.y}`
       : '';
+  // `ok` is what the model reads first, and for a dispatch that provably
+  // changed nothing it is the wrong first word. The executor already says so —
+  // `effect: "suspected_noop"` means the action was delivered and the tree
+  // afterwards was the one from before — but that verdict sat inside the
+  // evidence clause behind the word `ok`.
+  //
+  // Measured on a real run: `cmd+p` came back `ok ... suspected_noop` seven
+  // times in a row, and the model sent it seven times, then switched to `key`
+  // and sent it twice more. It was not guessing at the schema; it was believing
+  // a success it had been handed. `ctrl+f2` did the same four times on another
+  // model.
+  const noop = outcome.evidence?.effect === 'suspected_noop';
+  const verdict = noop ? 'delivered but nothing changed' : 'ok';
   return (
-    `computer.${action.type} ok via ${outcome.tier} (verified=${verified})${evidence}${pointStr}${shot}` +
+    `computer.${action.type} ${verdict} via ${outcome.tier} (verified=${verified})${evidence}${pointStr}${shot}` +
     (outcome.verified === false
       ? ' — dispatch could not be confirmed; re-screenshot before retrying'
       : outcome.verified === true && outcome.evidence?.effect === 'confirmed'
