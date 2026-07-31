@@ -110,7 +110,7 @@ const computerWireParams = z
         ...CU_ACTION_TYPES,
       ] as [string, ...string[]])
       .describe(
-        'Operation to perform. Required fields by action: launch_app requires app; observe/screenshot require app or window_id; click_element requires observation_id and element_id; set_value requires observation_id, element_id, and value; select_text/secondary_action require observation_id, element_id, and text; scroll_element requires observation_id, element_id, and scroll_direction, with optional scroll_amount; element_sequence requires observation_id and steps, where each step names a control by the label it shows and optionally its role — prefer it whenever several controls must be operated in order, since it costs one call instead of one per control; press_key requires observation_id and text, and takes an optional element_id — supply it and the control is focused before the key is posted, omit it and the key lands on whatever the observed window already has focused; coordinate actions require observation_id plus their coordinate fields.',
+        'Operation to perform. Required fields by action: list_apps takes an optional app to filter by — pass the name you were given ("TextEdit", "文本编辑") and it returns the matching app ids, which is far cheaper than listing everything; without it only apps that currently have a window are listed; launch_app requires app; observe/screenshot require app or window_id; click_element requires observation_id and element_id; set_value requires observation_id, element_id, and value; select_text/secondary_action require observation_id, element_id, and text; scroll_element requires observation_id, element_id, and scroll_direction, with optional scroll_amount; element_sequence requires observation_id and steps, where each step names a control by the label it shows and optionally its role — prefer it whenever several controls must be operated in order, since it costs one call instead of one per control; press_key requires observation_id and text, and takes an optional element_id — supply it and the control is focused before the key is posted, omit it and the key lands on whatever the observed window already has focused; coordinate actions require observation_id plus their coordinate fields.',
       ),
     // "Exact" was already in this description and was not enough. On a real
     // desktop chain the model asked for "Calculator" and got nothing, because
@@ -1339,7 +1339,29 @@ export function buildComputerUseTools(deps: {
             if (!deps.backend.listApps) {
               return { text: 'maka_computer.list_apps failed: unsupported_action' };
             }
-            const apps = await deps.backend.listApps(abortSignal);
+            const everything = await deps.backend.listApps(abortSignal);
+            // Two reductions, both measured on a real run where this call was
+            // 12,933 bytes — about 3,600 tokens, 85% of the whole turn — spent
+            // confirming an app id the prompt had already named.
+            //
+            // `app` filters by what a person would say. The model holds a
+            // display name and `observe` needs an app id, and this is the only
+            // bridge between them; making it list everything to cross a bridge
+            // is what cost those tokens. Matching is on the id and on both
+            // names, case-insensitively and by substring, because "文本编辑",
+            // "TextEdit" and "com.apple.TextEdit" are all the same request.
+            //
+            // Without a filter it lists only apps that have a window. An app
+            // with none cannot be observed or driven, so listing it offers the
+            // model nothing to do — 133 apps came back where 15 had windows.
+            const query = typeof input.app === 'string' ? input.app.trim().toLowerCase() : '';
+            const apps = query
+              ? everything.filter((app) =>
+                  [app.appId, app.name].some(
+                    (candidate) => candidate && candidate.toLowerCase().includes(query),
+                  ),
+                )
+              : everything.filter((app) => app.windowCount > 0);
             if (
               !observationLease?.ok ||
               !state.validateObservationLease(observationLease.lease).ok
@@ -1347,10 +1369,28 @@ export function buildComputerUseTools(deps: {
               const blocked = state.beforeAction();
               return sessionFailure(blocked.ok ? 'reobserve_required' : blocked.reason);
             }
+            if (query && apps.length === 0) {
+              // Nothing matched, so say what there is rather than nothing: the
+              // next call would otherwise be an unfiltered list_apps, which is
+              // the cost this filter exists to avoid.
+              const open = everything
+                .filter((app) => app.windowCount > 0)
+                .map((app) => app.appId)
+                .slice(0, 24);
+              return {
+                text: JSON.stringify({ app_count: 0, window_count: 0 }),
+                modelText: JSON.stringify({
+                  apps: [],
+                  no_match_for: input.app,
+                  apps_with_windows: open,
+                }),
+              };
+            }
             return {
               text: JSON.stringify({
                 app_count: apps.length,
                 window_count: apps.reduce((sum, app) => sum + app.windowCount, 0),
+                ...(query ? { matched: apps.length, of: everything.length } : {}),
               }),
               modelText: JSON.stringify({
                 apps: apps.map((app) => ({

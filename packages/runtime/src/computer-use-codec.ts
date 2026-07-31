@@ -39,7 +39,21 @@ const pointerAction = <
     })
     .strict();
 export const computerParams = z.discriminatedUnion('action', [
-  z.object({ action: z.literal('list_apps') }).strict(),
+  z
+    .object({
+      action: z.literal('list_apps'),
+      /**
+       * Narrow the list to what was asked for.
+       *
+       * Unfiltered this was 12,933 bytes on a real run — about 3,600 tokens,
+       * 85% of a three-call turn — spent confirming an app id the prompt had
+       * already named. Every model tried, from the strongest to the weakest,
+       * because it is the only bridge from a display name to the app id
+       * `observe` requires.
+       */
+      app: z.string().min(1).max(512).optional(),
+    })
+    .strict(),
   z
     .object({
       action: z.literal('launch_app'),
