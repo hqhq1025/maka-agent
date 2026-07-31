@@ -5,11 +5,12 @@
     "commit": "442f8ccd09ca49165d50a05bfe5ea0f002f3e51a",
     "expectedProtocolVersion": "maka.cu/2",
     "binaryName": "maka-cu",
-    "binarySizeBytes": 2747552,
-    "binarySha256": "7f86a68cd9087b972c375862437ac20f60e539590b9abbc7938cca28f1a5da27",
+    "binarySizeBytes": 2749744,
+    "binarySha256": "1ea4b9b96fe8ee7161b32bc658e59721678313dbc10350793fad62a5218261c1",
     "buildProvenance": "local-source-build",
-    "signature": "adhoc",
-    "hardenedRuntime": false,
+    "signature": "other",
+    "authority": "Codex++ Local Signing",
+    "hardenedRuntime": true,
     "notarization": "missing",
     "distributionReady": false
   }

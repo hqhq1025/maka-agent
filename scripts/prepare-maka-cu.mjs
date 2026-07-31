@@ -98,12 +98,34 @@ const binary = join(built, 'OpenComputerUse');
 if (!existsSync(binary)) fail(`swift build produced no ${binary}.`);
 assertMachO(binary);
 
-const bytes = readFileSync(binary);
-const binarySha256 = createHash('sha256').update(bytes).digest('hex');
-
 mkdirSync(dirname(destination), { recursive: true });
 copyFileSync(binary, destination);
 chmodSync(destination, 0o755);
+
+// Signing rewrites the file, so the digest is taken after it, from the copy the
+// host will actually spawn — hashing the build output first pins bytes nobody
+// runs.
+//
+// Signing with a stable identity is not only about distribution. TCC keys an
+// ad-hoc binary by its code directory hash, so every rebuild is a new program
+// to macOS and Accessibility has to be granted again; a signed one is
+// identified by its designated requirement, which survives a rebuild. Any
+// identity does that, including a self-signed one:
+//
+//   MAKA_CU_SIGN_IDENTITY="Codex++ Local Signing" node scripts/prepare-maka-cu.mjs
+//
+// `security find-identity -v -p codesigning` lists what this machine has.
+const identity = process.env.MAKA_CU_SIGN_IDENTITY;
+if (identity) {
+  process.stderr.write(`prepare-maka-cu: signing with ${identity}\n`);
+  execFileSync(
+    'codesign',
+    ['--force', '--options', 'runtime', '--timestamp=none', '--sign', identity, destination],
+    { stdio: 'inherit' },
+  );
+}
+
+const binarySha256 = createHash('sha256').update(readFileSync(destination)).digest('hex');
 
 /**
  * What the binary is actually signed with, read rather than asserted.
@@ -153,8 +175,8 @@ function isStapled(path) {
   }
 }
 
-const signing = signatureOf(binary);
-const stapled = isStapled(binary);
+const signing = signatureOf(destination);
+const stapled = isStapled(destination);
 // Every condition, or none of it. Distribution is the one place a partial
 // answer is worse than a refusal: an ad-hoc helper inside a notarized app is
 // not a smaller problem than an unsigned one, it fails the same way.
@@ -168,7 +190,7 @@ manifest.makaCu = {
   commit: git(source, ['rev-parse', 'HEAD']),
   expectedProtocolVersion: 'maka.cu/2',
   binaryName: 'maka-cu',
-  binarySizeBytes: statSync(binary).size,
+  binarySizeBytes: statSync(destination).size,
   binarySha256,
   buildProvenance: 'local-source-build',
   ...signing,
@@ -187,5 +209,11 @@ process.stderr.write(
     `, distributionReady ${distributionReady}\n` +
     (distributionReady
       ? ''
-      : 'prepare-maka-cu: development only — a packaged build will refuse this entry.\n'),
+      : 'prepare-maka-cu: development only — a packaged build will refuse this entry.\n') +
+    (identity
+      ? ''
+      : 'prepare-maka-cu: unsigned, so macOS identifies it by its code directory hash — ' +
+        'Accessibility has to be granted again after every rebuild. Set ' +
+        'MAKA_CU_SIGN_IDENTITY to a codesigning identity (a self-signed one is enough) ' +
+        'to make the grant survive.\n'),
 );
