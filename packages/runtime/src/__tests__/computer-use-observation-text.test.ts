@@ -204,3 +204,22 @@ test('the compact form is substantially smaller than the JSON it replaces', () =
     `expected at least half the size, got ${compact.length} vs ${previous.length}`,
   );
 });
+
+test('a cut tree says so, in the header, in words that change what the model does', () => {
+  // The executor bounds its walk by element count and by a clock. An
+  // open/save panel reaches both — 1,500 elements in 35s was measured — so a
+  // partial tree is the normal outcome there, not an edge case. Only the trace
+  // used to know, which left the model reading a prefix as an inventory and
+  // concluding the control it wanted did not exist.
+  const cut = renderObservationForModel({
+    ...observation([]),
+    truncated: true,
+  });
+  const [head] = lines(cut);
+  assert.match(head ?? '', /truncated=true/);
+  // The fact alone is not actionable; what the model needs is what it implies.
+  assert.match(head ?? '', /may exist but not be listed/);
+
+  const whole = renderObservationForModel(observation([]));
+  assert.doesNotMatch(lines(whole)[0] ?? '', /truncated/);
+});

@@ -67,6 +67,15 @@ function header(observation: CuObservation): string {
   ];
   if (observation.windowTitle) parts.push(`window=${quote(observation.windowTitle)}`);
   parts.push(`elements=${observation.elements.length}`);
+  // Said in the header rather than at the end, because a model that stops
+  // reading a long list early must still learn that the list was cut. The
+  // wording is the instruction, not the fact: "there may be more" is what
+  // changes what it does next.
+  if (observation.truncated === true) {
+    parts.push(
+      'truncated=true(the tree was cut short; an element you expect may exist but not be listed)',
+    );
+  }
   return parts.join(' ');
 }
 

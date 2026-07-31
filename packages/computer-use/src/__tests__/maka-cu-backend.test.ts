@@ -62,6 +62,7 @@ const WINDOW_LIST_ERROR = process.env.MAKACU_MOCK_WINDOW_LIST_ERROR || '';
 const MALFORMED = process.env.MAKACU_MOCK_MALFORMED || '';
 const LAUNCH_ERROR = process.env.MAKACU_MOCK_LAUNCH_ERROR || '';
 const HANG_OBSERVE = process.env.MAKACU_MOCK_HANG_OBSERVE === '1';
+const TRUNCATED = process.env.MAKACU_MOCK_TRUNCATED === '1';
 const LAUNCH_TOOK_FOREGROUND = process.env.MAKACU_MOCK_LAUNCH_FOREGROUND === '1';
 const WINDOW_ORIGIN_Y = Number(process.env.MAKACU_MOCK_WINDOW_ORIGIN_Y || '25');
 const NONCE = crypto.randomBytes(16).toString('hex');
@@ -147,7 +148,7 @@ function snapshot(includeImage) {
     }],
     obscuringRects: [],
     elements: [element(1, 'Fixture Window', false), element(2, 'Send', true)],
-    truncated: { elements: false, depth: false },
+    truncated: { elements: TRUNCATED, depth: false },
   };
   if (MALFORMED === 'no_displays') delete shot.displays;
   if (MALFORMED === 'no_obscuring') shot.obscuringRects = null;
@@ -326,6 +327,7 @@ function makeBackend(
     malformed?: string;
     launchError?: string;
     hangObserve?: boolean;
+    truncated?: boolean;
     timeoutMs?: number;
     launchTookForeground?: boolean;
     windowOriginY?: number;
@@ -354,6 +356,7 @@ function makeBackend(
   process.env.MAKACU_MOCK_MALFORMED = opts.malformed ?? '';
   process.env.MAKACU_MOCK_LAUNCH_ERROR = opts.launchError ?? '';
   process.env.MAKACU_MOCK_HANG_OBSERVE = opts.hangObserve ? '1' : '';
+  process.env.MAKACU_MOCK_TRUNCATED = opts.truncated ? '1' : '';
   process.env.MAKACU_MOCK_LAUNCH_FOREGROUND = opts.launchTookForeground ? '1' : '';
   process.env.MAKACU_MOCK_WINDOW_ORIGIN_Y = String(opts.windowOriginY ?? 25);
   const backend = createMakaCuBackend({
@@ -760,6 +763,24 @@ describe('maka-cu backend', () => {
       backend.launchApp!({ app: 'Launched' }, signal(), RUN_CONTEXT),
       /service_mismatch|foregroundTaken/,
     );
+  });
+
+  it('carries a cut tree through as cut, instead of only into the trace', async () => {
+    // A bounded walk that arrives looking complete is the worse failure: the
+    // model concludes the control is not there. An open/save panel reaches the
+    // executor's bound as a matter of course, so this is the normal case now.
+    const { backend } = makeBackend({ truncated: true });
+    const observation = await observeFixture(backend);
+    assert.equal(observation.truncated, true);
+
+    const again = await observeFixture(backend);
+    assert.equal(again.truncated, true, 'a second observation of the same window agrees');
+  });
+
+  it('says nothing about truncation when the tree was complete', async () => {
+    const { backend } = makeBackend({});
+    const observation = await observeFixture(backend);
+    assert.equal(observation.truncated, undefined);
   });
 
   it('names a parent in the id space the model reads, not the wire token', async () => {

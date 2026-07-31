@@ -118,6 +118,17 @@ export interface CuObservation {
   contentFingerprint?: string;
   page?: ComputerUsePageIdentity;
   displays?: ComputerUseDisplayIdentity[];
+  /**
+   * The tree was cut short, so absence proves nothing.
+   *
+   * The executor bounds its walk by element count and by a clock, and a window
+   * whose accessibility tree is hosted by another process reaches both: an
+   * open/save panel measured 1,500 elements in 35s. A partial tree that arrives
+   * looking complete is worse than a slow one, because a model reading it
+   * concludes the control it wants does not exist and goes looking for another
+   * route. This says the list is a prefix, not an inventory.
+   */
+  truncated?: boolean;
   elements: CuObservedElement[];
   screenshot?: CuScreenshot;
 }

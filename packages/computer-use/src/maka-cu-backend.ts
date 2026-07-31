@@ -826,6 +826,11 @@ export function createMakaCuBackend(opts: MakaCuBackendOptions): CuDispatchBacke
       // element digest plus bounds and title, computed where the tree lives.
       contentFingerprint: snapshot.windowDigest,
       ...(displays ? { displays } : {}),
+      // §5.2/§7.4: the executor cuts the walk on an element count or a clock,
+      // and either way the list is a prefix. Only the trace knew, so the model
+      // read a bounded tree as a complete one — and an open/save panel now
+      // reaches the bound as a matter of course.
+      ...(snapshot.truncated.elements || snapshot.truncated.depth ? { truncated: true } : {}),
       elements: snapshot.elements.map((element, index) =>
         toObservedElement(
           element,
