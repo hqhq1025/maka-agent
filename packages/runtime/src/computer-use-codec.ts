@@ -457,11 +457,20 @@ export function summarize(action: ComputerSummaryAction, result: CuRunResult): s
   const { outcome } = result;
   const evidence = summarizeEvidence(outcome.evidence);
   if (!outcome.ok) {
-    // Driver messages and escalation reasons may contain AX labels, window
-    // titles, or screen text. Keep them in internal evidence only; the
-    // model/session summary exposes controlled codes and short identifiers.
+    // The code alone is not a recovery instruction. `unsupported_action` covers
+    // a key name the host could not parse, an element that does not offer the
+    // action, and an action this executor has no method for — three different
+    // next moves. The sentence beside it says which, and the model was never
+    // shown it.
+    //
+    // It is shown only when the backend declares its diagnostics carry no
+    // application text (`maka.cu/2` §1.2 makes that a protocol rule). Absent
+    // means withheld: a backend that says nothing is treated as one that
+    // cannot promise it.
+    const detail =
+      outcome.messageIsAppTextFree === true && outcome.message ? ` — ${outcome.message}` : '';
     return (
-      `computer.${action.type} failed: ${outcome.error}${evidence}` +
+      `computer.${action.type} failed: ${outcome.error}${detail}${evidence}` +
       (typeof outcome.completedSubSteps === 'number'
         ? ` (completed ${outcome.completedSubSteps} sub-steps)`
         : '')

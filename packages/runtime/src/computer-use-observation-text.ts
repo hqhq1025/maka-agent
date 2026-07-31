@@ -80,7 +80,14 @@ function header(observation: CuObservation): string {
 }
 
 function elementLine(element: CuObservedElement): string {
-  const parts = [element.elementId, element.role];
+  // `role/subrole` rather than a separate field: it is the same answer to
+  // "what is this", it is absent on most elements, and a password field that
+  // reads `AXTextField/AXSecureTextField` is the one case where the model must
+  // not treat a control as an ordinary one.
+  const parts = [
+    element.elementId,
+    element.subrole ? `${element.role}/${element.subrole}` : element.role,
+  ];
   if (element.label) parts.push(quote(element.label));
   if (element.value !== undefined) parts.push(`=${quote(truncate(element.value))}`);
   // Only the informative half of each state is written. Every element the

@@ -105,7 +105,7 @@ function element(index, label, focused) {
     parentToken: index === 1 ? null : (MALFORMED === 'numeric_parent' ? 7 : 'el_1'),
     depth: index === 1 ? 0 : 1,
     role: index === 1 ? 'AXWindow' : 'AXButton',
-    subrole: null,
+    subrole: index === 2 ? 'AXSecureTextField' : null,
     axIdentifier: 'id_' + index,
     label: label,
     value: null,
@@ -775,6 +775,19 @@ describe('maka-cu backend', () => {
 
     const again = await observeFixture(backend);
     assert.equal(again.truncated, true, 'a second observation of the same window agrees');
+  });
+
+  it('carries the subrole, which is how a password field is knowable at all', async () => {
+    // The tool description told the model a password field could not be told
+    // apart "because the executor reports no subrole". The executor was sending
+    // it; this backend was dropping it. A promise the model was asked to keep
+    // on its own is one the observation should have been keeping for it.
+    const { backend } = makeBackend({});
+    const observation = await observeFixture(backend);
+    const secure = observation.elements.find((e) => e.subrole === 'AXSecureTextField');
+    assert.ok(secure, 'the fixture element carrying a subrole reaches the observation');
+    const plain = observation.elements.find((e) => e.role === 'AXWindow');
+    assert.equal(plain?.subrole, undefined, 'an element without one carries nothing');
   });
 
   it('says nothing about truncation when the tree was complete', async () => {

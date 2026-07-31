@@ -14,8 +14,7 @@
 // not exist as a signed artifact yet, so nothing may fall back to it silently.
 //
 // What the protocol declares and Maka's own types cannot yet carry: per-element
-// `truncated`, `snapshot.truncated`, `actions`, `subrole`, `placeholder` and
-// `selectedText`. They are read and validated here — a missing declared field is
+// `truncated`, `actions`, `placeholder` and `selectedText`. They are read and validated here — a missing declared field is
 // version skew the host must catch — but only the truncation flags reach
 // anywhere, through `onTrace`. Giving them a model-facing home means new fields
 // on `CuObservedElement`/`CuObservation`, which this change deliberately does
@@ -257,8 +256,16 @@ interface StoredSnapshot {
 
 type CaptureFailure = CuRunResult & { outcome: Extract<CuRunResult['outcome'], { ok: false }> };
 
+/**
+ * Every refusal this backend makes, in one place — which is also why the
+ * app-text-free declaration lives here rather than at each of the thirty-odd
+ * call sites. `maka.cu/2` §1.2 makes it a protocol rule for the executor's own
+ * sentences, and the host's own messages interpolate only what the caller
+ * supplied: an app id, a window id, an element id, a key name. None of them
+ * carry a label, a title or a value.
+ */
 function failure(error: ComputerUseErrorCode, message: string): CaptureFailure {
-  return { outcome: { ok: false, error, message } };
+  return { outcome: { ok: false, error, message, messageIsAppTextFree: true } };
 }
 
 /** The host cleared the session while this operation was still queued. */
@@ -492,8 +499,10 @@ export function createMakaCuBackend(opts: MakaCuBackendOptions): CuDispatchBacke
         ok: false,
         error: mapped,
         // §1.2: `message` is a fixed sentence chosen by `code` and carries no
-        // application content, so it passes through without a redaction pass.
+        // application content, so it passes through without a redaction pass —
+        // and, for the same reason, may be shown to the model.
         message: error.message,
+        messageIsAppTextFree: true,
         // §7.1: the executor's enum-only detail is the evidence the model gets.
         // `path` tells a refusal that was attempted and rejected from one where
         // nothing permitted could reach the target — which is what `path: none`
@@ -734,6 +743,7 @@ export function createMakaCuBackend(opts: MakaCuBackendOptions): CuDispatchBacke
       // not re-resolve an index against a fresh tree — it never sees this id.
       elementId: modelId,
       role: element.role,
+      ...(element.subrole ? { subrole: element.subrole } : {}),
       ...(element.label ? { label: element.label } : {}),
       ...(element.value !== undefined ? { value: element.value } : {}),
       enabled: element.enabled,

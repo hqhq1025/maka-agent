@@ -230,6 +230,26 @@ export type ComputerUseActionOutcome =
       ok: false;
       error: ComputerUseErrorCode;
       message: string;
+      /**
+       * The message may be shown to the model.
+       *
+       * Set only by a backend that guarantees its diagnostics carry no text
+       * belonging to the observed application. `maka.cu/2` §1.2 makes that a
+       * protocol rule: `error.message` is a fixed sentence chosen by
+       * `error.code`, and application text is confined to the declared
+       * observation fields. cua-driver made no such promise, which is why the
+       * message was withheld from every backend alike.
+       *
+       * Withholding it costs more than it protects. The executor writes "say
+       * Backspace or ForwardDelete rather than delete"; the model was handed
+       * `unsupported_action` alone, and the tool description tells it that code
+       * means keyboard input is off in this build. One mistyped key name taught
+       * it that the keyboard does not work.
+       *
+       * Absent means withheld, so a backend that forgets this flag is quiet
+       * rather than leaky.
+       */
+      messageIsAppTextFree?: boolean;
       evidence?: ComputerUseDispatchEvidence;
       completedSubSteps?: number;
     };

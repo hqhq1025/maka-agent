@@ -34,6 +34,15 @@ export type CuDispatchOutcome =
       ok: false;
       error: ComputerUseErrorCode;
       message: string;
+      /**
+       * The message may be shown to the model.
+       *
+       * Set only by a backend that guarantees its diagnostics carry no text
+       * belonging to the observed application — `maka.cu/2` §1.2 makes that a
+       * protocol rule. Absent means withheld, so a backend that forgets is
+       * quiet rather than leaky.
+       */
+      messageIsAppTextFree?: boolean;
       evidence?: CuDispatchEvidence;
       completedSubSteps?: number;
     };
@@ -71,6 +80,17 @@ export interface CuLaunchedApp {
 export interface CuObservedElement {
   elementId: string;
   role: string;
+  /**
+   * The AX subrole, when the element carries one.
+   *
+   * `AXSecureTextField` is the one that matters most: it is how a password
+   * field is distinguishable from any other text field, and the tool
+   * description told the model it could not be told apart — while the executor
+   * was sending it and the host was dropping it. It also names the window
+   * buttons (`AXCloseButton`, `AXMinimizeButton`, `AXZoomButton`), which
+   * otherwise arrive as three unlabelled `AXButton`s.
+   */
+  subrole?: string;
   label?: string;
   value?: string;
   /** False when the control is present but cannot currently be actuated. */

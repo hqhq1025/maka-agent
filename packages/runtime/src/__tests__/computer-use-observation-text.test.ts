@@ -223,3 +223,16 @@ test('a cut tree says so, in the header, in words that change what the model doe
   const whole = renderObservationForModel(observation([]));
   assert.doesNotMatch(lines(whole)[0] ?? '', /truncated/);
 });
+
+test('a subrole is written beside the role, so a secure field is not an ordinary one', () => {
+  const text = renderObservationForModel(
+    observation([
+      { elementId: '0', role: 'AXTextField', subrole: 'AXSecureTextField', label: '密码' },
+      { elementId: '1', role: 'AXTextField', label: '用户名' },
+    ]),
+  );
+  const rows = lines(text);
+  assert.match(rows[1] ?? '', /AXTextField\/AXSecureTextField/);
+  // An element without one is written exactly as before.
+  assert.match(rows[2] ?? '', /1 AXTextField "用户名"/);
+});
