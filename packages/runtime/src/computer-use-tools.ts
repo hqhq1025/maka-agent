@@ -990,6 +990,17 @@ export function buildComputerUseTools(deps: {
       'indented to show containment: "<element_id> <role> \\"<label>\\" =\\"<value>\\" [<state>] @x,y wxh". ' +
       'Absent parts are omitted, and state is written only when it is not the default, so an element carrying ' +
       'no [disabled] is enabled. A value ending in "…(+N chars)" was shortened for length and is not the whole value. ' +
+      // Measured, not inferred: `cmd+a` did not land on a background TextEdit even
+      // carrying its character, and landed the instant that application was
+      // activated. A main-menu key equivalent is dispatched through NSApp's key
+      // window, and a background application has none. Two models spent nine and
+      // four calls respectively re-sending `cmd+p` and `ctrl+f2` into that
+      // silence, because nothing told them it could not arrive.
+      'A menu shortcut — cmd+P, cmd+S, cmd+W, ctrl+F2 and the like — cannot reach an application that is not ' +
+      'frontmost, because macOS routes it through the frontmost window and Computer Use never takes the foreground. ' +
+      'It will appear to be sent and nothing will happen. Do not retry it. Keys that do not go through the menu bar ' +
+      '— Tab, Escape, Return, the arrows, and typing — reach a background window normally. When a command exists ' +
+      'only in a menu, say so rather than reaching for its shortcut. ' +
       'A "+name,name" suffix lists what that element accepts as a secondary_action, and an element with no suffix ' +
       'offers nothing beyond click_element; raise is how a window is brought forward. [focused] marks where a key ' +
       'sent without an element_id will land. ' +
