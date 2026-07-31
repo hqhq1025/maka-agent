@@ -327,7 +327,7 @@ export async function discoverFixtureIdentity(
 }
 
 async function discoverLauncherFixtureIdentity(fixturePid, windowSpecs) {
-  const [{ createCuaDriverBackend }, manifestText] = await Promise.all([
+  const [{ createMakaCuBackend }, manifestText] = await Promise.all([
     import('../packages/computer-use/dist/index.js'),
     readFile(join(repoRoot, 'apps', 'desktop', 'bundled-tools.json'), 'utf8'),
   ]);
@@ -341,7 +341,7 @@ async function discoverLauncherFixtureIdentity(fixturePid, windowSpecs) {
   ) {
     throw new Error('fixture discovery cannot verify bundled maka-cu identity');
   }
-  const backend = createCuaDriverBackend({
+  const backend = createMakaCuBackend({
     binaryPath: join(repoRoot, 'apps', 'desktop', 'resources', 'bin', 'maka-cu'),
     hostBundleId: 'com.maka.desktop',
     expectedBinarySha256,

@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { join, relative, resolve } from 'node:path';
 
 import { AiSdkBackend, buildComputerUseTools, getAIModel } from '../packages/runtime/dist/index.js';
-import { createCuaDriverBackend } from '../packages/computer-use/dist/index.js';
+import { createMakaCuBackend } from '../packages/computer-use/dist/index.js';
 import { createDirectRuntimeTurnLedger } from './cu-direct-runtime-ledger.mjs';
 import { sanitizeCuDirectReport } from './cu-report-sanitize.mjs';
 
@@ -174,7 +174,7 @@ async function physicalInputRecentlyActive() {
   return ageSeconds < 1;
 }
 
-const backend = createCuaDriverBackend({
+const backend = createMakaCuBackend({
   binaryPath,
   hostBundleId: 'com.maka.desktop',
   expectedBinarySha256,: '2025-06-18',

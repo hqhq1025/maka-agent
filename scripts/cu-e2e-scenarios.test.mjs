@@ -238,6 +238,6 @@ test('fixture helper is Electron-only and does not import Maka runtime or runner
   assert.match(source, /sandbox:\s*true/);
   assert.doesNotMatch(
     source,
-    /@maka|packages\/|apps\/desktop|createCuaDriverBackend|runOpenAIComputerLoop/,
+    /@maka|packages\/|apps\/desktop|createMakaCuBackend|runOpenAIComputerLoop/,
   );
 });

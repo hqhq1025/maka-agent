@@ -19,7 +19,7 @@ test('real AX model E2E owns fixture lifecycle and never activates it', () => {
 
 test('real AX model E2E uses production Runtime and backend with an enforced semantic budget', () => {
   assert.match(harness, /new AiSdkBackend/);
-  assert.match(harness, /createCuaDriverBackend/);
+  assert.match(harness, /createMakaCuBackend/);
   assert.match(harness, /getAIModel/);
   assert.match(harness, /MAKA_CU_MODEL_PROVIDER/);
   assert.match(harness, /claude-sonnet-4-6/);

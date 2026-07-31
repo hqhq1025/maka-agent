@@ -1,7 +1,7 @@
 import { readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, relative, resolve } from 'node:path';
-import { createCuaDriverBackend } from '../packages/computer-use/dist/index.js';
+import { createMakaCuBackend } from '../packages/computer-use/dist/index.js';
 import { buildComputerUseTools } from '../packages/runtime/dist/index.js';
 
 const repoRoot = new URL('..', import.meta.url).pathname;
@@ -52,7 +52,7 @@ async function waitForJson(path, label, timeoutMs = 15_000) {
 const traces = [];
 const idFlow = [];
 let latestObservationGeometry;
-const backend = createCuaDriverBackend({
+const backend = createMakaCuBackend({
   binaryPath,
   hostBundleId: 'com.maka.desktop',
   expectedBinarySha256,: '0.7.1',: '2025-06-18',
