@@ -851,6 +851,60 @@ describe('maka-cu backend', () => {
 
   // §6.4 — the host parses the key string.
 
+  it('asks the executor to take focus when the model named the control', async () => {
+    const { backend, logPath } = makeBackend({ allowCompatibilityInputDispatch: true });
+    const observation = await observeFixture(backend);
+    // el_1 is the window, not the focused element — exactly the case the
+    // promise covers: name a control and it is focused before the key lands.
+    const result = await backend.runSemantic!(
+      {
+        type: 'press_key',
+        observationId: observation.observationId,
+        key: 'Tab',
+        elementId: 'el_1',
+      },
+      signal(),
+      RUN_CONTEXT,
+    );
+    assert.equal(result.outcome.ok, true);
+    const dispatch = received(await readRecords(logPath), 'dispatch.key')[0];
+    assert.equal(dispatch?.focusToken, 'el_1');
+    assert.equal(dispatch?.focusPolicy, 'acquire');
+  });
+
+  it('verifies rather than takes focus when the model named no control', async () => {
+    const { backend, logPath } = makeBackend({ allowCompatibilityInputDispatch: true });
+    const observation = await observeFixture(backend);
+    const result = await backend.runSemantic!(
+      { type: 'press_key', observationId: observation.observationId, key: 'Tab' },
+      signal(),
+      RUN_CONTEXT,
+    );
+    assert.equal(result.outcome.ok, true);
+    const dispatch = received(await readRecords(logPath), 'dispatch.key')[0];
+    // The frame's own focused element, and no policy field: absent means
+    // `require`, which is the strict check the frame binding already earns.
+    assert.equal(dispatch?.focusToken, 'el_2');
+    assert.equal(dispatch?.focusPolicy, undefined);
+  });
+
+  it('refuses a key aimed at a control outside the quoted frame', async () => {
+    const { backend, logPath } = makeBackend({ allowCompatibilityInputDispatch: true });
+    const observation = await observeFixture(backend);
+    const result = await backend.runSemantic!(
+      {
+        type: 'press_key',
+        observationId: observation.observationId,
+        key: 'Tab',
+        elementId: 'el_404',
+      },
+      signal(),
+      RUN_CONTEXT,
+    );
+    assert.equal(!result.outcome.ok && result.outcome.error, 'stale_frame');
+    assert.equal(received(await readRecords(logPath), 'dispatch.key').length, 0);
+  });
+
   it('parses a key combination into the wire closed sets before sending it', async () => {
     const { backend, logPath } = makeBackend({ allowCompatibilityInputDispatch: true });
     const observation = await observeFixture(backend);

@@ -1193,17 +1193,24 @@ export function createMakaCuBackend(opts: MakaCuBackendOptions): CuDispatchBacke
     snapshot: StoredSnapshot,
     signal: AbortSignal,
     context: CuRunContext,
+    /**
+     * The control the model named, when it named one. §6.4 makes `focusToken`
+     * required either way — the difference is `focusPolicy`: without a named
+     * element the quoted frame's focused element is verified and nothing is
+     * moved, and with one the executor takes focus first.
+     */
+    target?: { token: string; digest: string },
   ): Promise<CuRunResult> {
     if (opts.allowCompatibilityInputDispatch !== true) {
       return compatibilityInputBlocked(String(wire.kind));
     }
-    if (!snapshot.focused) {
+    if (!target && !snapshot.focused) {
       // §6.4: focusToken is required and verified. Without a focused element in
       // the frame we quoted there is nothing to verify against, and typing into
       // "whatever is focused now" is the defect this replaces.
       return failure(
         'unsupported_action',
-        'the observed window had no focused element; click the field and observe again',
+        'the observed window had no focused element; name the control with element_id, or click the field and observe again',
       );
     }
     const capability = service.negotiated()?.capabilities.keyActions ?? [];
@@ -1215,14 +1222,23 @@ export function createMakaCuBackend(opts: MakaCuBackendOptions): CuDispatchBacke
     }
     const intervention = await physicalInputFailure();
     if (intervention) return intervention;
+    const focus = target ?? {
+      token: snapshot.focused!.token,
+      digest: snapshot.focused!.digest,
+    };
     const envelope = await service.call(
       'dispatch.key',
       {
         session: context.sessionId,
         snapshotId: snapshot.snapshotId,
         toolCallId: context.toolCallId,
-        focusToken: snapshot.focused.token,
-        expectElementDigest: snapshot.focused.digest,
+        focusToken: focus.token,
+        expectElementDigest: focus.digest,
+        // Absent means `require`, which is the strict check the frame binding
+        // already earns. `acquire` is sent only when the model named a control:
+        // that is the promise the tool description makes, and the alternative —
+        // clicking the element to focus it — is a press, not a focus.
+        ...(target ? { focusPolicy: 'acquire' } : {}),
         action: wire,
         observeAfter: { includeImage: true, settle: 'quiesce' },
       },
@@ -1459,7 +1475,18 @@ export function createMakaCuBackend(opts: MakaCuBackendOptions): CuDispatchBacke
             if (action.type === 'press_key') {
               const key = keyAction(action.key);
               if ('refusal' in key) return key.refusal;
-              return dispatchKey(key.wire, snapshot, signal, context);
+              if (action.elementId === undefined) {
+                return dispatchKey(key.wire, snapshot, signal, context);
+              }
+              // The model quoted a short id; the wire takes the token. Same
+              // lookup as an element action, so a key aimed at a control that
+              // is not in the quoted frame is refused for the same reason.
+              const token = snapshot.modelIds.get(action.elementId) ?? action.elementId;
+              const digest = snapshot.digests.get(token);
+              if (!digest) {
+                return failure('stale_frame', 'element is not part of the quoted observation');
+              }
+              return dispatchKey(key.wire, snapshot, signal, context, { token, digest });
             }
             return dispatchElement(action, snapshot, signal, context);
           },
