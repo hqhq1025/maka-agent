@@ -1460,7 +1460,7 @@ wireAppLifecycle({
 });
 
 function computerUseCapabilityInput() {
-  const serviceState = computerUse.backend?.serviceState?.();
+  const serviceState = computerUse.backend?.executorState?.();
   return {
     backendId: computerUse.backendId,
     health: computerUseServiceHealth(computerUse.backendId, serviceState),

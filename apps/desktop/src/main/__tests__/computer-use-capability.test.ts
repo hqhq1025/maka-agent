@@ -63,12 +63,12 @@ describe('Desktop Computer Use production wiring', () => {
     assert.match(capability, /'not_required'/);
     assert.doesNotMatch(capability, /required_scoped_lease/);
     assert.match(capability, /input\?\.health\.state/);
-    assert.match(capability, /未找到通过完整性检查的 cua-driver artifact/);
+    assert.match(capability, /未找到通过完整性检查的 maka-cu executor/);
     assert.match(capability, /等待.*权限/);
-    assert.match(capability, /service 正在启动或恢复/);
-    assert.match(capability, /service 启动失败、已退出或已停止/);
+    assert.match(capability, /executor 正在启动或恢复/);
+    assert.match(capability, /executor 启动失败、已退出或已停止/);
     assert.doesNotMatch(capability, /required_per_action/);
-    assert.match(main, /computerUse\.backend\?\.serviceState/);
+    assert.match(main, /computerUse\.backend\?\.executorState/);
     assert.match(main, /computerUseServiceHealth/);
   });
 

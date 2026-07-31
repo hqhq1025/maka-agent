@@ -144,7 +144,7 @@ function computerUseCapability(
   permissions: PermissionSnapshot['permissions'],
   now: number,
 ): CapabilitySnapshot {
-  const artifactAvailable = input?.backendId === 'cua-driver';
+  const artifactAvailable = input?.backendId === 'maka-cu';
   return staticCapability({
     id: 'computer_use',
     label: 'Computer Use',
@@ -177,7 +177,7 @@ function computerUseCapability(
       state: input?.health.state ?? 'not_available',
       source: 'runtime_probe',
       lastCheckedAt: now,
-      reason: input?.health.reason ?? 'cua-driver 后端当前不可用。',
+      reason: input?.health.reason ?? 'maka-cu 后端当前不可用。',
     },
   });
 }
@@ -189,11 +189,11 @@ function computerUseCapabilityReason(
   } | undefined,
   permissions: PermissionSnapshot['permissions'],
 ): string {
-  if (input?.backendId !== 'cua-driver') {
-    return '未找到通过完整性检查的 cua-driver artifact。';
+  if (input?.backendId !== 'maka-cu') {
+    return '未找到通过完整性检查的 maka-cu executor。';
   }
 
-  const reasons = ['cua-driver artifact 已通过本地完整性检查。'];
+  const reasons = ['maka-cu executor 已通过本地完整性检查。'];
   const missingPermissions = [
     ['辅助功能', permissions.accessibility.status],
     ['屏幕录制', permissions.screen_recording.status],
@@ -203,10 +203,10 @@ function computerUseCapabilityReason(
   }
   switch (input.health.state) {
     case 'not_available':
-      reasons.push('cua-driver service 启动失败、已退出或已停止。');
+      reasons.push('maka-cu executor 启动失败、已退出或已停止。');
       break;
     case 'degraded':
-      reasons.push('cua-driver service 正在启动或恢复。');
+      reasons.push('maka-cu executor 正在启动或恢复。');
       break;
     case 'healthy':
       reasons.push('操作与截图 service 已就绪；按目标与动作类别授权后可操作本机应用。');

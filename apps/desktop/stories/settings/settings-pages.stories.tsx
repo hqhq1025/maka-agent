@@ -535,7 +535,7 @@ const healthSignals: HealthSignal[] = [
     relatedCapabilityId: 'computer_use',
   },
   {
-    id: 'probe:cua-driver',
+    id: 'probe:maka-cu',
     label: 'cua-driver 运行态探测',
     scope: 'capability',
     layer: 'runtime_probe',
