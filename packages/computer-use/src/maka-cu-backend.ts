@@ -14,12 +14,12 @@
 // not exist as a signed artifact yet, so nothing may fall back to it silently.
 //
 // What the protocol declares and Maka's own types cannot yet carry: per-element
-// `truncated`, `snapshot.truncated`, `actions`, `subrole`, `placeholder`,
-// `selectedText` and `obscuringRects`. They are read and validated here — a
-// missing declared field is version skew the host must catch — but only the
-// truncation flags reach anywhere, through `onTrace`. Giving them a model-facing
-// home means new fields on `CuObservedElement`/`CuObservation`, which this
-// change deliberately does not make.
+// `truncated`, `snapshot.truncated`, `actions`, `subrole`, `placeholder` and
+// `selectedText`. They are read and validated here — a missing declared field is
+// version skew the host must catch — but only the truncation flags reach
+// anywhere, through `onTrace`. Giving them a model-facing home means new fields
+// on `CuObservedElement`/`CuObservation`, which this change deliberately does
+// not make.
 import { randomUUID } from 'node:crypto';
 import { createHash } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
@@ -765,6 +765,15 @@ export function createMakaCuBackend(opts: MakaCuBackendOptions): CuDispatchBacke
       windowBounds: snapshot.target.bounds,
       ...(sourceBoundsPx ? { sourceBoundsPx } : {}),
       zIndex: snapshot.target.zIndex,
+      // The executor computed the occlusion; the host does not re-derive it.
+      //
+      // On the cua-driver path this had to be reconstructed from the window
+      // server — layer-0 windows only, above the target only, minus a
+      // titleless full-screen surface that is the Dock and not a cover. maka-cu
+      // answers it directly, and the runtime already knows what to do with the
+      // answer: an empty list is what `frontmost` means, and a point inside one
+      // of these rects is what `destinationCovered` means.
+      obscuringRects: snapshot.obscuringRects,
       // §4.3: the window digest already is a content fingerprint over every
       // element digest plus bounds and title, computed where the tree lives.
       contentFingerprint: snapshot.windowDigest,
@@ -823,7 +832,10 @@ export function createMakaCuBackend(opts: MakaCuBackendOptions): CuDispatchBacke
     // on-screen state: the caller named one window, not "one of the visible ones".
     const winner = windows.find((window) => window.windowId === input.windowId);
     if (!winner) {
-      throw new MakaCuHostRefusal('target_missing', `no window with id ${input.windowId} is open`);
+      throw new MakaCuHostRefusal(
+        'target_missing',
+        `no window with id ${input.windowId} is open. Window ids come from list_apps and from the windowId on an observation, and do not survive the window being closed.`,
+      );
     }
     // §5.1: both were supplied, so both must hold, and no window satisfies the
     // pair when they disagree. The comparison is against `appId` and nothing
@@ -834,7 +846,7 @@ export function createMakaCuBackend(opts: MakaCuBackendOptions): CuDispatchBacke
     if (input.app && input.app !== winner.appId) {
       throw new MakaCuHostRefusal(
         'target_missing',
-        `window ${input.windowId} does not belong to ${input.app}`,
+        `window ${input.windowId} does not belong to ${input.app}. App ids come from list_apps and from the appId on an observation, and are the executor's own strings — not a display name.`,
       );
     }
     return { kind: 'window', pid: winner.pid, windowId: winner.windowId };
@@ -1015,18 +1027,30 @@ export function createMakaCuBackend(opts: MakaCuBackendOptions): CuDispatchBacke
         }
         return { wire: { kind: 'secondary_action', action: action.action } };
       }
+      case 'scroll_element': {
+        // §6.1 takes pages directly, so nothing is converted on the way out —
+        // the model declares pages, the runtime type declares pages, and the
+        // executor scrolls pages. The cua-driver path had to turn this into
+        // wheel clicks, and the rounding was the reason a half-page scroll
+        // became a whole one.
+        const pages = action.pages ?? 1;
+        if (!Number.isFinite(pages) || pages <= 0) {
+          // The executor answers a non-finite or non-positive `pages` with
+          // `-32602`, which surfaces as a protocol disagreement rather than as
+          // the bad argument it is. Refuse here, where the number came from.
+          return {
+            refusal: failure(
+              'invalid_coordinate',
+              `scroll_element needs a positive number of pages, got ${pages}`,
+            ),
+          };
+        }
+        return { wire: { kind: 'scroll', direction: action.direction, pages } };
+      }
       default:
         // Reached only by an action Maka can express and this backend cannot
-        // map. Worth naming what is missing rather than what is unknown: §6.1
-        // declares `{ kind: "scroll", direction, pages }` and the executor
-        // advertises `scroll` in its handshake `elementActions`, but Maka's
-        // semantic action union has no scroll member — the compiler refuses a
-        // `case 'scroll'` here, which is the proof. Scrolling goes through the
-        // point path today, aiming at a coordinate rather than at the scroll
-        // area it means, and that is exactly the difference that shows up when
-        // the window is in the background. Wiring it up needs a new semantic
-        // action across the runtime types, the tool schema and the approval
-        // classes, so it is named rather than half-built.
+        // map onto an element. Not every semantic action is one: `press_key`
+        // goes to `dispatch.key` and the coordinate actions to `dispatch.point`.
         return {
           refusal: failure('unsupported_action', `'${action.type}' is not an element action`),
         };
