@@ -1,5 +1,6 @@
 import type { UiLocale } from '@maka/core';
 import type { ToolActivityItem } from '../materialize.js';
+import { computerActionLabel } from './computer-action-label.js';
 import { formatUserVisibleToolText } from './preview-utils.js';
 import { resolveToolDisplayName, trowActivityKind, type TrowActivityKind } from './trow-summary.js';
 
@@ -25,7 +26,14 @@ export function deriveToolActivityPresentation(
 ): ToolActivityPresentation {
   return {
     kind: trowActivityKind(item.toolName, item.activityKind),
-    summary: formatUserVisibleToolText(item.intent ?? '', locale) || resolveToolDisplayName(item, locale),
+    // The model's own words when a backend supplies them; otherwise, for
+    // Computer Use, a label derived from the call's arguments. Only tools whose
+    // display name already reads as an action fall through to the name — CU's
+    // is "Maka Computer", a noun, which made every call in a turn the same row.
+    summary:
+      formatUserVisibleToolText(item.intent ?? '', locale)
+      || computerActionLabel(item, locale)
+      || resolveToolDisplayName(item, locale),
     // Only a permission prompt is an attention state: it is actionable and a
     // collapsed row would hide it. An errored tool stays collapsed — the trow
     // summary line keeps the failure signal (「N 个失败」 in destructive

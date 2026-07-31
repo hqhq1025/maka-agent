@@ -58,6 +58,46 @@ export interface ToolActivityCopy {
      *  and only reasoning is still streaming. */
     thinkingActivity: string;
   };
+  /**
+   * Row labels for one Computer Use call, derived from its arguments (see
+   * `computer-action-label.ts`). The tool's display name is a noun, so every
+   * call rendered the same row; these are verb phrases that say what the call
+   * did. An element action names the element by id — the persisted observation
+   * carries no labels, so the id is the most specific truthful thing the
+   * renderer has.
+   */
+  computer: {
+    fallback: string;
+    listApps: string;
+    launchApp: (app?: string) => string;
+    observe: string;
+    observeApp: (app: string) => string;
+    observeWindow: (windowId: number) => string;
+    screenshot: string;
+    screenshotApp: (app: string) => string;
+    screenshotWindow: (windowId: number) => string;
+    element: (elementId: string) => string;
+    elementUnknown: string;
+    clickElement: (element: string) => string;
+    setValue: (value: string | undefined, element: string) => string;
+    selectText: (text: string | undefined, element: string) => string;
+    secondaryAction: (action: string | undefined, element: string) => string;
+    scrollElement: (direction: string | undefined, element: string) => string;
+    scroll: (direction?: string) => string;
+    direction: Record<'up' | 'down' | 'left' | 'right', string>;
+    sequence: (labels: readonly string[], more: boolean) => string;
+    sequenceCount: (count: number) => string;
+    pressKey: (key?: string) => string;
+    type: (text?: string) => string;
+    holdKey: (key: string | undefined, seconds?: number) => string;
+    wait: (seconds?: number) => string;
+    zoom: string;
+    cursorPosition: string;
+    pointer: Record<
+      'move' | 'left' | 'right' | 'middle' | 'double' | 'triple' | 'down' | 'up' | 'drag',
+      (point?: string) => string
+    >;
+  };
   automation: {
     created: (name: string) => string;
     nextFire: (value: string) => string;
@@ -181,6 +221,48 @@ const TOOL_ACTIVITY_COPY = {
       failed: (n) => `${n} 个失败`, sandboxBlocked: (n) => `${n} 个可能被沙箱阻止`, join: (clauses) => clauses.join('，'), live: (summary) => `正在${summary}`, activity: { computer: '操作电脑' },
       thinkingActivity: '深度思考',
     },
+    computer: {
+      fallback: '操作电脑',
+      listApps: '列出打开的应用',
+      launchApp: (app) => app ? `打开「${app}」` : '打开应用',
+      observe: '观察当前窗口',
+      observeApp: (app) => `观察「${app}」窗口`,
+      observeWindow: (windowId) => `观察窗口 ${windowId}`,
+      screenshot: '截图当前窗口',
+      screenshotApp: (app) => `截图「${app}」窗口`,
+      screenshotWindow: (windowId) => `截图窗口 ${windowId}`,
+      element: (elementId) => `元素 ${elementId}`,
+      elementUnknown: '该元素',
+      clickElement: (element) => `点击${element}`,
+      // The element phrase ends every clause it appears in: it is "元素 e12",
+      // and Chinese typography wants a space around the latin id, which a
+      // trailing 「的值」/「执行」 would either eat or leave dangling.
+      setValue: (value, element) => value === undefined ? `设置值：${element}` : `输入「${value}」`,
+      selectText: (text, element) => text === undefined ? `选择文本：${element}` : `选择文本「${text}」`,
+      secondaryAction: (action, element) => action === undefined ? `次要操作：${element}` : `执行「${action}」：${element}`,
+      scrollElement: (direction, element) => direction ? `${direction}滚动${element}` : `滚动${element}`,
+      scroll: (direction) => direction ? `${direction}滚动` : '滚动',
+      direction: { up: '向上', down: '向下', left: '向左', right: '向右' },
+      sequence: (labels, more) => `依次操作${labels.map((label) => `「${label}」`).join('')}${more ? '…' : ''}`,
+      sequenceCount: (count) => `依次操作 ${count} 个控件`,
+      pressKey: (key) => key ? `按下 ${key}` : '按下按键',
+      type: (text) => text ? `输入「${text}」` : '输入文本',
+      holdKey: (key, seconds) => key === undefined ? '按住按键' : seconds === undefined ? `按住 ${key}` : `按住 ${key} ${seconds} 秒`,
+      wait: (seconds) => seconds === undefined ? '等待' : `等待 ${seconds} 秒`,
+      zoom: '放大查看区域',
+      cursorPosition: '读取指针位置',
+      pointer: {
+        move: (point) => point ? `移动指针到 ${point}` : '移动指针',
+        left: (point) => point ? `点击 ${point}` : '点击',
+        right: (point) => point ? `右键点击 ${point}` : '右键点击',
+        middle: (point) => point ? `中键点击 ${point}` : '中键点击',
+        double: (point) => point ? `双击 ${point}` : '双击',
+        triple: (point) => point ? `三击 ${point}` : '三击',
+        down: (point) => point ? `在 ${point} 按下鼠标` : '按下鼠标',
+        up: (point) => point ? `在 ${point} 松开鼠标` : '松开鼠标',
+        drag: (point) => point ? `拖动到 ${point}` : '拖动',
+      },
+    },
     automation: { created: (name) => `自动化任务已创建：${name}`, nextFire: (value) => `下次触发：${value}`, deleted: '自动化任务已删除', notFound: '未找到该任务（可能已完成或已删除）', list: (count) => `自动化任务列表 (${count})`, empty: '当前会话暂无自动化任务' },
     loadTools: { displayName: '加载工具组', loaded: (namespace) => namespace ? `已加载 ${namespace} 工具组` : '已加载工具组', count: (n) => `新增 ${n} 个可用工具：`, footer: '下一步即可调用' },
     permissionDenied: '用户已拒绝权限请求',
@@ -212,6 +294,45 @@ const TOOL_ACTIVITY_COPY = {
       kind: { read: (n) => `Read ${n} ${n === 1 ? 'file' : 'files'}`, search: (n) => `Searched ${n} ${n === 1 ? 'time' : 'times'}`, websearch: (n) => `Ran ${n} web ${n === 1 ? 'search' : 'searches'}`, webfetch: (n) => `Fetched ${n} web ${n === 1 ? 'page' : 'pages'}`, edit: (n) => `Edited ${n} ${n === 1 ? 'file' : 'files'}`, command: (n) => `Ran ${n} ${n === 1 ? 'command' : 'commands'}`, explore: (n) => `Explored ${n} ${n === 1 ? 'time' : 'times'}`, browser: (n) => `Performed ${n} browser ${n === 1 ? 'action' : 'actions'}`, computer: (n) => `Used the computer ${n} ${n === 1 ? 'time' : 'times'}`, tool: (n) => `Called ${n} ${n === 1 ? 'tool' : 'tools'}` },
       failed: (n) => `${n} failed`, sandboxBlocked: (n) => `${n} possibly blocked by sandbox`, join: (clauses) => clauses.join(', '), live: (summary) => `Working: ${summary}`, activity: { computer: 'using the computer' },
       thinkingActivity: 'Thinking',
+    },
+    computer: {
+      fallback: 'Use the computer',
+      listApps: 'List open apps',
+      launchApp: (app) => app ? `Open “${app}”` : 'Open an app',
+      observe: 'Observe the current window',
+      observeApp: (app) => `Observe the “${app}” window`,
+      observeWindow: (windowId) => `Observe window ${windowId}`,
+      screenshot: 'Screenshot the current window',
+      screenshotApp: (app) => `Screenshot the “${app}” window`,
+      screenshotWindow: (windowId) => `Screenshot window ${windowId}`,
+      element: (elementId) => `element ${elementId}`,
+      elementUnknown: 'the element',
+      clickElement: (element) => `Click ${element}`,
+      setValue: (value, element) => value === undefined ? `Set the value of ${element}` : `Enter “${value}”`,
+      selectText: (text, element) => text === undefined ? `Select text in ${element}` : `Select the text “${text}”`,
+      secondaryAction: (action, element) => action === undefined ? `Run a secondary action on ${element}` : `Run “${action}” on ${element}`,
+      scrollElement: (direction, element) => direction ? `Scroll ${element} ${direction}` : `Scroll ${element}`,
+      scroll: (direction) => direction ? `Scroll ${direction}` : 'Scroll',
+      direction: { up: 'up', down: 'down', left: 'left', right: 'right' },
+      sequence: (labels, more) => `Operate ${labels.map((label) => `“${label}”`).join(', ')}${more ? ', …' : ''}`,
+      sequenceCount: (count) => `Operate ${count} ${count === 1 ? 'control' : 'controls'}`,
+      pressKey: (key) => key ? `Press ${key}` : 'Press a key',
+      type: (text) => text ? `Type “${text}”` : 'Type text',
+      holdKey: (key, seconds) => key === undefined ? 'Hold a key' : seconds === undefined ? `Hold ${key}` : `Hold ${key} for ${seconds}s`,
+      wait: (seconds) => seconds === undefined ? 'Wait' : `Wait ${seconds}s`,
+      zoom: 'Zoom into a region',
+      cursorPosition: 'Read the pointer position',
+      pointer: {
+        move: (point) => point ? `Move the pointer to ${point}` : 'Move the pointer',
+        left: (point) => point ? `Click ${point}` : 'Click',
+        right: (point) => point ? `Right-click ${point}` : 'Right-click',
+        middle: (point) => point ? `Middle-click ${point}` : 'Middle-click',
+        double: (point) => point ? `Double-click ${point}` : 'Double-click',
+        triple: (point) => point ? `Triple-click ${point}` : 'Triple-click',
+        down: (point) => point ? `Press the mouse at ${point}` : 'Press the mouse',
+        up: (point) => point ? `Release the mouse at ${point}` : 'Release the mouse',
+        drag: (point) => point ? `Drag to ${point}` : 'Drag',
+      },
     },
     automation: { created: (name) => `Automation created: ${name}`, nextFire: (value) => `Next run: ${value}`, deleted: 'Automation deleted', notFound: 'Automation not found (it may have completed or been deleted)', list: (count) => `Automations (${count})`, empty: 'No automations in this conversation' },
     loadTools: { displayName: 'Load tools', loaded: (namespace) => namespace ? `Loaded ${namespace} tools` : 'Loaded tools', count: (n) => `Added ${n} available ${n === 1 ? 'tool' : 'tools'}:`, footer: 'Ready to use' },

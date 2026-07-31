@@ -28,6 +28,7 @@ import {
   type TrowActivityKind,
 } from './tool-activity/trow-summary.js';
 import { isToolRowRunning, isToolRowSettled } from './tool-activity/tool-row-motion.js';
+import { computerActionLabel } from './tool-activity/computer-action-label.js';
 import {
   createToolDisclosureState,
   deriveToolActivityPresentation,
@@ -529,7 +530,9 @@ function ToolTrowRow({ item }: { item: ToolActivityItem }) {
       : 'text-[color:var(--muted-foreground)]';
   // Settled attention states stay collapsed, so tint alone is not enough:
   // spell out whether the operation failed or the sandbox blocked it.
-  const rowLabel = item.intent ? formatToolIntent(item.intent) : resolveToolDisplayName(item, locale);
+  const rowLabel = item.intent
+    ? formatToolIntent(item.intent)
+    : computerActionLabel(item, locale) ?? resolveToolDisplayName(item, locale);
   return (
     <Collapsible className="flex flex-col" data-trow="row" data-status={sandboxBlocked ? 'blocked' : item.status} data-settled={settled ? 'true' : undefined} open={disclosure.open} onOpenChange={disclosure.setOpen}>
       <CollapsibleTrigger className="group flex w-full items-center gap-2 py-0.5 text-left">
