@@ -16,7 +16,7 @@
 //
 //   node scripts/prepare-maka-cu.mjs
 //   MAKA_CU_SOURCE=/path/to/maka-cu node scripts/prepare-maka-cu.mjs
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import {
   chmodSync,
@@ -105,6 +105,62 @@ mkdirSync(dirname(destination), { recursive: true });
 copyFileSync(binary, destination);
 chmodSync(destination, 0o755);
 
+/**
+ * What the binary is actually signed with, read rather than asserted.
+ *
+ * `swift build` linker-signs ad-hoc, which runs fine locally — a file built on
+ * this machine carries no quarantine flag, so Gatekeeper never looks at it, and
+ * TCC attributes the executor to whoever spawned it. It is distribution that
+ * needs more: notarization requires every executable in the bundle to be
+ * Developer ID signed with the hardened runtime, and one ad-hoc helper fails the
+ * whole app.
+ *
+ * So this reports what it found. A developer who does hold a certificate signs
+ * the binary before running this, and the manifest records that — rather than
+ * making them hand-edit the field this script would otherwise overwrite.
+ */
+function signatureOf(path) {
+  // codesign writes its whole report to stderr and exits 0 for a signed file,
+  // so reading stdout, or only reading stderr on failure, reports every signed
+  // binary as unsigned. It did: an ad-hoc binary came back as `none`.
+  const probe = spawnSync('codesign', ['-dv', '--verbose=4', path], { encoding: 'utf8' });
+  const text = `${probe.stdout ?? ''}${probe.stderr ?? ''}`;
+  if (!text.trim()) return { signature: 'none', hardenedRuntime: false };
+  const team = /^TeamIdentifier=(.+)$/m.exec(text)?.[1]?.trim();
+  const authority = /^Authority=(.+)$/m.exec(text)?.[1]?.trim();
+  const flags = /^CodeDirectory .*flags=0x[0-9a-f]+\(([^)]*)\)/m.exec(text)?.[1] ?? '';
+  const hardenedRuntime = flags.includes('runtime');
+  if (authority?.startsWith('Developer ID Application')) {
+    return {
+      signature: 'developer-id',
+      ...(team && team !== 'not set' ? { teamIdentifier: team } : {}),
+      hardenedRuntime,
+      authority,
+    };
+  }
+  if (flags.includes('adhoc')) return { signature: 'adhoc', hardenedRuntime };
+  if (authority) return { signature: 'other', authority, hardenedRuntime };
+  return { signature: 'none', hardenedRuntime: false };
+}
+
+/** Stapled means the notarization ticket travels with the file, offline. */
+function isStapled(path) {
+  try {
+    execFileSync('xcrun', ['stapler', 'validate', path], { stdio: 'ignore' });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+const signing = signatureOf(binary);
+const stapled = isStapled(binary);
+// Every condition, or none of it. Distribution is the one place a partial
+// answer is worse than a refusal: an ad-hoc helper inside a notarized app is
+// not a smaller problem than an unsigned one, it fails the same way.
+const distributionReady =
+  signing.signature === 'developer-id' && signing.hardenedRuntime === true && stapled;
+
 const manifest = JSON.parse(readFileSync(manifestPath, 'utf8'));
 manifest.makaCu = {
   repo: 'hqhq1025/maka-cu',
@@ -115,16 +171,21 @@ manifest.makaCu = {
   binarySizeBytes: statSync(binary).size,
   binarySha256,
   buildProvenance: 'local-source-build',
-  signature: 'none',
-  notarization: 'missing',
-  // The host refuses an unready entry in a packaged build. Flipping this needs
-  // a signed, notarized artifact, not an edit here.
-  distributionReady: false,
+  ...signing,
+  notarization: stapled ? 'stapled' : 'missing',
+  distributionReady,
 };
 writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
 
 process.stderr.write(
   `prepare-maka-cu: ${destination}\n` +
     `prepare-maka-cu: sha256 ${binarySha256}\n` +
-    `prepare-maka-cu: commit ${manifest.makaCu.commit} on ${manifest.makaCu.branch}\n`,
+    `prepare-maka-cu: commit ${manifest.makaCu.commit} on ${manifest.makaCu.branch}\n` +
+    `prepare-maka-cu: signature ${signing.signature}` +
+    `${signing.hardenedRuntime ? ' + hardened runtime' : ''}` +
+    `, notarization ${manifest.makaCu.notarization}` +
+    `, distributionReady ${distributionReady}\n` +
+    (distributionReady
+      ? ''
+      : 'prepare-maka-cu: development only — a packaged build will refuse this entry.\n'),
 );
