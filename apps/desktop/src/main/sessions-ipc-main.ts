@@ -77,6 +77,7 @@ export interface SessionsIpcDeps {
   taskLedgerStore: MainTaskLedgerWiring['store'];
   goalWiring: MainGoalWiring;
   automationManager: MainAutomationWiring['manager'];
+  computerUseOverlay: SessionOverlayCleanup;
   computerUseTools: SessionToolCleanup;
   artifactStore: ArtifactStore;
   attachmentApprovals: AttachmentApprovalRegistry;
@@ -206,6 +207,7 @@ export function registerSessionsIpc(
     taskLedgerStore,
     goalWiring,
     automationManager,
+    computerUseOverlay,
     computerUseTools,
     artifactStore,
     attachmentApprovals,
@@ -239,6 +241,7 @@ export function registerSessionsIpc(
     emitModeChanged: (sessionId) => emitSessionsChanged('mode-change', sessionId),
   });
   const removeSession = async (sessionId: string): Promise<void> => {
+    computerUseOverlay.clearForSession(sessionId);
     // The mirror is per-session too, and dies with it.
     computerUsePip?.clearForSession(sessionId);
     computerUseScreenLock?.clearForSession(sessionId);
@@ -384,6 +387,7 @@ export function registerSessionsIpc(
     void stopSession(sessionId, { source: 'stop_button' });
   });
   async function stopSession(sessionId: string, input?: { source?: 'stop_button' }): Promise<void> {
+    computerUseOverlay.clearForSession(sessionId);
     computerUsePip?.clearForSession(sessionId);
     computerUseScreenLock?.clearForSession(sessionId);
     computerUseTools.clearSession(sessionId);
@@ -548,6 +552,7 @@ export function registerSessionsIpc(
   });
   ipcMain.handle('sessions:archive', async (_event, sessionId: string, options?: unknown) => {
     for (const id of await resolveSessionActionIds(runtime, sessionId, options)) {
+      computerUseOverlay.clearForSession(id);
       computerUsePip?.clearForSession(id);
       computerUseScreenLock?.clearForSession(id);
       computerUseTools.clearSession(id);

@@ -19,12 +19,13 @@ import {
 import type { HostCapabilitiesResolver, MakaTool } from '@maka/runtime';
 import type { WorkspacePrivacyContext } from '@maka/core/incognito';
 import { createAgentMailboxStore, createSettingsStore } from '@maka/storage';
+import { createComputerUseOverlayHook } from '@maka/computer-use';
 import { buildWebSearchAgentTool } from './web-search/agent-tool.js';
 import { buildRiveWorkflowTool } from './rive-workflow-tool.js';
 import { buildExploreAgentTool } from './explore-agent-tool.js';
 import { buildBrowserTools } from './browser/browser-tools.js';
-import type { CuOverlayHook } from '@maka/runtime';
 import { createComputerUseHost } from './computer-use-host.js';
+import { createCursorOverlayController } from './computer-use/cursor-overlay-window.js';
 import {
   createComputerUseStatusItem,
   withComputerUseStatusItem,
@@ -112,27 +113,6 @@ export interface DesktopToolAssemblyDeps {
  * hook stays in main.ts (it assigns a module-scoped `let`); the overlay
  * controller is returned so main.ts can wire it.
  */
-/**
- * An overlay hook that presents nothing.
- *
- * cua-driver draws the agent cursor itself — coloured per session so concurrent
- * runs are distinguishable, and animated by the process that knows where the
- * pointer is going. Maka used to turn that off and paint a replica, which meant
- * carrying a port of someone else's motion engine and reconciling two ideas of
- * where the target was; the replica is gone.
- *
- * The seam stays because two things still hang off it — the menu-bar item and
- * the picture-in-picture mirror — and both wrap a hook rather than replace one.
- */
-function passThroughOverlayHook(): CuOverlayHook {
-  return {
-    onActionBegin: () => ({
-      readyForInteraction: Promise.resolve(),
-      finished: Promise.resolve(),
-    }),
-  };
-}
-
 export function assembleDesktopTools(deps: DesktopToolAssemblyDeps) {
   const {
     isComputerUseRealModelE2e,
@@ -188,6 +168,7 @@ export function assembleDesktopTools(deps: DesktopToolAssemblyDeps) {
   // WebContentsView via the BrowserViewHost the desktop provides in registerIpc;
   // outside the app (no host) they report the browser as unavailable.
   const browserTools: MakaTool[] = buildBrowserTools();
+  const computerUseOverlay = createCursorOverlayController();
   // Visible for as long as any session is driving the machine, unlike the
   // cursor, which stays hidden whenever the window being driven is covered by
   // something else.
@@ -296,16 +277,12 @@ export function assembleDesktopTools(deps: DesktopToolAssemblyDeps) {
             },
           }
         : {}),
-    // No Maka-drawn cursor in this chain. cua-driver draws the agent cursor
-    // itself, coloured per session and animated by the process that knows
-    // where the pointer is going; Maka used to turn that off and paint a
-    // replica, which meant carrying a port of someone else's motion engine and
-    // reconciling two ideas of where the target was. What stays here is what
-    // the driver does not do: the menu-bar item, and the mirror of the window
-    // being driven.
     overlay: withComputerUsePip(
       withComputerUseStatusItem(
-        withComputerUseScreenLock(passThroughOverlayHook(), computerUseScreenLock),
+        withComputerUseScreenLock(
+          createComputerUseOverlayHook(computerUseOverlay),
+          computerUseScreenLock,
+        ),
         computerUseStatusItem,
       ),
       computerUsePip,
@@ -432,6 +409,7 @@ export function assembleDesktopTools(deps: DesktopToolAssemblyDeps) {
     riveTools,
     browserTools,
     computerUse,
+    computerUseOverlay,
     computerUseStatusItem,
     computerUsePip,
     computerUseScreenLock,

@@ -59,6 +59,7 @@ export interface AppLifecycleDeps {
   automationWiring: ReturnType<typeof createMainAutomationWiring>;
   goalWiring: ReturnType<typeof createMainGoalWiring>;
   computerUse: AssembledTools['computerUse'];
+  computerUseOverlay: AssembledTools['computerUseOverlay'];
   shellRuns: ShellRunProcessManager;
   mcpManager: McpClientManager;
   runtimePersistence: Awaited<ReturnType<typeof openRuntimeEventPersistence>>;
@@ -111,6 +112,7 @@ export function wireAppLifecycle(deps: AppLifecycleDeps): void {
     automationWiring,
     goalWiring,
     computerUse,
+    computerUseOverlay,
     shellRuns,
     mcpManager,
     runtimePersistence,
@@ -346,6 +348,7 @@ export function wireAppLifecycle(deps: AppLifecycleDeps): void {
   }
 
   app.on('window-all-closed', () => {
+    computerUseOverlay.destroyAll();
     if (process.platform !== 'darwin') app.quit();
   });
 
@@ -365,6 +368,7 @@ export function wireAppLifecycle(deps: AppLifecycleDeps): void {
     dailyReview.stopScheduler();
     getSettingsIpc()?.dispose();
     const results = await Promise.allSettled([
+      Promise.resolve().then(() => computerUseOverlay.destroyAll()),
       Promise.resolve().then(() => computerUse.backend?.dispose?.()),
       botRegistry.stopAll(),
       openGateway.stop(),
