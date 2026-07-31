@@ -53,6 +53,7 @@ import {
   readApp,
   readDispatchResult,
   readImageField,
+  readLaunchedApp,
   readSnapshot,
   readWindow,
   MAKA_CU_RPC_ERROR,
@@ -80,6 +81,19 @@ import {
  * what a model-issued scroll of `n` should move.
  */
 const SCROLL_UNITS_PER_PAGE = 10;
+
+/**
+ * How long the executor may wait for the launched app's first window (§5.7).
+ *
+ * Measured on the cua-driver path: `launch_app` returned in 1.3–3.2s and the
+ * window was mapped 2.3–4.5s in, which is why an executor that answers with the
+ * window array it sees at launch time always answers with an empty one. maka.cu
+ * moved that wait into the executor, so the host declares the budget and reads
+ * `waited.reason` rather than polling `window.list` itself. Generous because a
+ * cold start of an app that has never run is the slow case, and returning
+ * without a window costs the model a whole extra observe cycle to find one.
+ */
+const LAUNCH_WINDOW_TIMEOUT_MS = 8_000;
 
 /** §6.1 secondary actions are a closed set of normalised names (§5 `actions`). */
 const ELEMENT_ACTION_NAMES = [
@@ -189,6 +203,23 @@ export type MakaCuTraceEvent =
       tier?: string;
       path?: string;
       effect?: string;
+    }
+  | {
+      type: 'launch';
+      toolCallId?: string;
+      app: string;
+      appId: string;
+      pid: number;
+      windows: number;
+      /**
+       * §5.7: the executor waits for a window rather than reporting the empty
+       * array it sees at launch time. `waitReason` says which of the three
+       * things happened, so a launch that timed out without a window is not
+       * mistaken for one that never asked.
+       */
+      waitedMs: number;
+      waitReason: string;
+      foregroundTaken: boolean;
     }
   | {
       type: 'protocol_violation';
@@ -1372,6 +1403,49 @@ export function createMakaCuBackend(opts: MakaCuBackendOptions): CuDispatchBacke
 
     async captureObservation(input, signal, context) {
       return withOperationQueue(signal, () => observe(input, signal, context), context.sessionId);
+    },
+
+    async launchApp(input, signal, context) {
+      return withOperationQueue(
+        signal,
+        async () => {
+          await ensureSession(context.sessionId, signal);
+          // §5.1 makes `params.app` the one place a display name is legal: an
+          // app that is not running has no `appId` the caller could have
+          // learned. Every later call uses the resolved `appId` in the result.
+          const envelope = await service.call(
+            'apps.launch',
+            {
+              session: context.sessionId,
+              app: input.app,
+              waitForWindowMs: LAUNCH_WINDOW_TIMEOUT_MS,
+            },
+            signal,
+          );
+          if (!envelope.ok) throw new MakaCuDomainRefusal('apps.launch', envelope.error);
+          const launched = readLaunchedApp('apps.launch', envelope);
+          trace({
+            type: 'launch',
+            app: input.app,
+            appId: launched.appId,
+            pid: launched.pid,
+            windows: launched.windows.length,
+            waitedMs: launched.waited.ms,
+            waitReason: launched.waited.reason,
+            foregroundTaken: launched.foregroundTaken,
+          });
+          return {
+            pid: launched.pid,
+            bundleId: launched.appId,
+            ...(launched.name === undefined ? {} : { name: launched.name }),
+            windows: launched.windows,
+            // The executor declares whether the launch took the foreground, so
+            // this is never the absent "nobody checked" third value.
+            focusHeld: !launched.foregroundTaken,
+          };
+        },
+        context.sessionId,
+      );
     },
 
     async runSemantic(action, signal, context) {

@@ -404,6 +404,24 @@ export interface MakaCuApp {
   windowCount: number;
 }
 
+/** §5.7 `apps.launch`. */
+export interface MakaCuLaunchedApp {
+  pid: number;
+  appId: string;
+  name?: string;
+  /**
+   * Declared, never inferred. `CuLaunchedApp.focusHeld` is absent when the
+   * executor did not check, and an absent boolean meaning "unknown" is a
+   * three-valued field pretending to be two — so this one is required and the
+   * host inverts it rather than guessing at it.
+   */
+  foregroundTaken: boolean;
+  windows: Array<{ windowId: number; title?: string }>;
+  waited: { ms: number; reason: 'window_appeared' | 'timeout' | 'not_requested' };
+}
+
+const LAUNCH_WAIT_REASONS = ['window_appeared', 'timeout', 'not_requested'] as const;
+
 export interface MakaCuSnapshot {
   snapshotId: string;
   capturedAt: number;
@@ -633,6 +651,36 @@ export function readApp(method: string, value: unknown): MakaCuApp {
     pid: requireNumber(method, app.pid, 'app.pid'),
     ...(name === undefined ? {} : { name }),
     windowCount: requireNumber(method, app.windowCount, 'app.windowCount'),
+  };
+}
+
+/**
+ * §5.7. `foregroundTaken` is required: the executor either checked or it did
+ * not, and a host that defaults it to `false` reports "the user kept their
+ * focus" about a launch nobody watched.
+ */
+export function readLaunchedApp(method: string, value: unknown): MakaCuLaunchedApp {
+  const result = requireRecord(method, value, 'result');
+  const name = optionalText(method, result.name, 'name');
+  const waited = requireRecord(method, result.waited, 'waited');
+  const windows = requireArray(method, result.windows, 'windows').map((entry) => {
+    const window = requireRecord(method, entry, 'window');
+    const title = optionalText(method, window.title, 'window.title');
+    return {
+      windowId: requireNumber(method, window.windowId, 'window.windowId'),
+      ...(title === undefined ? {} : { title }),
+    };
+  });
+  return {
+    pid: requireNumber(method, result.pid, 'pid'),
+    appId: requireString(method, result.appId, 'appId'),
+    ...(name === undefined ? {} : { name }),
+    foregroundTaken: requireBoolean(method, result.foregroundTaken, 'foregroundTaken'),
+    windows,
+    waited: {
+      ms: requireNumber(method, waited.ms, 'waited.ms'),
+      reason: requireMember(method, waited.reason, LAUNCH_WAIT_REASONS, 'waited.reason'),
+    },
   };
 }
 

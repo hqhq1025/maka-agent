@@ -60,6 +60,8 @@ const OK_OUTCOME = process.env.MAKACU_MOCK_OK_OUTCOME || 'ok';
 const SESSION_ERROR = process.env.MAKACU_MOCK_SESSION_ERROR || '';
 const WINDOW_LIST_ERROR = process.env.MAKACU_MOCK_WINDOW_LIST_ERROR || '';
 const MALFORMED = process.env.MAKACU_MOCK_MALFORMED || '';
+const LAUNCH_ERROR = process.env.MAKACU_MOCK_LAUNCH_ERROR || '';
+const LAUNCH_TOOK_FOREGROUND = process.env.MAKACU_MOCK_LAUNCH_FOREGROUND === '1';
 const WINDOW_ORIGIN_Y = Number(process.env.MAKACU_MOCK_WINDOW_ORIGIN_Y || '25');
 const NONCE = crypto.randomBytes(16).toString('hex');
 // 1x1 transparent PNG.
@@ -237,6 +239,13 @@ function handle(msg) {
         onScreen: true, displayId: '69732928' },
         MALFORMED === 'window_no_zindex' ? { zIndex: undefined } : {})] });
       return;
+    case 'apps.launch':
+      if (LAUNCH_ERROR) { domainError(id, LAUNCH_ERROR, {}); return; }
+      ok(id, Object.assign({ pid: 5150, appId: 'com.example.Launched', name: 'Launched',
+        foregroundTaken: LAUNCH_TOOK_FOREGROUND, windows: [{ windowId: 77001, title: 'Untitled' }],
+        waited: { ms: 3200, reason: 'window_appeared' } },
+        MALFORMED === 'launch_no_foreground' ? { foregroundTaken: undefined } : {}));
+      return;
     case 'observe':
       ok(id, { snapshot: snapshot(params.includeImage !== false) });
       return;
@@ -311,6 +320,8 @@ function makeBackend(
     sessionError?: string;
     windowListError?: string;
     malformed?: string;
+    launchError?: string;
+    launchTookForeground?: boolean;
     windowOriginY?: number;
     physicalInputRecentlyActive?: MakaCuBackendOptions['physicalInputRecentlyActive'];
     allowCompatibilityInputDispatch?: boolean;
@@ -335,6 +346,8 @@ function makeBackend(
   process.env.MAKACU_MOCK_SESSION_ERROR = opts.sessionError ?? '';
   process.env.MAKACU_MOCK_WINDOW_LIST_ERROR = opts.windowListError ?? '';
   process.env.MAKACU_MOCK_MALFORMED = opts.malformed ?? '';
+  process.env.MAKACU_MOCK_LAUNCH_ERROR = opts.launchError ?? '';
+  process.env.MAKACU_MOCK_LAUNCH_FOREGROUND = opts.launchTookForeground ? '1' : '';
   process.env.MAKACU_MOCK_WINDOW_ORIGIN_Y = String(opts.windowOriginY ?? 25);
   const backend = createMakaCuBackend({
     binaryPath: mockPath,
@@ -678,6 +691,41 @@ describe('maka-cu backend', () => {
     });
     assert.equal(!result.outcome.ok && result.outcome.error, 'user_intervened');
     assert.equal(received(await readRecords(logPath), 'dispatch.key').length, 0);
+  });
+
+  // §5.7 — apps.launch.
+
+  it('launches an app in the background and reports the resolved id', async () => {
+    const { backend, logPath } = makeBackend({});
+    const launched = await backend.launchApp!({ app: 'Launched' }, signal(), RUN_CONTEXT);
+    // §5.1: the request may carry a display name because an app that is not
+    // running has no appId to quote; the result carries the resolved one, and
+    // that is what every later call uses.
+    assert.equal(launched.bundleId, 'com.example.Launched');
+    assert.equal(launched.pid, 5150);
+    // The executor waits for the window rather than reporting the empty array
+    // it sees at launch time, so the model is not sent back to observe for it.
+    assert.deepEqual(launched.windows, [{ windowId: 77001, title: 'Untitled' }]);
+    assert.equal(launched.focusHeld, true);
+    const call = received(await readRecords(logPath), 'apps.launch')[0];
+    assert.equal(call?.app, 'Launched');
+    assert.equal(call?.waitForWindowMs, 8_000);
+  });
+
+  it('reports a launch that took the foreground instead of hiding it', async () => {
+    // It happened; hiding it does not un-happen it. `focusHeld` is the host's
+    // inversion of a field the executor declares, never an absent third value.
+    const { backend } = makeBackend({ launchTookForeground: true });
+    const launched = await backend.launchApp!({ app: 'Launched' }, signal(), RUN_CONTEXT);
+    assert.equal(launched.focusHeld, false);
+  });
+
+  it('treats a launch result missing foregroundTaken as version skew', async () => {
+    const { backend } = makeBackend({ malformed: 'launch_no_foreground' });
+    await assert.rejects(
+      backend.launchApp!({ app: 'Launched' }, signal(), RUN_CONTEXT),
+      /service_mismatch|foregroundTaken/,
+    );
   });
 
   it('rejects a frame whose bytes do not match the declared digest', async () => {
