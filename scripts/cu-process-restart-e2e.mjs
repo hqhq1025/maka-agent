@@ -54,8 +54,7 @@ const idFlow = [];
 let latestObservationGeometry;
 const backend = createMakaCuBackend({
   binaryPath,
-  hostBundleId: 'com.maka.desktop',
-  expectedBinarySha256,: '0.7.1',: '2025-06-18',
+  expectedBinarySha256,
   timeoutMs: 10_000,
   onTrace(event) {
     traces.push(event);

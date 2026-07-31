@@ -176,8 +176,7 @@ async function physicalInputRecentlyActive() {
 
 const backend = createMakaCuBackend({
   binaryPath,
-  hostBundleId: 'com.maka.desktop',
-  expectedBinarySha256,: '2025-06-18',
+  expectedBinarySha256,
   timeoutMs: 10_000,
   physicalInputRecentlyActive,
   allowCompatibilityInputDispatch: false,

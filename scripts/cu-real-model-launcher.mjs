@@ -333,17 +333,11 @@ async function discoverLauncherFixtureIdentity(fixturePid, windowSpecs) {
   ]);
   const manifest = JSON.parse(manifestText);
   const expectedBinarySha256 = manifest?.makaCu?.binarySha256;
-  if (
-    typeof expectedBinarySha256 !== 'string' ||
-    !/^[a-f0-9]{64}$/.test(expectedBinarySha256) ||
-    typeof expectedServerVersion !== 'string' ||
-    typeof expectedProtocolVersion !== 'string'
-  ) {
+  if (typeof expectedBinarySha256 !== 'string' || !/^[a-f0-9]{64}$/.test(expectedBinarySha256)) {
     throw new Error('fixture discovery cannot verify bundled maka-cu identity');
   }
   const backend = createMakaCuBackend({
     binaryPath: join(repoRoot, 'apps', 'desktop', 'resources', 'bin', 'maka-cu'),
-    hostBundleId: 'com.maka.desktop',
     expectedBinarySha256,
     timeoutMs: 10_000,
   });
