@@ -114,7 +114,7 @@ function element(index, label, focused) {
     focused: !!focused,
     selected: null,
     ...(MALFORMED === 'no_frame' && index === 2 ? {} : { frame: { x: 10 * index, y: 20 * index, width: 72, height: 28 } }),
-    actions: ['press'],
+    actions: index === 2 ? ['press', 'show_menu'] : ['press'],
     digest: digest('el_' + index),
     truncated: [],
   };
@@ -775,6 +775,18 @@ describe('maka-cu backend', () => {
 
     const again = await observeFixture(backend);
     assert.equal(again.truncated, true, 'a second observation of the same window agrees');
+  });
+
+  it('reports what an element offers beyond a press, and nothing when that is all', async () => {
+    // The 13-name set `secondary_action` accepts was model-invisible: the schema
+    // said "Required for secondary_action" and nothing about what a legal name
+    // is, so a model had to guess and be told its guess was outside the set.
+    const { backend } = makeBackend({});
+    const observation = await observeFixture(backend);
+    const rich = observation.elements.find((e) => e.actions !== undefined);
+    assert.deepEqual(rich?.actions, ['show_menu'], 'press is dropped, the rest is kept');
+    const plain = observation.elements.find((e) => e.role === 'AXWindow');
+    assert.equal(plain?.actions, undefined, 'an element offering only press says nothing');
   });
 
   it('reads an element with no rectangle instead of refusing the whole window', async () => {

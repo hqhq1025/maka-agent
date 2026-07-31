@@ -264,6 +264,20 @@ type CaptureFailure = CuRunResult & { outcome: Extract<CuRunResult['outcome'], {
  * supplied: an app id, a window id, an element id, a key name. None of them
  * carry a label, a title or a value.
  */
+/**
+ * The actions worth a model's attention.
+ *
+ * `press` is `click_element`. `scroll_to_visible` is something the executor
+ * does for you when it dispatches. `show_menu` is ambient in Chromium — it is
+ * on almost every node, so its presence says nothing about whether this one has
+ * a menu. What is left is what one element offers and its neighbours do not.
+ */
+const AMBIENT_ACTIONS = new Set(['press', 'scroll_to_visible', 'show_menu']);
+
+function informativeActions(actions: readonly string[]): string[] {
+  return actions.filter((action) => !AMBIENT_ACTIONS.has(action));
+}
+
 function failure(error: ComputerUseErrorCode, message: string): CaptureFailure {
   return { outcome: { ok: false, error, message, messageIsAppTextFree: true } };
 }
@@ -747,6 +761,18 @@ export function createMakaCuBackend(opts: MakaCuBackendOptions): CuDispatchBacke
       ...(element.label ? { label: element.label } : {}),
       ...(element.value !== undefined ? { value: element.value } : {}),
       enabled: element.enabled,
+      // Only what changes a decision. `press` is what `click_element` already
+      // does, and Chromium attaches `show_menu` and `scroll_to_visible` to
+      // nearly every node it emits — measured on a real Chrome window, 157 of
+      // 196 elements carried exactly that pair and nothing else, for +22% of
+      // the rendered observation saying the same thing 157 times.
+      //
+      // What survives is what a model would act on differently for having read
+      // it: a menu it can open, a control it can raise, a stepper it can nudge.
+      ...(informativeActions(element.actions).length > 0
+        ? { actions: informativeActions(element.actions) }
+        : {}),
+      ...(element.focused ? { focused: true } : {}),
       ...(element.selected === null ? {} : { selected: element.selected }),
       ...(parentModelId === undefined ? {} : { parentElementId: parentModelId }),
       // An element with no rectangle is still addressable — semantic dispatch

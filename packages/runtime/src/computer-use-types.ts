@@ -95,6 +95,19 @@ export interface CuObservedElement {
   value?: string;
   /** False when the control is present but cannot currently be actuated. */
   enabled?: boolean;
+  /**
+   * What this control offers beyond a plain click, from the executor's closed
+   * set of normalised names.
+   *
+   * `secondary_action` takes one of these, and the set was model-invisible: the
+   * schema said only "Required for secondary_action", so a model had to guess a
+   * name and be told it was outside the protocol's action set. `raise` is the
+   * one window-management verb that exists anywhere in this surface, and it was
+   * undiscoverable for the same reason.
+   */
+  actions?: string[];
+  /** True for the one element the window currently gives keys to. */
+  focused?: boolean;
   /** Selection state for controls that carry one (checkbox, radio, tab, row). */
   selected?: boolean;
   /** `elementId` of this element's parent, when the observation reports a tree. */

@@ -232,7 +232,53 @@ test('a subrole is written beside the role, so a secure field is not an ordinary
     ]),
   );
   const rows = lines(text);
-  assert.match(rows[1] ?? '', /AXTextField\/AXSecureTextField/);
+  // The `AX` prefix is on every role in the tree, so it says nothing where it
+  // repeats; the subrole keeps its own name and loses the prefix.
+  assert.match(rows[1] ?? '', /AXTextField\/SecureTextField/);
   // An element without one is written exactly as before.
   assert.match(rows[2] ?? '', /1 AXTextField "用户名"/);
+});
+
+test('an element says what it accepts beyond a click, and where the keys go', () => {
+  const text = renderObservationForModel(
+    observation([
+      { elementId: '0', role: 'AXWindow', label: '计算器', actions: ['raise'] },
+      { elementId: '1', role: 'AXButton', label: '7' },
+      { elementId: '2', role: 'AXTextField', label: '搜索', focused: true, actions: ['show_menu'] },
+    ]),
+  );
+  const rows = lines(text);
+  // `raise` is the only window-management verb anywhere in this surface, and it
+  // was undiscoverable: the schema said only "Required for secondary_action".
+  assert.match(rows[1] ?? '', /\+raise/);
+  // A plain button offers nothing beyond click_element, so it says nothing —
+  // every actionable element advertises `press`, and printing it on every line
+  // costs tokens to say what click_element already does.
+  assert.doesNotMatch(rows[2] ?? '', /\+/);
+  assert.match(rows[3] ?? '', /\+show_menu/);
+  assert.match(rows[3] ?? '', /focused/);
+});
+
+test('a subrole is written only where it says something the role does not', () => {
+  const text = renderObservationForModel(
+    observation([
+      // Unnamed and one of many: the subrole is the only thing telling these
+      // three apart, and without it the model sees three identical buttons.
+      { elementId: '0', role: 'AXButton', subrole: 'AXCloseButton' },
+      // Unnamed, but a container — unnamed because it is scaffolding, not
+      // because its name went missing. `AXWindow/AXStandardWindow` is a longer
+      // way of writing `AXWindow`.
+      { elementId: '1', role: 'AXWindow', subrole: 'AXStandardWindow' },
+      // Named: the label already says which control this is.
+      { elementId: '2', role: 'AXButton', subrole: 'AXToggleButton', label: '深色模式' },
+      // Secure: always, because this is the one the model must not fill, and
+      // that rule is only enforceable if it can tell.
+      { elementId: '3', role: 'AXTextField', subrole: 'AXSecureTextField', label: '密码' },
+    ]),
+  );
+  const rows = lines(text);
+  assert.match(rows[1] ?? '', /AXButton\/CloseButton/);
+  assert.equal((rows[2] ?? '').includes('/'), false, 'a container keeps its bare role');
+  assert.equal((rows[3] ?? '').includes('/'), false, 'a labelled control keeps its bare role');
+  assert.match(rows[4] ?? '', /AXTextField\/SecureTextField/);
 });

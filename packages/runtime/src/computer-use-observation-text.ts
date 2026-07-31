@@ -79,15 +79,64 @@ function header(observation: CuObservation): string {
   return parts.join(' ');
 }
 
+/**
+ * A subrole earns its place when it is telling the model something the rest of
+ * the line does not.
+ *
+ * Measured on System Settings: 151 of 331 elements carry one, and printing them
+ * all was 13.6% of the whole observation — mostly `AXStandardWindow` beside
+ * `AXWindow` and `AXSectionList` beside `AXList`, which restate the role in
+ * more characters. Two cases are not like that:
+ *
+ *  - an element with no label, where the subrole is the only name it has. The
+ *    three window buttons are exactly this: unlabelled `AXButton`s that are
+ *    close, minimise and zoom.
+ *  - a secure text field, which is how "never fill a credential" is enforceable
+ *    at all rather than advisory.
+ *
+ * The `AX` prefix goes: it is on every role in the tree, so it says nothing
+ * where it repeats.
+ */
+/**
+ * Roles whose subrole restates what they are.
+ *
+ * A window is a window and a group is a group; `AXStandardWindow` and
+ * `AXHostingView` add characters, not identity. A button, a row or a field is
+ * one of many, and its subrole is often the only thing telling it from its
+ * neighbours.
+ */
+const CONTAINER_ROLES = new Set([
+  'Window',
+  'Group',
+  'SplitGroup',
+  'ScrollArea',
+  'Layout',
+  'LayoutArea',
+  'Unknown',
+]);
+
+function roleOf(element: CuObservedElement): string {
+  const role = element.role.replace(/^AX/, '');
+  const subrole = element.subrole?.replace(/^AX/, '');
+  if (!subrole || subrole === role) return element.role;
+  // A secure field always, because that is the one the model must not fill.
+  if (/secure/i.test(subrole)) return `${element.role}/${subrole}`;
+  // Otherwise only where it is the element's only identity AND it actually
+  // distinguishes it. `AXButton/AXCloseButton` tells three identical unlabelled
+  // buttons apart; `AXWindow/AXStandardWindow` and `AXGroup/AXHostingView` are
+  // a longer way of writing the role, on elements that are unnamed because they
+  // are containers rather than because their name is missing.
+  const named = (element.label ?? '').trim() !== '';
+  if (named || CONTAINER_ROLES.has(role)) return element.role;
+  return `${element.role}/${subrole}`;
+}
+
 function elementLine(element: CuObservedElement): string {
   // `role/subrole` rather than a separate field: it is the same answer to
   // "what is this", it is absent on most elements, and a password field that
   // reads `AXTextField/AXSecureTextField` is the one case where the model must
   // not treat a control as an ordinary one.
-  const parts = [
-    element.elementId,
-    element.subrole ? `${element.role}/${element.subrole}` : element.role,
-  ];
+  const parts = [element.elementId, roleOf(element)];
   if (element.label) parts.push(quote(element.label));
   if (element.value !== undefined) parts.push(`=${quote(truncate(element.value))}`);
   // Only the informative half of each state is written. Every element the
@@ -96,7 +145,15 @@ function elementLine(element: CuObservedElement): string {
   const states: string[] = [];
   if (element.enabled === false) states.push('disabled');
   if (element.selected === true) states.push('selected');
+  // Where the keys go if a key is sent without naming a control.
+  if (element.focused === true) states.push('focused');
   if (states.length > 0) parts.push(`[${states.join(',')}]`);
+  // The names `secondary_action` will accept for this element, and nothing
+  // else: a plain press is what `click_element` already does, and the backend
+  // has dropped it before this point.
+  if (element.actions && element.actions.length > 0) {
+    parts.push(`+${element.actions.join(',')}`);
+  }
   if (element.frame) {
     const { x, y, width, height } = element.frame;
     parts.push(`@${round(x)},${round(y)} ${round(width)}x${round(height)}`);

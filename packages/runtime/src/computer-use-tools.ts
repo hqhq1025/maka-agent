@@ -165,7 +165,11 @@ const computerWireParams = z
     start_coordinate: coordinate.optional().describe('Required only for left_click_drag.'),
     text: text
       .optional()
-      .describe('Required for select_text, secondary_action, press_key, type, key, and hold_key.'),
+      .describe(
+        'Required for select_text, secondary_action, press_key, type, key, and hold_key. ' +
+          'For secondary_action it must be one of the names the element itself advertises — an observation writes them ' +
+          'after the label as "+show_menu,raise", and an element with none offers nothing beyond a plain click_element.',
+      ),
     scroll_direction: z
       .enum(['up', 'down', 'left', 'right'])
       .optional()
@@ -986,6 +990,9 @@ export function buildComputerUseTools(deps: {
       'indented to show containment: "<element_id> <role> \\"<label>\\" =\\"<value>\\" [<state>] @x,y wxh". ' +
       'Absent parts are omitted, and state is written only when it is not the default, so an element carrying ' +
       'no [disabled] is enabled. A value ending in "…(+N chars)" was shortened for length and is not the whole value. ' +
+      'A "+name,name" suffix lists what that element accepts as a secondary_action, and an element with no suffix ' +
+      'offers nothing beyond click_element; raise is how a window is brought forward. [focused] marks where a key ' +
+      'sent without an element_id will land. ' +
       'Coordinate click, pointer move, scroll and drag aim at a pixel and need the window where it is; the element actions aim at a control and do not, ' +
       'which is the difference that shows when the window is behind something else. Prefer an element action whenever one exists. ' +
       'Synthesized input is refused while the user is at the keyboard or the pointer, so a coordinate action can come back user_intervened through no fault of yours. ' +
