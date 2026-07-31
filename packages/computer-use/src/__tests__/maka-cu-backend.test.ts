@@ -478,7 +478,11 @@ describe('maka-cu backend', () => {
     // 「看起来我漏掉了 element_id 参数」. It had not missed it; it could not copy it.
     assert.equal(button?.elementId, '1');
     assert.equal(button?.identity?.token, 'el_2');
-    assert.equal(button?.parentElementId, 'el_1');
+    // The parent is named in the same space as `elementId`, not in the wire
+    // space `identity.token` lives in. This assertion used to say `'el_1'`,
+    // which was the defect written down as a rule: a child the model can quote
+    // pointing at a parent it has never been shown.
+    assert.equal(button?.parentElementId, '0');
     // §5.3: the wire frame is window-local and CuObservedElement.frame is screen
     // logical points, so the observed rectangle is the element's plus the
     // window's origin — the fixture window starts at y: 25.
@@ -756,6 +760,26 @@ describe('maka-cu backend', () => {
       backend.launchApp!({ app: 'Launched' }, signal(), RUN_CONTEXT),
       /service_mismatch|foregroundTaken/,
     );
+  });
+
+  it('names a parent in the id space the model reads, not the wire token', async () => {
+    // These were two namespaces: the child's id is the short one the model
+    // quotes, the parent pointer was the executor's token. On a real Calculator
+    // that dangled for 64 of 65 elements, so an indented observation had no
+    // containment to indent by — a flat list wearing a tree's field names.
+    const { backend } = makeBackend({});
+    const observation = await observeFixture(backend);
+    const ids = new Set(observation.elements.map((element) => element.elementId));
+    const parents = observation.elements
+      .map((element) => element.parentElementId)
+      .filter((id): id is string => typeof id === 'string');
+    assert.ok(parents.length > 0, 'the fixture tree has a parent to check');
+    for (const parent of parents) {
+      assert.ok(ids.has(parent), `parent ${parent} is not an element id in this observation`);
+    }
+    // The root keeps no parent rather than pointing at itself.
+    const root = observation.elements.find((element) => element.role === 'AXWindow');
+    assert.equal(root?.parentElementId, undefined);
   });
 
   it('rejects a frame whose bytes do not match the declared digest', async () => {

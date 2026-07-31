@@ -715,6 +715,17 @@ export function createMakaCuBackend(opts: MakaCuBackendOptions): CuDispatchBacke
     element: MakaCuElement,
     origin: ComputerUseRect,
     modelId: string,
+    /**
+     * The parent, in the same id space as `elementId`.
+     *
+     * These were two different namespaces: the child's id is the short one the
+     * model quotes, and the parent pointer was the executor's wire token. They
+     * can never match, so every parent link dangled — on a real Calculator, 64
+     * of 65 elements pointed at something not in the tree. Containment is what
+     * an indented observation is made of, so the shape the model reads was a
+     * flat list wearing a tree's field names.
+     */
+    parentModelId: string | undefined,
   ): CuObservedElement {
     return {
       // The model quotes this back, so it is the short one; `identity.token`
@@ -727,7 +738,7 @@ export function createMakaCuBackend(opts: MakaCuBackendOptions): CuDispatchBacke
       ...(element.value !== undefined ? { value: element.value } : {}),
       enabled: element.enabled,
       ...(element.selected === null ? {} : { selected: element.selected }),
-      ...(element.parentToken ? { parentElementId: element.parentToken } : {}),
+      ...(parentModelId === undefined ? {} : { parentElementId: parentModelId }),
       frame: {
         x: element.frameInWindow.x + origin.x,
         y: element.frameInWindow.y + origin.y,
@@ -781,6 +792,12 @@ export function createMakaCuBackend(opts: MakaCuBackendOptions): CuDispatchBacke
       ? { x: 0, y: 0, width: snapshot.image.widthPx, height: snapshot.image.heightPx }
       : undefined;
     const displays = toDisplays(snapshot);
+    // The reverse of `modelIds`: the executor names a parent by wire token, and
+    // the model reads ids in the short space, so the join has to happen here or
+    // not at all.
+    const modelIdByToken = new Map(
+      snapshot.elements.map((element, index) => [element.token, String(index)]),
+    );
     return {
       // The protocol's snapshot id IS the observation id: a dispatch quotes it
       // straight back, so the two identity spaces never need joining by hand.
@@ -810,7 +827,12 @@ export function createMakaCuBackend(opts: MakaCuBackendOptions): CuDispatchBacke
       contentFingerprint: snapshot.windowDigest,
       ...(displays ? { displays } : {}),
       elements: snapshot.elements.map((element, index) =>
-        toObservedElement(element, snapshot.target.bounds, String(index)),
+        toObservedElement(
+          element,
+          snapshot.target.bounds,
+          String(index),
+          element.parentToken === null ? undefined : modelIdByToken.get(element.parentToken),
+        ),
       ),
       ...(screenshot ? { screenshot } : {}),
     };
