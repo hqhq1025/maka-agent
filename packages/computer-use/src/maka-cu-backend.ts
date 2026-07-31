@@ -42,6 +42,7 @@ import type {
   CuScreenshot,
   CuSemanticAction,
 } from '@maka/runtime';
+import { abortableDelay } from './abortable-delay.js';
 import { exceedsFrameCap, FRAME_COMPRESS_THRESHOLD_BYTES } from './frame-budget.js';
 import {
   MAKA_CU_ALLOW_GLOBAL_POINTER,
@@ -1052,8 +1053,24 @@ export function createMakaCuBackend(opts: MakaCuBackendOptions): CuDispatchBacke
     if (!capability.includes(kind)) {
       return failure('unsupported_action', `maka-cu does not advertise element action '${kind}'`);
     }
-    const intervention = await physicalInputFailure();
-    if (intervention) return intervention;
+    // No physical-input guard here, and that is the point of this path.
+    //
+    // The guard exists because a synthesized click or keystroke lands wherever
+    // the user's real input has just moved the focus — it competes for one
+    // pointer and one keyboard. An element action competes for nothing: it
+    // names an element and the accessibility API actuates it, without moving
+    // the pointer or taking focus, which is the whole reason this is the path
+    // Maka dispatches on.
+    //
+    // Standing here it turned "the user is at their keyboard" into "Computer
+    // Use does not work" — the probe refuses on any input in the last second,
+    // and each refusal cascades into `reobserve_required`. On a real matrix run
+    // two scenarios spent 22 and 26 calls that way and timed out having done
+    // nothing, while the user was doing nothing more hostile than typing in
+    // another window. Background operation is the product; a guard that ends it
+    // whenever the machine is in use is not protecting anything here.
+    //
+    // `dispatchKey` and `dispatchPoint` do synthesize input, and keep it.
     const envelope = await service.call(
       'dispatch.element',
       {
@@ -1363,9 +1380,7 @@ export function createMakaCuBackend(opts: MakaCuBackendOptions): CuDispatchBacke
           signal,
           async (): Promise<CuRunResult> => {
             if (action.type === 'wait') {
-              await new Promise((resolve) =>
-                setTimeout(resolve, Math.min(action.durationMs, 10_000)),
-              );
+              await abortableDelay(Math.min(action.durationMs, 10_000), signal);
               return { outcome: { ok: true, tier: 'coordinate-background' } };
             }
             if (action.type === 'screenshot') return captureScreen(signal, context);
