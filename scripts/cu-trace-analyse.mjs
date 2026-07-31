@@ -49,8 +49,15 @@ function signature(args) {
  */
 function classify(record) {
   if (record.kind !== 'call') return null;
-  const args = record.modelFacingArgs ?? record.rawArgs ?? {};
-  const text = String(record.resultModelText ?? record.resultText ?? '');
+  // `rawArgs` first: `modelFacingArgs` is the narrowed projection, and two
+  // calls that differ only in a field the projection drops read as the same
+  // call — which is how fourteen identical retries were counted as eight
+  // different argument shapes.
+  const args = record.rawArgs ?? record.modelFacingArgs ?? {};
+  // A failed call has no `resultModelText` at all; reading only that field made
+  // every refusal invisible, so the refusal counts were the ones this analyser
+  // exists to produce.
+  const text = String(record.resultText ?? record.resultModelText ?? '');
   const failed = /failed:\s*([a-z_]+)/.exec(text);
   return {
     action: args.action ?? '?',
@@ -94,7 +101,12 @@ for (const file of files) {
   const byAction = new Map();
   for (const call of calls) {
     if (!byAction.has(call.action)) byAction.set(call.action, new Set());
-    byAction.get(call.action).add(JSON.stringify(call.args));
+    // The signature, not the raw arguments: `observation_id` changes every turn
+    // by design, so counting raw shapes reported fourteen identical retries as
+    // eight different guesses at the schema. `repeated` already went through
+    // the signature, so the two measures had been disagreeing about what
+    // "the same call" means.
+    byAction.get(call.action).add(call.signature);
   }
   const thrash = [...byAction.entries()]
     .filter(([, shapes]) => shapes.size >= 3)
