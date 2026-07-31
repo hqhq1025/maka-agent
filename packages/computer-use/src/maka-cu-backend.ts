@@ -1425,40 +1425,54 @@ export function createMakaCuBackend(opts: MakaCuBackendOptions): CuDispatchBacke
       return withOperationQueue(
         signal,
         async () => {
-          await ensureSession(context.sessionId, signal);
-          // §5.1 makes `params.app` the one place a display name is legal: an
-          // app that is not running has no `appId` the caller could have
-          // learned. Every later call uses the resolved `appId` in the result.
-          const envelope = await service.call(
-            'apps.launch',
-            {
-              session: context.sessionId,
+          try {
+            await ensureSession(context.sessionId, signal);
+            // §5.1 makes `params.app` the one place a display name is legal: an
+            // app that is not running has no `appId` the caller could have
+            // learned. Every later call uses the resolved `appId` in the result.
+            const envelope = await service.call(
+              'apps.launch',
+              {
+                session: context.sessionId,
+                app: input.app,
+                waitForWindowMs: LAUNCH_WINDOW_TIMEOUT_MS,
+              },
+              signal,
+            );
+            if (!envelope.ok) throw new MakaCuDomainRefusal('apps.launch', envelope.error);
+            const launched = readLaunchedApp('apps.launch', envelope);
+            trace({
+              type: 'launch',
               app: input.app,
-              waitForWindowMs: LAUNCH_WINDOW_TIMEOUT_MS,
-            },
-            signal,
-          );
-          if (!envelope.ok) throw new MakaCuDomainRefusal('apps.launch', envelope.error);
-          const launched = readLaunchedApp('apps.launch', envelope);
-          trace({
-            type: 'launch',
-            app: input.app,
-            appId: launched.appId,
-            pid: launched.pid,
-            windows: launched.windows.length,
-            waitedMs: launched.waited.ms,
-            waitReason: launched.waited.reason,
-            foregroundTaken: launched.foregroundTaken,
-          });
-          return {
-            pid: launched.pid,
-            bundleId: launched.appId,
-            ...(launched.name === undefined ? {} : { name: launched.name }),
-            windows: launched.windows,
-            // The executor declares whether the launch took the foreground, so
-            // this is never the absent "nobody checked" third value.
-            focusHeld: !launched.foregroundTaken,
-          };
+              appId: launched.appId,
+              pid: launched.pid,
+              windows: launched.windows.length,
+              waitedMs: launched.waited.ms,
+              waitReason: launched.waited.reason,
+              foregroundTaken: launched.foregroundTaken,
+            });
+            return {
+              pid: launched.pid,
+              bundleId: launched.appId,
+              ...(launched.name === undefined ? {} : { name: launched.name }),
+              windows: launched.windows,
+              // The executor declares whether the launch took the foreground, so
+              // this is never the absent "nobody checked" third value.
+              focusHeld: !launched.foregroundTaken,
+            };
+          } catch (error) {
+            // `launchApp` reports by throwing, like `listApps` and `observeApp`,
+            // so the mapped code has to travel in the message. Letting the raw
+            // refusal escape puts an unmapped executor code in front of the
+            // model — it read `app_not_found` as "no such app" for an app that
+            // had in fact started and merely been slow.
+            const mapped =
+              error instanceof MakaCuDomainRefusal
+                ? domainFailure(error.method, error.domain)
+                : backendFailure('apps.launch', error);
+            if (!mapped) throw error;
+            throw new Error(`${mapped.outcome.error}: ${mapped.outcome.message}`);
+          }
         },
         context.sessionId,
       );

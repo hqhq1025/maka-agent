@@ -720,6 +720,14 @@ describe('maka-cu backend', () => {
     assert.equal(launched.focusHeld, false);
   });
 
+  it('reports a refused launch with its mapped code, not a raw executor refusal', async () => {
+    const { backend } = makeBackend({ launchError: 'app_not_found' });
+    await assert.rejects(
+      backend.launchApp!({ app: 'Nothing' }, signal(), RUN_CONTEXT),
+      /target_missing/,
+    );
+  });
+
   it('treats a launch result missing foregroundTaken as version skew', async () => {
     const { backend } = makeBackend({ malformed: 'launch_no_foreground' });
     await assert.rejects(

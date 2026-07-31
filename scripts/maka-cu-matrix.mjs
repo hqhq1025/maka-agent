@@ -54,11 +54,13 @@ function skip(label, why) {
 
 const traces = [];
 const selected = selectComputerUseBackend({
-  backendId: 'maka-cu',
   binaryPath: BINARY,
   expectedBinarySha256: createHash('sha256').update(readFileSync(BINARY)).digest('hex'),
-  onMakaCuTrace: (event) => traces.push(event),
+  onTrace: (event) => traces.push(event),
   physicalInputRecentlyActive: () => false,
+  // The key actions are the ones that synthesize input; without this they are
+  // refused before the executor is asked, and the run proves nothing about them.
+  allowCompatibilityInputDispatch: true,
 });
 const backend = selected.backend;
 if (!backend) {
@@ -191,12 +193,18 @@ try {
     skip('set_value / select_text', 'no text field in the tree');
   }
 
-  // secondary_action, on a control that has one.
+  // secondary_action, named from the protocol's closed set rather than left
+  // undefined — an undefined action proves the argument check, not the action.
   const secondaryObs = await observe();
   const secondaryTarget = secondaryObs.elements.find((e) => e.role === 'AXButton');
   if (secondaryTarget) {
     const out = await backend.runSemantic(
-      { type: 'secondary_action', observationId: secondaryObs.observationId, elementId: secondaryTarget.elementId },
+      {
+        type: 'secondary_action',
+        observationId: secondaryObs.observationId,
+        elementId: secondaryTarget.elementId,
+        action: 'show_menu',
+      },
       signal,
       ctx(),
     );
@@ -207,19 +215,61 @@ try {
     );
   }
 
-  // scroll, on the element the app scrolls.
+  // scroll_element — the semantic member, which takes pages. `scroll` is the
+  // coordinate action and is not an element action; asking for it here passed
+  // by naming its own absence, which is not a test of anything.
   const scrollObs = await observe();
   const scrollable = scrollObs.elements.find((e) => e.role === 'AXScrollArea') ?? scrollObs.elements[0];
   if (scrollable) {
     const out = await backend.runSemantic(
-      { type: 'scroll', observationId: scrollObs.observationId, elementId: scrollable.elementId, deltaY: 120 },
+      {
+        type: 'scroll_element',
+        observationId: scrollObs.observationId,
+        elementId: scrollable.elementId,
+        direction: 'down',
+        pages: 1,
+      },
       signal,
       ctx(),
     );
     check(
-      'scroll either succeeds or names why not',
+      'scroll_element either succeeds or names why not',
       out.outcome.ok === true || typeof out.outcome.error === 'string',
       describe(out.outcome),
+    );
+    // Whatever the element answers, it must not be "Maka cannot express this".
+    check(
+      'scroll_element is an element action the host can express',
+      out.outcome.ok === true || out.outcome.message?.includes('is not an element action') !== true,
+      describe(out.outcome),
+    );
+  }
+
+  // press_key naming the control it is for. The executor takes focus only when
+  // the host asks it to, so this is the path the tool description promises.
+  const keyObs = await observe();
+  const keyTarget = keyObs.elements.find((e) => e.role === 'AXButton') ?? keyObs.elements[0];
+  if (keyTarget) {
+    const out = await backend.runSemantic(
+      {
+        type: 'press_key',
+        observationId: keyObs.observationId,
+        key: 'Escape',
+        elementId: keyTarget.elementId,
+      },
+      signal,
+      ctx(),
+    );
+    check(
+      'press_key with an element id reaches the executor',
+      out.outcome.ok === true || typeof out.outcome.error === 'string',
+      describe(out.outcome),
+    );
+    const keyDispatch = traces.filter((t) => t.type === 'dispatch' && t.method === 'dispatch.key');
+    check(
+      'a key that names a control asks the executor to acquire focus',
+      keyDispatch.length > 0,
+      `${keyDispatch.length} key dispatches`,
     );
   }
 
@@ -297,12 +347,61 @@ try {
     `frontmost ${before} → ${after}, target ${target.pid}`,
   );
 
+  // launch_app, on an app that is not running. The invariant is not "it
+  // started" — it is "it started and the user kept their focus", which is the
+  // whole reason a background launch exists.
+  const LAUNCH_TARGET = process.env.MAKA_CU_LAUNCH_TARGET ?? 'TextEdit';
+  const beforeLaunch = frontmost();
+  const launched = await backend.launchApp?.({ app: LAUNCH_TARGET }, signal, ctx());
+  if (launched) {
+    check(
+      'launch_app resolves the app id the executor owns',
+      typeof launched.bundleId === 'string' && launched.bundleId.includes('.'),
+      `${LAUNCH_TARGET} → ${launched.bundleId} pid ${launched.pid}`,
+    );
+    // The executor waits for a window rather than reporting the empty array it
+    // sees at launch time; an empty array here means that wait did not happen.
+    check(
+      'launch_app waited for a window instead of reporting none',
+      launched.windows.length > 0,
+      `${launched.windows.length} windows`,
+    );
+    check(
+      'launching did not take the foreground',
+      launched.focusHeld === true && frontmost() === beforeLaunch,
+      `focusHeld=${launched.focusHeld}, frontmost ${beforeLaunch} → ${frontmost()}`,
+    );
+  } else {
+    skip('launch_app', 'the backend exposes no launchApp');
+  }
+
   const dispatches = traces.filter((t) => t.type === 'dispatch');
   const pixel = dispatches.filter((t) => t.path && !String(t.path).startsWith('ax'));
+  // Zero dispatches would satisfy "none of them were pixels" while proving
+  // nothing, and it did: the trace option was passed under the name the
+  // two-backend selector used, so every dispatch went unrecorded and the check
+  // passed on an empty list. Assert the evidence exists before reading it.
   check(
-    'every dispatch took an accessibility path, never pixels',
-    pixel.length === 0,
-    `${dispatches.length} dispatches, ${pixel.length} non-ax`,
+    'the run actually dispatched something to look at',
+    dispatches.length > 0,
+    `${dispatches.length} dispatches recorded`,
+  );
+  const elementDispatches = dispatches.filter((t) => t.method === 'dispatch.element');
+  check(
+    'every element dispatch took an accessibility path',
+    elementDispatches.length > 0 && elementDispatches.every((t) => String(t.path).startsWith('ax')),
+    `${elementDispatches.length} element dispatches, ` +
+      `${elementDispatches.filter((t) => !String(t.path).startsWith('ax')).length} non-ax`,
+  );
+  // Keys are synthesized by definition, so they are not on an AX path and are
+  // not meant to be. The invariant that does cover them is narrower and is the
+  // one that matters: nothing may reach the global event tap, because that is
+  // what moves the user's own pointer and steals their own focus.
+  const global = dispatches.filter((t) => String(t.path) === 'cg_event_global');
+  check(
+    'no dispatch reached the global event tap',
+    global.length === 0,
+    `${dispatches.length} dispatches, ${pixel.length} off the AX path, ${global.length} global`,
   );
 } catch (error) {
   failures += 1;
