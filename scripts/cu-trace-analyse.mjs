@@ -30,28 +30,34 @@ if (files.length === 0) {
 }
 
 /** The call as the model asked for it, with the volatile parts removed. */
-function signature(call) {
-  const args = { ...(call.args ?? {}) };
-  // An observation id changes every turn by design; two calls that differ only
+function signature(args) {
+  const copy = { ...args };
+  // An observation id changes every turn by design; two calls differing only
   // there are the same call as far as the model's intent goes.
-  delete args.observation_id;
-  return `${args.action ?? call.action ?? '?'} ${JSON.stringify(args)}`;
+  delete copy.observation_id;
+  return `${copy.action ?? '?'} ${JSON.stringify(copy)}`;
 }
 
+/**
+ * One decision the model made.
+ *
+ * The journal carries two kinds of line. `kind: "call"` is a tool call, with
+ * `rawArgs` as the model sent them and `modelFacingArgs` as the model was shown
+ * them — they differ when the host projects a narrower surface, and a
+ * disagreement between the two is worth seeing. `kind: "driver"` is the
+ * executor's dispatch trace, which is what happened rather than what was asked.
+ */
 function classify(record) {
-  // The journal carries both the tool-call records and the executor's dispatch
-  // trace. Only the former is a decision the model made.
-  if (record.kind === 'driver') return null;
-  const payload = record.payload ?? record;
-  const args = payload.args ?? payload.input ?? payload.arguments ?? {};
-  const result = payload.result ?? payload.output ?? payload.text ?? '';
-  const text = typeof result === 'string' ? result : JSON.stringify(result);
+  if (record.kind !== 'call') return null;
+  const args = record.modelFacingArgs ?? record.rawArgs ?? {};
+  const text = String(record.resultModelText ?? record.resultText ?? '');
   const failed = /failed:\s*([a-z_]+)/.exec(text);
   return {
-    action: args.action ?? payload.action ?? '?',
+    action: args.action ?? '?',
     args,
-    signature: signature({ args }),
+    signature: signature(args),
     failed: failed?.[1] ?? null,
+    durationMs: record.durationMs ?? 0,
     text,
   };
 }

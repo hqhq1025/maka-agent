@@ -337,7 +337,15 @@ export interface MakaCuElement {
    * is screen points, and a field called `frame` on both sides is what let a
    * window-local rectangle be passed straight through as a screen one.
    */
-  frameInWindow: ComputerUseRect;
+  /**
+   * Absent when the executor has no rectangle for this element.
+   *
+   * §5 declares it optional (`HostObservedElement.frame` is `HostRect?`), and
+   * reading it as required cost a whole application: one element with no frame
+   * in System Settings turned every observation of that window into a protocol
+   * violation, so the app could not be looked at at all.
+   */
+  frameInWindow?: ComputerUseRect;
   actions: string[];
   digest: string;
   /** Which of this element's text fields were cut at `maxTextChars` (§5.2). */
@@ -597,7 +605,9 @@ export function readElement(method: string, value: unknown): MakaCuElement {
     enabled: requireBoolean(method, element.enabled, 'element.enabled'),
     focused: requireBoolean(method, element.focused, 'element.focused'),
     selected: requireNullableBoolean(method, element.selected, 'element.selected'),
-    frameInWindow: requireRect(method, element.frame, 'element.frame'),
+    ...(element.frame === undefined || element.frame === null
+      ? {}
+      : { frameInWindow: requireRect(method, element.frame, 'element.frame') }),
     actions: actions.map((action, index) =>
       requireString(method, action, `element.actions[${index}]`),
     ),

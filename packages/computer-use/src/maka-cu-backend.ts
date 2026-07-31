@@ -749,12 +749,19 @@ export function createMakaCuBackend(opts: MakaCuBackendOptions): CuDispatchBacke
       enabled: element.enabled,
       ...(element.selected === null ? {} : { selected: element.selected }),
       ...(parentModelId === undefined ? {} : { parentElementId: parentModelId }),
-      frame: {
-        x: element.frameInWindow.x + origin.x,
-        y: element.frameInWindow.y + origin.y,
-        width: element.frameInWindow.width,
-        height: element.frameInWindow.height,
-      },
+      // An element with no rectangle is still addressable — semantic dispatch
+      // names it rather than aiming at it — so it is reported without one
+      // instead of being dropped or refusing the whole observation.
+      ...(element.frameInWindow
+        ? {
+            frame: {
+              x: element.frameInWindow.x + origin.x,
+              y: element.frameInWindow.y + origin.y,
+              width: element.frameInWindow.width,
+              height: element.frameInWindow.height,
+            },
+          }
+        : {}),
       identity: {
         token: element.token,
         role: element.role,

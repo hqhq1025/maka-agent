@@ -113,7 +113,7 @@ function element(index, label, focused) {
     enabled: true,
     focused: !!focused,
     selected: null,
-    frame: { x: 10 * index, y: 20 * index, width: 72, height: 28 },
+    ...(MALFORMED === 'no_frame' && index === 2 ? {} : { frame: { x: 10 * index, y: 20 * index, width: 72, height: 28 } }),
     actions: ['press'],
     digest: digest('el_' + index),
     truncated: [],
@@ -775,6 +775,20 @@ describe('maka-cu backend', () => {
 
     const again = await observeFixture(backend);
     assert.equal(again.truncated, true, 'a second observation of the same window agrees');
+  });
+
+  it('reads an element with no rectangle instead of refusing the whole window', async () => {
+    // §5 declares `frame` optional. Reading it as required cost a whole
+    // application: one element without one in System Settings turned every
+    // observation of that window into a protocol violation, so the app could
+    // not be looked at at all. An element with no rectangle is still
+    // addressable — semantic dispatch names it rather than aiming at it.
+    const { backend } = makeBackend({ malformed: 'no_frame' });
+    const observation = await observeFixture(backend);
+    assert.equal(observation.elements.length, 2, 'the tree still arrives');
+    const boxless = observation.elements.find((e) => e.frame === undefined);
+    assert.ok(boxless, 'the element with no frame is present and carries none');
+    assert.ok(boxless.elementId, 'and is still addressable');
   });
 
   it('carries the subrole, which is how a password field is knowable at all', async () => {
