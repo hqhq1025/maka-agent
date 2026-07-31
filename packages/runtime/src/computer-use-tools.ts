@@ -123,7 +123,10 @@ const computerWireParams = z
       .max(512)
       .optional()
       .describe(
-        'Exact app id/name as list_apps reports it. Names are localized, so the English name may not match. Required for observe unless window_id is supplied.',
+        'The app id list_apps reports — a reverse-DNS bundle id like com.apple.calculator, never a display name. ' +
+          'A real run asked to observe "Calculator" and was told no application matched. Display names are localized and ' +
+          'are legal only on launch_app, which is the one call that names an app that is not running yet. ' +
+          'Required for observe unless window_id is supplied.',
       ),
     window_id: z
       .number()
@@ -1415,8 +1418,15 @@ export function buildComputerUseTools(deps: {
                   // reportable failure into an unreportable one.
                 }
               }
+              // The backend reports by throwing, and encodes the mapped code
+              // into the message it throws, so prefixing it here said the code
+              // twice: "target_missing — target_missing: no running
+              // application matches the request".
+              const sentence = detail.startsWith(`${code}: `)
+                ? detail.slice(code.length + 2)
+                : detail;
               return {
-                text: `maka_computer.observe failed: ${code} — ${detail}${running}`,
+                text: `maka_computer.observe failed: ${code} — ${sentence}${running}`,
                 error: code,
               };
             }

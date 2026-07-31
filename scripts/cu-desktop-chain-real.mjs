@@ -18,8 +18,8 @@
 import { _electron as electron } from 'playwright';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import { writeFile, mkdir, mkdtemp } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
+import { writeFile, mkdir, mkdtemp, cp } from 'node:fs/promises';
+import { tmpdir, homedir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -134,6 +134,29 @@ console.log(`target ${TARGET_APP} pid=${targetPid}\n`);
 // startup regression: the app launched, the event loop idled, and no window
 // ever arrived. Pointing somewhere else answers the question in one run.
 const userDataDir = process.env.CU_USER_DATA_DIR;
+
+// A workspace of its own still needs a model to talk to.
+//
+// Pointing at a fresh user-data directory answers the disk-identity dialog, and
+// then the app opens with no provider configured: the composer renders hidden,
+// `skills:listInvocable` fails with "等待配置默认模型", and the harness times out
+// waiting for a textarea that is present and will never be shown. That reads as
+// a Computer Use regression and is a missing API key.
+//
+// So copy the connection profile across — the same three files
+// `cu-real-model-launcher.mjs` copies — and nothing else. No sessions, no
+// memory, no projects: this run gets the developer's credentials and none of
+// their history.
+if (userDataDir) {
+  const source = join(homedir(), 'Library', 'Application Support', 'Maka', 'workspaces', 'default');
+  const target = join(userDataDir, 'workspaces', 'default');
+  await mkdir(target, { recursive: true });
+  for (const name of ['llm-connections.json', 'credentials.json', 'settings.json']) {
+    await cp(join(source, name), join(target, name)).catch((error) => {
+      console.log(`      could not copy ${name}: ${error.message}`);
+    });
+  }
+}
 const app = await electron.launch({
   args: userDataDir ? ['.', `--user-data-dir=${userDataDir}`] : ['.'],
   cwd: DESKTOP,
