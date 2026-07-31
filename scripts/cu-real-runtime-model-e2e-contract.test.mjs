@@ -14,5 +14,5 @@ test('real Runtime model E2E uses product model and ToolRuntime paths safely', (
   assert.match(source, /providerType: 'openai'/);
   assert.match(source, /compatibility/);
   assert.match(source, /physical user input/);
-  assert.doesNotMatch(source, /cua-driver|Codex CUA Lab\.app|left_click/);
+  assert.doesNotMatch(source, /maka-cu|Codex CUA Lab\.app|left_click/);
 });

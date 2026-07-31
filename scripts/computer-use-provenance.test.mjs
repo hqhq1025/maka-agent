@@ -57,15 +57,17 @@ test('the record keeps redistribution, reference, and observation separate', () 
   assert.match(document, /confers no rights and is not a license/);
 });
 
-test('the bundled driver license and source pins are the ones the record cites', async () => {
+test('the record does not claim a third-party binary the artifact no longer ships', async () => {
   const manifest = JSON.parse(
     await readFile(new URL('apps/desktop/bundled-tools.json', repoRoot), 'utf8'),
   );
-  assert.equal(manifest.cuaDriver.repo, 'trycua/cua');
-  // The record states MIT for the bundled driver; the shipped notice must agree.
-  const license = await readFile(
-    new URL('apps/desktop/resources/licenses/cua-driver/LICENSE.md', repoRoot),
-    'utf8',
-  );
-  assert.match(license, /MIT License/);
+  // cua-driver was the one redistributed executable. It is gone, and §1 must
+  // not keep promising a notice for something that is not in the artifact.
+  assert.equal(manifest.cuaDriver, undefined);
+  const document = await readFile(new URL('docs/computer-use-provenance.md', repoRoot), 'utf8');
+  assert.doesNotMatch(document, /resources\/licenses\/cua-driver/);
+  // The executor that did replace it is Maka's own, and unsigned, so §1 says so
+  // rather than listing it as a redistributed component.
+  assert.match(document, /maka-cu/);
+  assert.equal(manifest.makaCu?.distributionReady, false);
 });

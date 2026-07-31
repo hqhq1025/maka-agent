@@ -332,24 +332,19 @@ async function discoverLauncherFixtureIdentity(fixturePid, windowSpecs) {
     readFile(join(repoRoot, 'apps', 'desktop', 'bundled-tools.json'), 'utf8'),
   ]);
   const manifest = JSON.parse(manifestText);
-  const expectedBinarySha256 = manifest?.cuaDriver?.binarySha256;
-  const expectedServerVersion = manifest?.cuaDriver?.expectedVersion;
-  const expectedProtocolVersion = manifest?.cuaDriver?.expectedProtocolVersion;
+  const expectedBinarySha256 = manifest?.makaCu?.binarySha256;
   if (
     typeof expectedBinarySha256 !== 'string' ||
     !/^[a-f0-9]{64}$/.test(expectedBinarySha256) ||
     typeof expectedServerVersion !== 'string' ||
     typeof expectedProtocolVersion !== 'string'
   ) {
-    throw new Error('fixture discovery cannot verify bundled cua-driver identity');
+    throw new Error('fixture discovery cannot verify bundled maka-cu identity');
   }
   const backend = createCuaDriverBackend({
-    binaryPath: join(repoRoot, 'apps', 'desktop', 'resources', 'bin', 'cua-driver'),
+    binaryPath: join(repoRoot, 'apps', 'desktop', 'resources', 'bin', 'maka-cu'),
     hostBundleId: 'com.maka.desktop',
     expectedBinarySha256,
-    expectedServerName: 'cua-driver',
-    expectedServerVersion,
-    expectedProtocolVersion,
     timeoutMs: 10_000,
   });
   try {

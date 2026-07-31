@@ -5,7 +5,7 @@ import { createCuaDriverBackend } from '../packages/computer-use/dist/index.js';
 import { buildComputerUseTools } from '../packages/runtime/dist/index.js';
 
 const repoRoot = new URL('..', import.meta.url).pathname;
-const binaryPath = join(repoRoot, 'apps/desktop/resources/bin/cua-driver');
+const binaryPath = join(repoRoot, 'apps/desktop/resources/bin/maka-cu');
 const labRoot = '/Users/haoqing/Documents/Learning/codex-computer-use-lab';
 const expectedAppPath = join(labRoot, 'test-app/build/Codex CUA Lab.app');
 const statePath = join(labRoot, 'test-app/runtime/state.json');
@@ -55,10 +55,7 @@ let latestObservationGeometry;
 const backend = createCuaDriverBackend({
   binaryPath,
   hostBundleId: 'com.maka.desktop',
-  expectedBinarySha256,
-  expectedServerName: 'cua-driver',
-  expectedServerVersion: '0.7.1',
-  expectedProtocolVersion: '2025-06-18',
+  expectedBinarySha256,: '0.7.1',: '2025-06-18',
   timeoutMs: 10_000,
   onTrace(event) {
     traces.push(event);
@@ -352,7 +349,7 @@ try {
       generations.action !== serviceGenerations.action ||
       generations.capture !== serviceGenerations.capture
     ) {
-      throw new Error(`round ${round} unexpectedly restarted cua-driver services`);
+      throw new Error(`round ${round} unexpectedly restarted the maka-cu executor`);
     }
 
     report.cases.push({

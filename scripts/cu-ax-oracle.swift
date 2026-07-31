@@ -1,8 +1,8 @@
 // An accessibility oracle that owes Computer Use nothing.
 //
 // Every real-machine check so far read the result back through the same path
-// that wrote it: the model acts through cua-driver, and then the observation
-// that says it worked also comes from cua-driver. A driver that reports a
+// that wrote it: the model acts through maka-cu, and then the observation
+// that says it worked also comes from maka-cu. An executor that reports a
 // successful click on a control it never touched passes that test. So does a
 // locked screen, which is how a menu-only tree once read as a normal one.
 //

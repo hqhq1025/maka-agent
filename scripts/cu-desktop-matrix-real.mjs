@@ -44,7 +44,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const log = (line) => console.log(line);
 
 /**
- * The accessibility tree as a process that has never heard of cua-driver sees
+ * The accessibility tree as a process that has never heard of maka-cu sees
  * it. Compiled fresh each call — `swift <file>` costs about a second, which is
  * nothing next to a model turn, and it keeps the oracle a script rather than a
  * build artifact that could drift from its source.

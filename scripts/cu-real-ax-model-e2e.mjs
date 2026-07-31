@@ -10,7 +10,7 @@ import { createDirectRuntimeTurnLedger } from './cu-direct-runtime-ledger.mjs';
 import { sanitizeCuDirectReport } from './cu-report-sanitize.mjs';
 
 const repoRoot = new URL('..', import.meta.url).pathname;
-const binaryPath = join(repoRoot, 'apps/desktop/resources/bin/cua-driver');
+const binaryPath = join(repoRoot, 'apps/desktop/resources/bin/maka-cu');
 const labRoot =
   process.env.MAKA_CU_AX_MODEL_LAB_ROOT ??
   '/Users/haoqing/Documents/Learning/codex-computer-use-lab';
@@ -177,10 +177,7 @@ async function physicalInputRecentlyActive() {
 const backend = createCuaDriverBackend({
   binaryPath,
   hostBundleId: 'com.maka.desktop',
-  expectedBinarySha256,
-  expectedServerName: 'cua-driver',
-  expectedServerVersion,
-  expectedProtocolVersion: '2025-06-18',
+  expectedBinarySha256,: '2025-06-18',
   timeoutMs: 10_000,
   physicalInputRecentlyActive,
   allowCompatibilityInputDispatch: false,

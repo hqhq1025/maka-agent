@@ -137,7 +137,7 @@ test('desktop packager ships only the release runtime resources', async () => {
     },
   ]);
   assert.equal(
-    config.extraResources.some(({ from }) => from.includes('cua-driver')),
+    config.extraResources.some(({ from }) => from.includes('maka-cu')),
     false,
   );
 });
@@ -309,7 +309,7 @@ test('packaged app verification proves identity, notarization, resources, PTY, a
     );
   }
   assert.equal(
-    forbiddenPaths.some((path) => path.endsWith('/Resources/bin/cua-driver')),
+    forbiddenPaths.some((path) => path.endsWith('/Resources/bin/maka-cu')),
     true,
   );
   assert.equal(

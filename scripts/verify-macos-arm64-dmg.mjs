@@ -374,8 +374,10 @@ export async function verifyPackagedMacApp(
   await requirePath(join(resources, 'licenses', 'renderer', 'MINGCUTE_APACHE_LICENSE.txt'));
   await forbidPath(join(resources, 'tools', 'officecli'));
   await forbidPath(join(resources, 'licenses', 'officecli'));
-  await forbidPath(join(resources, 'bin', 'cua-driver'));
-  await forbidPath(join(resources, 'tools', 'cua-driver'));
+  // The executor is built from source and pinned by digest, but it is not
+  // signed or notarized, so it must not reach a distributed build.
+  await forbidPath(join(resources, 'bin', 'maka-cu'));
+  await forbidPath(join(resources, 'tools', 'maka-cu'));
 
   const executableArchitectures = await run('lipo', ['-archs', executable]);
   assertSingleArchitecture(executableArchitectures.stdout, 'Maka executable');
