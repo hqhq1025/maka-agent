@@ -498,12 +498,24 @@ try {
     // exercised.
     const allCalls = messages
       .filter((m) => m.type === 'tool_call')
-      .map((m) => ({
-        tool: m.toolName,
-        argsHead: JSON.stringify(m.args ?? null)
-          .replace(/\s+/g, ' ')
-          .slice(0, 200),
-      }));
+      .map((m) => {
+        const result = results.get(m.id);
+        const text =
+          typeof result?.content === 'string'
+            ? result.content
+            : JSON.stringify(result?.content ?? '');
+        return {
+          tool: m.toolName,
+          argsHead: JSON.stringify(m.args ?? null)
+            .replace(/\s+/g, ' ')
+            .slice(0, 200),
+          // What the other tools answered, too. A scenario can turn on what
+          // `load_tools` said back, and recording only the request left that
+          // invisible.
+          resultHead: text.replace(/\s+/g, ' ').slice(0, 300),
+          isError: result?.isError === true,
+        };
+      });
     const calls = messages
       .filter((m) => m.type === 'tool_call' && m.toolName === 'maka_computer')
       .map((m) => {
