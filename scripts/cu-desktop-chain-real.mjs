@@ -28,6 +28,10 @@ const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const DESKTOP = join(ROOT, 'apps', 'desktop');
 const OUT = '/tmp/cu-desktop-chain';
 
+// Whether this prompt asks for an action at all. A turn that was told to look
+// and report has no action to mirror and no cursor to move, so asserting the
+// presentation surfaces for it is asserting the product does something wrong.
+const ACTS = process.env.CU_EXPECT_ACTION !== '0';
 const TARGET_APP = process.env.CU_TARGET_APP ?? 'Calculator';
 const TARGET_BUNDLE = process.env.CU_TARGET_BUNDLE ?? 'com.apple.calculator';
 const PROMPT =
@@ -276,11 +280,21 @@ try {
   );
 
   const pip = [...seen.values()].find((w) => w.url.startsWith('pip'));
-  check(
-    'the picture-in-picture mirror opened',
-    sawPip,
-    pip ? JSON.stringify(pip.bounds) : 'never appeared',
-  );
+  if (ACTS) {
+    check(
+      'the picture-in-picture mirror opened',
+      sawPip,
+      pip ? JSON.stringify(pip.bounds) : 'never appeared',
+    );
+  } else {
+    // The mirror shows the frame an action produced. A read-only turn produces
+    // none, so its absence is correct and its presence would be the bug.
+    check(
+      'no mirror for a turn that only looked',
+      !sawPip,
+      sawPip ? 'a mirror appeared for a read-only turn' : '',
+    );
+  }
   if (pip) {
     check('the mirror is the app window’s child', pip.parentId !== null, `parent=${pip.parentId}`);
     check('the mirror does not float above other apps', pip.alwaysOnTop === false);
@@ -292,7 +306,9 @@ try {
       `${pip.bounds.width}x${pip.bounds.height}`,
     );
   }
-  check('the agent cursor overlay opened', sawOverlay, sawOverlay ? '' : 'never appeared');
+  if (ACTS) {
+    check('the agent cursor overlay opened', sawOverlay, sawOverlay ? '' : 'never appeared');
+  }
 
   // What the conversation actually says, so a green run cannot mean "nothing
   // happened quietly".
@@ -311,11 +327,29 @@ try {
   // tool surface told something unhelpful the first time.
   const failedCalls = (text.match(/(\d+) 个失败/g) ?? []).join(', ');
   if (failedCalls) note(`tool calls reported failed: ${failedCalls}`);
+  // What the turn ended as, not what words it used. The old test looked for
+  // 完成/成功/✅ in the tail, so a model that answered a read-only question
+  // perfectly — "I only observed, I clicked nothing" — was recorded as an
+  // error. It was measuring phrasing.
+  const tail = text.slice(-600);
+  const brokeDown =
+    /工具调用失败|Error:|error occurred|无法继续|抱歉[，,].*(失败|错误)/i.test(tail) ||
+    text.trim().length === 0;
   check(
-    'the turn ended with a result rather than an error',
-    /完成|成功|✅/.test(text.slice(-400)) && !/工具调用失败/.test(text.slice(-400)),
+    'the turn ended with an answer rather than breaking down',
+    !brokeDown,
     text.slice(-200).replace(/\n+/g, ' '),
   );
+  // The property that matters when a task is beyond what the tools can do: a
+  // model that cannot do the thing must say so, not narrate a success it did
+  // not have and not silently route around the tool surface.
+  if (process.env.CU_EXPECT_REFUSAL === '1') {
+    check(
+      'a task it cannot do is reported, not faked',
+      /做不到|无法|不支持|没有.*(菜单|入口|办法)|cannot|unable|not supported/i.test(tail),
+      text.slice(-260).replace(/\n+/g, ' '),
+    );
+  }
 
   await page.screenshot({ path: join(OUT, 'app.png') }).catch(() => {});
   await writeFile(join(OUT, 'transcript.txt'), text, 'utf8');
