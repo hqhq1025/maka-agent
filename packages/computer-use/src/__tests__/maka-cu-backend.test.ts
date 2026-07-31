@@ -114,7 +114,7 @@ function element(index, label, focused) {
     focused: !!focused,
     selected: null,
     ...(MALFORMED === 'no_frame' && index === 2 ? {} : { frame: { x: 10 * index, y: 20 * index, width: 72, height: 28 } }),
-    actions: index === 2 ? ['press', 'show_menu'] : ['press'],
+    actions: index === 2 ? ['press', 'show_menu', 'raise'] : ['press'],
     digest: digest('el_' + index),
     truncated: [],
   };
@@ -765,6 +765,31 @@ describe('maka-cu backend', () => {
     );
   });
 
+  it('says a refused accessibility action will not start working, so it is not retried', async () => {
+    // Measured: a model read `+raise` off an observation, used it exactly as
+    // advertised, and got "the action was attempted and refused, and nothing
+    // happened" — a true sentence with no next move in it. It sent the same
+    // call fourteen times. §6.5's `delivered == 0` is the executor's own test
+    // for "not one of them landed", and an element that advertises an action
+    // and then declines it is a property of that application.
+    const { backend } = makeBackend({
+      dispatchError: 'dispatch_refused',
+      refusalPath: 'ax_action',
+      refusalOutcome: 'failed',
+    });
+    const observation = await observeFixture(backend);
+    const result = await backend.runSemantic!(
+      { type: 'click_element', observationId: observation.observationId, elementId: 'el_2' },
+      signal(),
+      RUN_CONTEXT,
+    );
+    assert.equal(!result.outcome.ok && result.outcome.error, 'dispatch_refused');
+    assert.match(
+      (!result.outcome.ok && result.outcome.message) || '',
+      /will not start working|different control|different route/,
+    );
+  });
+
   it('carries a cut tree through as cut, instead of only into the trace', async () => {
     // A bounded walk that arrives looking complete is the worse failure: the
     // model concludes the control is not there. An open/save panel reaches the
@@ -784,7 +809,10 @@ describe('maka-cu backend', () => {
     const { backend } = makeBackend({});
     const observation = await observeFixture(backend);
     const rich = observation.elements.find((e) => e.actions !== undefined);
-    assert.deepEqual(rich?.actions, ['show_menu'], 'press is dropped, the rest is kept');
+    // `press` is what click_element does, and `show_menu` is ambient — Chromium
+    // hangs it off nearly every node, so its presence says nothing about this
+    // one. What survives is what a model would act on differently for reading.
+    assert.deepEqual(rich?.actions, ['raise'], 'only the informative action survives');
     const plain = observation.elements.find((e) => e.role === 'AXWindow');
     assert.equal(plain?.actions, undefined, 'an element offering only press says nothing');
   });

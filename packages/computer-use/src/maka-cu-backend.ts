@@ -278,6 +278,37 @@ function informativeActions(actions: readonly string[]): string[] {
   return actions.filter((action) => !AMBIENT_ACTIONS.has(action));
 }
 
+/**
+ * The refusal, plus what to do about it.
+ *
+ * `dispatch_refused` says "the action was attempted and refused, and nothing
+ * happened", which is accurate and has no next move in it. A model read `+raise`
+ * off an observation, used it exactly as advertised, got that sentence, and sent
+ * the same call fourteen times — not because it misread the schema, but because
+ * nothing in the reply said the route was closed rather than the attempt
+ * unlucky.
+ *
+ * Two facts the host already holds make it sayable. `path: "ax_action"` means
+ * the accessibility action was performed and the application answered with a
+ * failure; §6.5's `delivered == 0` is the executor's own test for "not one of
+ * them landed". An element that advertises an action and then refuses it is a
+ * property of that application, and no amount of retrying changes it.
+ */
+function nextMoveFor(
+  mapped: ComputerUseErrorCode,
+  error: MakaCuDomainError,
+  refusal?: MakaCuDispatchResult,
+): string {
+  if (mapped !== 'dispatch_refused') return error.message;
+  if (refusal?.path === 'ax_action') {
+    return `${error.message}. The control advertises this action and the application declined it, so the same call will not start working — use a different control or a different route.`;
+  }
+  if (refusal?.path === 'none') {
+    return `${error.message}. Nothing this executor is permitted to do could reach the target; retrying will not change that.`;
+  }
+  return error.message;
+}
+
 function failure(error: ComputerUseErrorCode, message: string): CaptureFailure {
   return { outcome: { ok: false, error, message, messageIsAppTextFree: true } };
 }
@@ -515,7 +546,7 @@ export function createMakaCuBackend(opts: MakaCuBackendOptions): CuDispatchBacke
         // §1.2: `message` is a fixed sentence chosen by `code` and carries no
         // application content, so it passes through without a redaction pass —
         // and, for the same reason, may be shown to the model.
-        message: error.message,
+        message: nextMoveFor(mapped, error, refusal),
         messageIsAppTextFree: true,
         // §7.1: the executor's enum-only detail is the evidence the model gets.
         // `path` tells a refusal that was attempted and rejected from one where
