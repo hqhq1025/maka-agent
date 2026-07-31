@@ -363,7 +363,19 @@ try {
   });
   await page.waitForSelector('.maka-composer-textarea', { timeout: 60_000 });
   await sleep(1500);
-  log('app up\n');
+
+  // Computer Use is off until a person turns it on, and the tools are withheld
+  // from the model's surface while it is off — so a harness that does not turn
+  // it on measures an empty tool list and blames the model.
+  const enabled = await page.evaluate(async () => {
+    await window.maka.settings.update({ computerUse: { enabled: true } });
+    return (await window.maka.settings.get()).computerUse.enabled;
+  });
+  if (enabled !== true) {
+    log('could not enable Computer Use; the model would see no tools. Stopping.');
+    process.exit(2);
+  }
+  log('app up, Computer Use enabled\n');
 
   for (const scenario of selected) {
     log(`\n${'='.repeat(70)}\n${scenario.name}  (${scenario.app})\n${'='.repeat(70)}`);

@@ -545,6 +545,7 @@ export function normalizeSettings(input: unknown): AppSettings {
     personalization: value.personalization,
     openGateway: value.openGateway,
     webSearch: value.webSearch,
+    computerUse: value.computerUse,
     localMemory: value.localMemory,
     workspaceInstructions: value.workspaceInstructions,
     privacy: value.privacy,

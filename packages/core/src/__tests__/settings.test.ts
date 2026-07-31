@@ -17,6 +17,23 @@ describe('bot readiness settings contract', () => {
     expect(channel.readiness).toBe('scaffolded');
   });
 
+  test('a saved Computer Use switch survives being read back', () => {
+    // `normalizeSettings` rebuilds every section from an explicit list, so a key
+    // missing from that list is written to disk and then normalized away on the
+    // next read. The switch turned on, the file said true, and the app came back
+    // saying false.
+    const saved = mergeSettings(createDefaultSettings(), { computerUse: { enabled: true } });
+
+    expect(normalizeSettings(JSON.parse(JSON.stringify(saved))).computerUse.enabled).toBe(true);
+  });
+
+  test('a settings file written before the switch existed reads as off', () => {
+    const legacy = JSON.parse(JSON.stringify(createDefaultSettings())) as Record<string, unknown>;
+    delete legacy.computerUse;
+
+    expect(normalizeSettings(legacy).computerUse.enabled).toBe(false);
+  });
+
   test('normalizes legacy connected boolean to credentials_valid, not operational', () => {
     const legacy = createDefaultSettings();
     const telegram = legacy.botChat.channels.telegram as Partial<
