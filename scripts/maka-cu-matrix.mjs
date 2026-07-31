@@ -201,8 +201,16 @@ try {
 
   // set_value, on whatever text field the app exposes.
   const fieldObs = await observe();
-  const field = fieldObs.elements.find((e) => e.role === 'AXTextField' || e.role === 'AXTextArea');
-  if (field) {
+  // A disabled field refuses `set_value`, and correctly so — Preview's toolbar
+  // search field is one, and aiming at it turned three honest refusals into
+  // three red checks. The observation already says which fields are live.
+  const isField = (e) => e.role === 'AXTextField' || e.role === 'AXTextArea';
+  const field =
+    fieldObs.elements.find((e) => isField(e) && e.enabled !== false) ??
+    (fieldObs.elements.some(isField) ? 'disabled-only' : undefined);
+  if (field === 'disabled-only') {
+    skip('set_value / select_text', 'the only text fields in the tree are disabled');
+  } else if (field) {
     // Whatever was in the field belongs to the user, not to this run.
     const previous = typeof field.value === 'string' ? field.value : '';
     const typed = `mcu-${call}`;
