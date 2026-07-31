@@ -79,6 +79,22 @@ export function openAiAdapterApiProtocol(
  * metadata entry) resolves to false,
  * keeping the send path fail-closed for text-only models.
  */
+/**
+ * Anthropic model families whose members all read images.
+ *
+ * The generated table is a snapshot of models.dev, so every Claude released
+ * after that snapshot is unknown to it — and an unknown model resolved to "no
+ * vision", which silently removes Computer Use from the tool surface. It cost a
+ * real run: driven by `claude-opus-5`, the model searched its skills for
+ * "computer use control screen click mouse keyboard GUI automation", found
+ * nothing, and drove the calculator with `pgrep` instead.
+ *
+ * Guessing wrong in this direction costs a wasted turn. Guessing wrong in the
+ * other direction removes a capability with no message, and the next new model
+ * brings it back.
+ */
+const VISION_BY_DEFAULT = /^claude-(?:opus|sonnet|haiku|fable)\b/;
+
 export function resolveModelVisionSupport(
   providerType: ProviderType,
   models: readonly ModelInfo[] | undefined,
@@ -88,7 +104,11 @@ export function resolveModelVisionSupport(
   if (stored?.capabilities?.vision !== undefined) {
     return stored.capabilities.vision === true;
   }
-  return lookupModelMetadata(providerType, modelId).capabilities?.vision === true;
+  const metadata = lookupModelMetadata(providerType, modelId);
+  if (metadata.capabilities?.vision !== undefined) {
+    return metadata.capabilities.vision === true;
+  }
+  return providerType === 'anthropic' && VISION_BY_DEFAULT.test(modelId.trim());
 }
 
 export function curatedCatalogFallbackModelsForProvider(

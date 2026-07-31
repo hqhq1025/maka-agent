@@ -8,6 +8,24 @@ import {
 import { PROVIDER_DEFAULTS, type ModelInfo, type ProviderType } from '../llm-connections.js';
 
 describe('model-metadata vision capability', () => {
+  it('treats a Claude newer than the generated snapshot as able to read images', () => {
+    // The generated table is a snapshot of models.dev, so every Claude released
+    // after it is unknown — and unknown used to mean "no vision", which removes
+    // Computer Use from the tool surface without a word. Driven by
+    // `claude-opus-5`, a real run searched its skills for "computer use control
+    // screen click mouse keyboard GUI automation", found nothing, and drove the
+    // calculator with `pgrep`.
+    assert.equal(resolveModelVisionSupport('anthropic', undefined, 'claude-opus-5'), true);
+    assert.equal(resolveModelVisionSupport('anthropic', undefined, 'claude-sonnet-5'), true);
+  });
+
+  it('does not guess for other providers, and yields to what a connection reports', () => {
+    assert.equal(resolveModelVisionSupport('openai', undefined, 'some-unlisted-model'), false);
+    // A connection that says so wins over any default, in both directions.
+    const declared: ModelInfo[] = [{ id: 'claude-opus-5', capabilities: { vision: false } }];
+    assert.equal(resolveModelVisionSupport('anthropic', declared, 'claude-opus-5'), false);
+  });
+
   it('publishes the Kimi K3 Coding Plan limits and sole supported effort', () => {
     assert.deepEqual(lookupModelMetadata('kimi-coding-plan', 'k3'), {
       displayName: 'Kimi K3',

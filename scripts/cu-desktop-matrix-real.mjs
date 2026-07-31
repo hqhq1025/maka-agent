@@ -375,6 +375,29 @@ try {
     log('could not enable Computer Use; the model would see no tools. Stopping.');
     process.exit(2);
   }
+  // The app restores whatever route it was last on, and a settings panel left
+  // open intercepts every click in the chat — including the one that starts a
+  // conversation. Dismiss it before driving anything.
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    if (
+      (await page
+        .locator('.settingsModal')
+        .count()
+        .catch(() => 0)) === 0
+    )
+      break;
+    await page.keyboard.press('Escape');
+    await sleep(600);
+  }
+  if (
+    (await page
+      .locator('.settingsModal')
+      .count()
+      .catch(() => 0)) > 0
+  ) {
+    log('a settings panel is open and will not close; it intercepts the composer. Stopping.');
+    process.exit(2);
+  }
   log('app up, Computer Use enabled\n');
 
   for (const scenario of selected) {
@@ -389,59 +412,80 @@ try {
     }
     log(`  before: ${before.window_count} window(s), ${before.element_count} elements`);
 
-    // A fresh conversation per scenario, so a ledger belongs to one prompt.
-    const knownSessions = new Set(
-      await page.evaluate(async () => (await window.maka.sessions.list()).map((s) => s.id)),
-    );
-    const newTask = page.getByRole('button', { name: '新任务' });
-    if (await newTask.count()) {
-      await newTask.first().click();
-      await sleep(1200);
-    }
+    // A fresh conversation per scenario, created and addressed by id.
+    //
+    // This used to click 新任务 and type into the composer, for realism. The
+    // realism was not free: which session the composer was pointed at could not
+    // be established from outside, and a run spent two scenarios reporting
+    // "the model chose not to use Computer Use" when the turns were failing in
+    // a different conversation, on a connection whose endpoint was down. Same
+    // channel the composer uses, same runtime, same tools — just addressed.
 
-    await page.click('.maka-composer-textarea');
-    await page.fill('.maka-composer-textarea', scenario.prompt);
-    await page.keyboard.press('Enter');
+    // Pin the conversation to a connection that answers.
+    //
+    // A session carries its own connection and model, and changing the default
+    // only reaches sessions created afterwards — so a run can inherit an
+    // endpoint that is no longer up and every turn fails with `errorClass:
+    // unknown` before a single tool is called. That is indistinguishable, in
+    // the report, from a model that chose not to use Computer Use.
+    const started = await page.evaluate(async (prompt) => {
+      const connections = await window.maka.connections.list();
+      const wanted = await window.maka.connections.getDefault?.();
+      const connection =
+        connections.find((c) => c.slug === wanted && c.enabled !== false) ??
+        connections.find((c) => c.enabled !== false);
+      if (!connection) return { ok: false, why: 'no usable connection' };
+      const model = connection.defaultModel ?? connection.enabledModelIds?.[0];
+      if (!model) return { ok: false, why: `connection ${connection.slug} names no model` };
+      const session = await window.maka.sessions.create({});
+      // A session carries its own connection and model, and changing the
+      // default only reaches sessions created afterwards — so a run can inherit
+      // an endpoint that is no longer up and every turn fails before a single
+      // tool is called, which reads in the report as a model that chose not to
+      // use Computer Use.
+      await window.maka.sessions.setModel(session.id, {
+        llmConnectionSlug: connection.slug,
+        model,
+      });
+      const turnId = crypto.randomUUID();
+      await window.maka.sessions.send(session.id, { type: 'send', turnId, text: prompt });
+      return { ok: true, sessionId: session.id, slug: connection.slug, model };
+    }, scenario.prompt);
+    if (!started.ok) {
+      log(`  ${started.why} — every turn would fail before Computer Use ran. Stopping.`);
+      process.exit(2);
+    }
+    const sessionId = started.sessionId;
+    log(`  driving ${sessionId.slice(0, 8)} with ${started.slug} / ${started.model}`);
     const startedAt = Date.now();
 
-    const stopButton = page.getByRole('button', { name: '停止' });
-    let started = false;
-    const startBy = Date.now() + 60_000;
-    while (Date.now() < startBy) {
-      if ((await stopButton.count().catch(() => 0)) > 0) {
-        started = true;
-        break;
-      }
-      await sleep(400);
-    }
+    // Done when the session's own turn record says so, rather than when a
+    // button disappears.
+    const settled = async () => {
+      const state = await page
+        .evaluate(async (id) => {
+          const messages = await window.maka.sessions.readMessages(id);
+          for (let i = messages.length - 1; i >= 0; i -= 1) {
+            if (messages[i].type === 'turn_state') return messages[i].status;
+          }
+          return undefined;
+        }, sessionId)
+        .catch(() => undefined);
+      return state === 'completed' || state === 'failed' || state === 'aborted';
+    };
     const endBy = Date.now() + TURN_TIMEOUT_MS;
     let timedOut = false;
-    while (started) {
-      if ((await stopButton.count().catch(() => 0)) === 0) break;
+    while (!(await settled())) {
       if (Date.now() > endBy) {
         timedOut = true;
-        await page
-          .evaluate(async () => {
-            const sessions = await window.maka.sessions.list();
-            if (sessions[0]) await window.maka.sessions.stop(sessions[0].id);
-          })
-          .catch(() => {});
+        await page.evaluate((id) => window.maka.sessions.stop(id), sessionId).catch(() => {});
         break;
       }
-      await sleep(500);
+      await sleep(1000);
     }
     const elapsedMs = Date.now() - startedAt;
     await sleep(2500); // let the last action's effect land in the target app
 
-    // The ledger: what the model actually asked the computer to do.
-    const sessionId = await page.evaluate(
-      async (known) => {
-        const sessions = await window.maka.sessions.list();
-        const fresh = sessions.find((s) => !known.includes(s.id));
-        return (fresh ?? sessions[0])?.id ?? null;
-      },
-      [...knownSessions],
-    );
     const messages = sessionId
       ? await page.evaluate((id) => window.maka.sessions.readMessages(id), sessionId)
       : [];
@@ -487,7 +531,7 @@ try {
     const checks = [
       {
         label: 'the turn finished on its own',
-        pass: started && !timedOut,
+        pass: !timedOut,
         detail: `${Math.round(elapsedMs / 1000)}s${timedOut ? ' — timed out and was stopped' : ''}`,
       },
       {
