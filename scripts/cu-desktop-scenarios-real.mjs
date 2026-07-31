@@ -28,6 +28,10 @@
 //   node scripts/cu-desktop-scenarios-real.mjs                 # everything
 //   node scripts/cu-desktop-scenarios-real.mjs pdf find-todo   # by key
 import { spawn, execFile } from 'node:child_process';
+import {
+  createConnectionStore,
+  createFileCredentialStore,
+} from '../packages/storage/dist/index.js';
 import { promisify } from 'node:util';
 import { mkdtemp, mkdir, writeFile, readFile, copyFile, rm, stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -37,6 +41,50 @@ import { fileURLToPath } from 'node:url';
 const exec = promisify(execFile);
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const OUT = '/tmp/cu-desktop-scenarios';
+
+/**
+ * Which models to put through the same tasks.
+ *
+ * The tool surface is one thing; what a model does with it is another, and the
+ * two families answer a refusal differently — one re-reads and retries, one
+ * changes tack, one explains and stops. A confusion that only one of them walks
+ * into is still a confusion, and a confusion both walk into is a defect in the
+ * surface rather than in the model.
+ *
+ *   CU_MODELS=claude-opus-5,gpt-5.3-codex node scripts/cu-desktop-scenarios-real.mjs
+ */
+const MODELS = (
+  process.env.CU_MODELS ??
+  // Two families and three tiers. A surface only a frontier model can drive is
+  // a badly designed surface, and a weak model walks into its confusions first
+  // and most visibly.
+  'claude-opus-5,claude-haiku-4-5,gpt-5.3-codex,gpt-5.6-luna,gpt-5.4-mini'
+)
+  .split(',')
+  .map((m) => m.trim())
+  .filter(Boolean);
+const MODEL_BASE_URL = process.env.CU_MODEL_BASE_URL ?? 'http://100.111.58.77:8546';
+const MODEL_API_KEY = process.env.CU_MODEL_API_KEY ?? 'local-bridge';
+
+/** Claude-family ids speak the messages API; everything else here is OpenAI-shaped. */
+const providerFor = (model) => (/^claude/.test(model) ? 'anthropic' : 'openai');
+
+async function seedConnection(userDataDir, model) {
+  const workspace = join(userDataDir, 'workspaces', 'default');
+  await mkdir(workspace, { recursive: true });
+  const connections = createConnectionStore(workspace);
+  const credentials = createFileCredentialStore(workspace);
+  const slug = `cu-scenario-${model.replace(/[^a-z0-9]+/gi, '-')}`;
+  await connections.create({
+    slug,
+    name: `Computer Use scenario — ${model}`,
+    providerType: providerFor(model),
+    baseUrl: providerFor(model) === 'anthropic' ? MODEL_BASE_URL : `${MODEL_BASE_URL}/v1`,
+    defaultModel: model,
+  });
+  await credentials.setSecret(slug, 'api_key', MODEL_API_KEY);
+  await connections.setDefault(slug);
+}
 const SCRATCH = '/tmp/cu-scratch';
 
 /** A separate process reading the same tree, owing Computer Use nothing. */
@@ -244,7 +292,7 @@ if (scenarios.length === 0) {
 
 await mkdir(OUT, { recursive: true });
 
-function run(scenario, userDataDir) {
+function run(scenario, userDataDir, model) {
   return new Promise((resolve) => {
     const child = spawn(process.execPath, [join(ROOT, 'scripts', 'cu-desktop-chain-real.mjs')], {
       cwd: ROOT,
@@ -260,7 +308,7 @@ function run(scenario, userDataDir) {
         // interleaved with the executor's dispatch trace. This is the record
         // the analyser reads: what the model asked for, what it got back, and
         // what it did next.
-        MAKA_CU_DEBUG_LOG: join(OUT, `${scenario.key}.trace.jsonl`),
+        MAKA_CU_DEBUG_LOG: join(OUT, `${scenario.key}__${model}.trace.jsonl`),
       },
     });
     let out = '';
@@ -278,63 +326,97 @@ function run(scenario, userDataDir) {
 
 const results = [];
 for (const scenario of scenarios) {
-  console.log(`\n${'='.repeat(74)}`);
-  console.log(`${scenario.key} — 「${scenario.ask}」`);
-  console.log(`expected to exercise: ${scenario.expect}`);
-  console.log('='.repeat(74));
-  let setup = {};
-  try {
-    setup = (await scenario.before?.()) ?? {};
-  } catch (error) {
-    console.log(`      setup failed: ${error.message}`);
+  for (const model of MODELS) {
+    console.log(`\n${'='.repeat(74)}`);
+    console.log(`${scenario.key} × ${model} — 「${scenario.ask}」`);
+    console.log(`expected to exercise: ${scenario.expect}`);
+    console.log('='.repeat(74));
+
+    let setup = {};
+    try {
+      // Reset for every model, not once per task: the second model must meet
+      // the same starting state as the first, or the comparison is between a
+      // clean run and somebody else's leftovers.
+      setup = (await scenario.before?.()) ?? {};
+    } catch (error) {
+      console.log(`      setup failed: ${error.message}`);
+    }
+
+    const userDataDir = await mkdtemp(join(tmpdir(), `maka-scenario-${scenario.key}-`));
+    try {
+      await seedConnection(userDataDir, model);
+    } catch (error) {
+      console.log(`      could not configure ${model}: ${error.message}`);
+      continue;
+    }
+
+    const { code, out } = await run(scenario, userDataDir, model);
+    const checks = [...out.matchAll(/^\[(PASS|FAIL)\] (.+?)(?: — (.*))?$/gm)].map((m) => ({
+      pass: m[1] === 'PASS',
+      label: m[2],
+      detail: m[3] ?? '',
+    }));
+    // What the attempt cost, reported rather than asserted: a task nobody can
+    // do yet still has a better and a worse way of failing.
+    const calls = [...out.matchAll(/操作电脑 (\d+) 次/g)].map((m) => Number(m[1]));
+    const failedCalls = [...out.matchAll(/(\d+) 个失败/g)].map((m) => Number(m[1]));
+
+    let witness = null;
+    try {
+      witness = (await scenario.verify?.(setup)) ?? null;
+    } catch (error) {
+      witness = { ok: false, detail: `witness failed: ${error.message}` };
+    }
+    if (witness) {
+      console.log(
+        `[${witness.ok ? 'DONE' : 'NOT DONE'}] the task, when somebody else looks — ${witness.detail}`,
+      );
+    }
+
+    await writeFile(join(OUT, `${scenario.key}__${model}.log`), out);
+    results.push({
+      scenario,
+      model,
+      code,
+      checks,
+      witness,
+      calls: calls.length > 0 ? Math.max(...calls) : 0,
+      failedCalls: failedCalls.length > 0 ? Math.max(...failedCalls) : 0,
+    });
   }
-  const userDataDir = await mkdtemp(join(tmpdir(), `maka-scenario-${scenario.key}-`));
-  const { code, out } = await run(scenario, userDataDir);
-  const checks = [...out.matchAll(/^\[(PASS|FAIL)\] (.+?)(?: — (.*))?$/gm)].map((m) => ({
-    pass: m[1] === 'PASS',
-    label: m[2],
-    detail: m[3] ?? '',
-  }));
-  // How much the attempt cost, and what the model said it did — both reported,
-  // neither asserted. A task nobody can do yet still has a best behaviour.
-  const calls = [...out.matchAll(/操作电脑 (\d+) 次/g)].map((m) => Number(m[1]));
-  const failedCalls = [...out.matchAll(/(\d+) 个失败/g)].map((m) => Number(m[1]));
-  let witness = null;
-  try {
-    witness = (await scenario.verify?.(setup)) ?? null;
-  } catch (error) {
-    witness = { ok: false, detail: `witness failed: ${error.message}` };
-  }
-  if (witness) {
-    console.log(
-      `[${witness.ok ? 'DONE' : 'NOT DONE'}] the task, when somebody else looks — ${witness.detail}`,
-    );
-  }
-  await writeFile(join(OUT, `${scenario.key}.log`), out);
-  results.push({
-    scenario,
-    code,
-    checks,
-    witness,
-    calls: calls.length > 0 ? Math.max(...calls) : 0,
-    failedCalls: failedCalls.length > 0 ? Math.max(...failedCalls) : 0,
-  });
 }
 
-console.log(`\n${'='.repeat(74)}\nWHAT A PERSON ASKED FOR, AND WHAT HAPPENED\n${'='.repeat(74)}`);
 console.log(
-  `${'task'.padEnd(16)} ${'done'.padEnd(9)} ${'calls'.padEnd(6)} ${'failed'.padEnd(7)} chain`,
+  `\n${'='.repeat(74)}\nWHAT A PERSON ASKED FOR, AND WHAT EACH MODEL DID\n${'='.repeat(74)}`,
 );
-for (const r of results) {
-  const chainBad = r.checks.filter((c) => !c.pass).map((c) => c.label);
-  console.log(
-    `${r.scenario.key.padEnd(16)} ${(r.witness ? (r.witness.ok ? 'yes' : 'no') : '·').padEnd(9)} ` +
-      `${String(r.calls).padEnd(6)} ${String(r.failedCalls).padEnd(7)} ` +
-      (chainBad.length === 0 ? 'ok' : chainBad.join('; ')),
-  );
+const tasks = [...new Set(results.map((r) => r.scenario.key))];
+const models = [...new Set(results.map((r) => r.model))];
+const w = Math.max(...tasks.map((t) => t.length), 12);
+console.log(`${'task'.padEnd(w)}  ${models.map((m) => m.slice(0, 16).padEnd(16)).join(' ')}`);
+console.log(`${'-'.repeat(w)}  ${models.map(() => '-'.repeat(16)).join(' ')}`);
+for (const task of tasks) {
+  const cells = models.map((model) => {
+    const r = results.find((x) => x.scenario.key === task && x.model === model);
+    if (!r) return '·'.padEnd(16);
+    const done = r.witness ? (r.witness.ok ? 'done' : 'not done') : '—';
+    return `${done} ${r.calls}c/${r.failedCalls}f`.padEnd(16);
+  });
+  console.log(`${task.padEnd(w)}  ${cells.join(' ')}`);
 }
+console.log(
+  '\n(done = an independent reader saw the effect; Nc/Mf = N computer calls, M reported failed)',
+);
+
+const chainProblems = results.flatMap((r) =>
+  r.checks.filter((c) => !c.pass).map((c) => `${r.scenario.key}×${r.model}: ${c.label}`),
+);
+if (chainProblems.length > 0) {
+  console.log(`\nchain checks that failed:`);
+  for (const line of [...new Set(chainProblems)]) console.log(`  ${line}`);
+}
+
 const done = results.filter((r) => r.witness?.ok).length;
 console.log(
-  `\n${done}/${results.length} tasks actually got done. The rest are the backlog, and the logs say why.`,
+  `\n${done}/${results.length} attempts actually got the task done. The rest are the backlog, and the traces say why.`,
 );
-console.log(`logs in ${OUT}`);
+console.log(`logs and traces in ${OUT}`);
