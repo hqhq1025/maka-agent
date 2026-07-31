@@ -299,6 +299,18 @@ function nextMoveFor(
   error: MakaCuDomainError,
   refusal?: MakaCuDispatchResult,
 ): string {
+  // A coordinate action needs the pixel it aims at to be the target's. Computer
+  // Use drives what the user is not looking at, so the target is usually behind
+  // something — a window launched in the background sits at the bottom of the
+  // z-order by construction. The two are in tension by design, and the refusal
+  // said only that something covered the window.
+  //
+  // Measured: a model asked to move a window reached for `left_click_drag` on
+  // the title bar, which is the only way to move one, and was refused this way
+  // every time. It could not have succeeded, and nothing said so.
+  if (mapped === 'target_occluded') {
+    return `${error.message}. Computer Use drives windows that are not in front, so a coordinate action on one is often refused this way. An element action names its control instead of a pixel and is not blocked by what is on top.`;
+  }
   if (mapped !== 'dispatch_refused') return error.message;
   if (refusal?.path === 'ax_action') {
     return `${error.message}. The control advertises this action and the application declined it, so the same call will not start working — use a different control or a different route.`;

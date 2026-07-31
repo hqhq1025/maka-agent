@@ -765,6 +765,27 @@ describe('maka-cu backend', () => {
     );
   });
 
+  it('says an occluded target is what driving from behind looks like, and names the way out', async () => {
+    // The refusal a model actually hits. Asked to move a window it reached for
+    // `left_click_drag` on the title bar — the only way to move one — and every
+    // attempt came back "another window covers the target". It could not have
+    // succeeded: Computer Use drives what is not in front, so the target is
+    // behind something by construction, and a coordinate action needs the pixel
+    // it aims at. The two constraints are in tension by design.
+    const { backend } = makeBackend({ dispatchError: 'window_occluded' });
+    const observation = await observeFixture(backend);
+    const result = await backend.runSemantic!(
+      { type: 'click_element', observationId: observation.observationId, elementId: 'el_2' },
+      signal(),
+      RUN_CONTEXT,
+    );
+    assert.equal(!result.outcome.ok && result.outcome.error, 'target_occluded');
+    assert.match(
+      (!result.outcome.ok && result.outcome.message) || '',
+      /not in front|element action/,
+    );
+  });
+
   it('says a refused accessibility action will not start working, so it is not retried', async () => {
     // Measured: a model read `+raise` off an observation, used it exactly as
     // advertised, and got "the action was attempted and refused, and nothing
