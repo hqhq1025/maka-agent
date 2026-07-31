@@ -60,8 +60,6 @@ export interface CuaDriverServiceOptions {
   expectedServerVersion?: string;
   expectedProtocolVersion?: string;
   onRelease?: (event: CuaDriverReleaseEvent) => void;
-  /** The driver's own agent cursor could not be suppressed; ours is not the only one drawn. */
-  onCursorSuppressionFailed?: (event: { role: CuaDriverRole; reason: string }) => void;
 }
 
 interface PendingRequest {
@@ -330,34 +328,15 @@ export class CuaDriverService {
           }`,
         );
       }
-      // Declaring a session also gives it a driver-drawn agent cursor, which
-      // appears on the session's first action. Maka draws its own, so leaving
-      // the driver's on means two cursors for one agent — and the driver's is
-      // positioned from its own geometry, which lands on the wrong display in a
-      // multi-monitor setup. Best-effort: this is presentation, and failing to
-      // turn it off is not a reason to refuse to start.
-      try {
-        const cursorOff = await this.request(
-          'tools/call',
-          {
-            name: 'set_agent_cursor_enabled',
-            arguments: { session: this.runtimeSessionId, enabled: false },
-          },
-          { timeoutMs, retrySafe: true },
-        );
-        // A tool that answers with isError does not throw, so silence here
-        // would look identical to success. The cursor is cosmetic and must not
-        // fail the handshake — but a cursor we believe is off while it is
-        // actually drawing on the user's screen is worth a line in the log.
-        if (cursorOff.error || cursorOff.result?.isError) {
-          this.noteCursorSuppressionFailed(
-            cursorOff.error?.message ?? 'set_agent_cursor_enabled returned isError',
-          );
-        }
-      } catch (error) {
-        // An older driver may not expose this tool at all.
-        this.noteCursorSuppressionFailed(error instanceof Error ? error.message : String(error));
-      }
+      // The driver draws the agent cursor, and Maka no longer draws one.
+      //
+      // A session declared here gets a driver-drawn cursor on its first action:
+      // colour-derived from the session id, so concurrent runs are visually
+      // distinct, and animated by the executor that knows where the pointer is
+      // going. Maka used to turn it off with `set_agent_cursor_enabled` and
+      // paint a replica, which meant maintaining a port of someone else's
+      // motion engine and reconciling two ideas of where the target is. The
+      // replica is gone; this is the cursor.
       this.assertActive();
       this.state = 'ready';
     } catch (error) {
@@ -737,17 +716,6 @@ export class CuaDriverService {
    * Best-effort by construction: it runs on a process that is already going
    * away, so nothing here may block or throw into disposal.
    */
-  /**
-   * Record that the driver's own agent cursor could not be turned off.
-   *
-   * Maka draws its own cursor, so the driver's is a duplicate — and it is
-   * positioned from the driver's geometry, which has been observed landing on
-   * the wrong display in a multi-monitor setup. Leaving one drawn on the user's
-   * screen with no way to notice is the failure mode this exists to surface.
-   */
-  private noteCursorSuppressionFailed(reason: string): void {
-    this.opts.onCursorSuppressionFailed?.({ role: this.opts.role, reason });
-  }
 
   private endSessionBestEffort(): void {
     const child = this.child;

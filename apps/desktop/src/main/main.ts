@@ -664,7 +664,6 @@ const {
   riveTools,
   browserTools,
   computerUse,
-  computerUseOverlay,
   computerUseStatusItem,
   computerUsePip,
   computerUseTools,
@@ -711,7 +710,6 @@ const desktopBackendToolSurfaceDeps = {
 };
 // Cursor-overlay teardown assigns a module-scoped `let`, so it stays in main.ts.
 onMainWindowClose = () => {
-  computerUseOverlay.destroyAll();
   computerUseStatusItem.destroy();
   computerUsePip.destroyAll();
 };
@@ -1094,8 +1092,7 @@ function registerIpc(): void {
     taskLedgerStore,
     goalWiring,
     automationManager: automationWiring.manager,
-    computerUseOverlay,
-    computerUseStatusItem,
+      computerUseStatusItem,
     computerUsePip,
     computerUseTools,
     artifactStore,
@@ -1252,7 +1249,6 @@ const streamEvents = createSessionStreamer({
   sessionActivities,
   goalWiring,
   openGateway,
-  computerUseOverlay,
   computerUseTools,
   ...(computerUsePip ? { computerUsePip } : {}),
   ...(computerUseStatusItem ? { computerUseStatusItem } : {}),
@@ -1438,7 +1434,6 @@ wireAppLifecycle({
   automationWiring,
   goalWiring,
   computerUse,
-  computerUseOverlay,
   shellRuns,
   mcpManager,
   runtimePersistence,

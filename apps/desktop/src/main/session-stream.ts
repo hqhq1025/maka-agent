@@ -444,7 +444,6 @@ export interface SessionStreamerDeps {
   sessionActivities: SessionActivityRegistry;
   goalWiring: GoalWiring;
   openGateway: OpenGatewayService;
-  computerUseOverlay: AssembledTools['computerUseOverlay'];
   computerUseTools: AssembledTools['computerUseTools'];
   /**
    * The mirror and the menu-bar item, retired on the same signal as the cursor.
@@ -486,7 +485,6 @@ export function createSessionStreamer(deps: SessionStreamerDeps): StreamEvents {
     sessionActivities,
     goalWiring,
     openGateway,
-    computerUseOverlay,
     computerUseTools,
     computerUsePip,
     computerUseStatusItem,
@@ -523,7 +521,6 @@ export function createSessionStreamer(deps: SessionStreamerDeps): StreamEvents {
         }
         if (isTurnStatusChangingSessionEvent(event)) {
           emitSessionsChanged('turn-status-change', sessionId);
-          computerUseOverlay.clearForSession(sessionId);
           // The mirror lingers rather than vanishing: a person watching
           // background work looks over at the moment the answer arrives, which
           // is the moment this used to destroy the window.
@@ -548,7 +545,6 @@ export function createSessionStreamer(deps: SessionStreamerDeps): StreamEvents {
         openGateway.publishSessionEvent(sessionId, event);
         emitSessionsChanged('status-change', sessionId);
         emitSessionsChanged('turn-status-change', sessionId);
-        computerUseOverlay.clearForSession(sessionId);
         computerUseTools.clearSession(sessionId);
       },
       onDrained: async (outcome) => {
