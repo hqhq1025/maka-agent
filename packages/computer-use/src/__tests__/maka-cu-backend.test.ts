@@ -649,7 +649,12 @@ describe('maka-cu backend', () => {
     assert.equal(received(await readRecords(logPath), 'dispatch.point').length, 0);
   });
 
-  it('fences a dispatch while the user is physically active', async () => {
+  it('lets an element action through while the user is physically active', async () => {
+    // The guard protects the one pointer and the one keyboard the user also
+    // has. An element action names an element and lets the accessibility API
+    // actuate it, so it competes for neither. Fencing it here is what turned
+    // "the user is at their keyboard" into "Computer Use does not work" on a
+    // real matrix run — two scenarios spent 22 and 26 calls being refused.
     const { backend, logPath } = makeBackend({ physicalInputRecentlyActive: () => true });
     const observation = await observeFixture(backend);
     const result = await backend.runSemantic!(
@@ -657,8 +662,22 @@ describe('maka-cu backend', () => {
       signal(),
       RUN_CONTEXT,
     );
+    assert.equal(result.outcome.ok, true);
+    assert.equal(received(await readRecords(logPath), 'dispatch.element').length, 1);
+  });
+
+  it('still fences synthesized input while the user is physically active', async () => {
+    const { backend, logPath } = makeBackend({
+      allowCompatibilityInputDispatch: true,
+      physicalInputRecentlyActive: () => true,
+    });
+    const observation = await observeFixture(backend);
+    const result = await backend.run({ type: 'key', text: 'cmd+a' }, signal(), {
+      ...RUN_CONTEXT,
+      boundAction: boundCoordinate(observation),
+    });
     assert.equal(!result.outcome.ok && result.outcome.error, 'user_intervened');
-    assert.equal(received(await readRecords(logPath), 'dispatch.element').length, 0);
+    assert.equal(received(await readRecords(logPath), 'dispatch.key').length, 0);
   });
 
   it('rejects a frame whose bytes do not match the declared digest', async () => {
