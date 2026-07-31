@@ -33,7 +33,7 @@
    - drag/zoom 两端必须属于同一个 bound window。
 
 4. Execution ownership
-   - cua-driver 是唯一 native executor；window/page discovery、semantic preparation、input dispatch 和 effect readback 均留在该边界内。
+   - maka-cu 是唯一 native executor，通过 `maka.cu/2` 通信；window/page discovery、semantic preparation、input dispatch 和 effect readback 均留在该边界内。cua-driver 已于 2026-08-01 整体移除。
    - agent 不得移动真实鼠标、抢前台焦点、临时 activate 窗口或执行 windowless desktop input。
    - keyboard ownership 绑定 `session + turn + generation + pid + windowId + page/frame`，并在失败、stale、新 observation、intervention、service generation 变化、turn/session 结束时撤销。
    - child process 在未知 action outcome 下退出时必须 re-observe，禁止自动重放。
@@ -90,3 +90,80 @@
 ## Split Gate
 
 每个 stacked PR 必须写清：负责的 contract 条款、non-goals、exported interface、focused verifier 和 cumulative verifier。重建从最终已验证 tree 按目标文件/hunk 提取，不机械重放旧 73-commit 历史。
+
+## 两个执行器留下的教训
+
+Maka 先后依赖过 cua-driver（trycua，Rust，MCP）和 maka-cu（自有，Swift，
+`maka.cu/2`）。下面每一条都由真机实测得出，写在这里是因为它们是**设计层面**的，
+换执行器不会自动消失。
+
+### 协议要封闭，而不是宽容
+
+cua-driver 的 MCP 面是开放字符串：dispatch tier 要从 path 字符串猜，猜错的每一次
+都落到 `coordinate-background`；错误消息可能带应用文本，于是宿主必须整体脱敏，
+结果是**模型永远只看到错误码**，看不到那句可操作的话。`maka.cu/2` 把这些收成闭
+集（§1.1 的双错误层、§1.2 的固定句子、§6.3 的 tier/path 配对），宿主才敢把执行器
+的句子直接给模型看。
+
+教训：能让模型自救的信息，往往正是"看起来可能不安全所以被丢掉"的那部分。解法是
+让它在协议层就不可能不安全，而不是在宿主层一刀切。
+
+### 两端各写一份的东西，一定会分叉
+
+坐标动作 100% 不可用，藏了整个开发期。根因：快照侧 `hostWalkTree` 与校验侧
+`HostAXBindingProbe` 各自实现了同一份"摘要输入"字段表，根节点的 `ancestors` 一个
+读活链、一个硬编码空数组。65 个元素差 1 个，窗口摘要就不符，而窗口摘要是坐标动作
+**唯一**的锚。元素动作因为只校验自身，24/24 一直是绿的，完全遮住了它。
+
+修法不是让两份拷贝再对齐一次（那已经试过一次并且正是这次分叉的来源），而是收敛成
+一条代码路径、规则放在里面。
+
+教训：凡是"记录时算一遍、校验时再算一遍"的结构，必须共用一个函数。绿灯不覆盖的
+那条路，就是它会坏掉的地方。
+
+### 缓存不是查询
+
+`NSWorkspace.shared.runningApplications` 和 `frontmostApplication` 在没有 AppKit
+run loop 的进程里**永不刷新**。执行器因此看不见任何在它之后启动的应用，而
+`foregroundTaken` 恒为启动时刻的那个值——一个抢了用户前台的启动会如实报告"没抢"。
+所有真机测试之所以一直是绿的，只是因为目标应用碰巧早就在跑。
+
+教训：在无 run loop 的进程里，AppKit 的任何"当前状态"访问器都要按缓存对待，改用
+`proc_listpids` / 窗口服务这类每次真查的接口。
+
+### 上限要有时钟，截断要说出来
+
+`maxElements` 挡不住慢：由另一个进程托管的 open/save 面板走 1500 个元素花了 35 秒，
+撞穿宿主 20 秒死线被杀，而宿主报的是"执行器已退出"——把排查引向了错的一侧。而且
+截断只进了 trace，模型读到一棵残树会得出"这个控件不存在"。
+
+教训：任何遍历都要同时有数量上限和时间上限；任何截断都必须出现在**模型读得到的
+地方**，并且要说出它的含义（"可能存在但没列出"），而不只是一个 `truncated=true`。
+
+### 不变量要请求，而不是假设
+
+`apps.launch` 的类型注释写着"启动的应用不得抢焦点"，而实现用的是
+`NSWorkspace.OpenConfiguration()` 默认值——`activates` 默认为 `true`，从来没有请求
+过后台启动。诚实上报那一半是对的（应用自激活时如实报 `foregroundTaken: true`），
+缺的是先去请求。
+
+教训：一条不变量如果只写在注释里、没有对应的一行代码去请求它，它就不是不变量。
+
+### 剪枝要有回退路径才付得起
+
+Codex 剪得很狠（13 层深的通用容器全收），因为它有 `click{x,y}` 兜底：藏错了元素，
+模型还能按坐标点。Maka 的坐标路径默认关闭，藏掉的元素就是**够不到**的元素。跨 10
+个应用 9129 个元素实测，朴素的"无 label 就剪"会藏掉 3428 个，其中 1023 个
+（占全树 17%）是可操作的。
+
+教训：能不能剪，取决于剪错了有没有第二条路。没有回退的实现必须比有回退的保守。
+
+### 省 token 的地方常常不在编码上
+
+JSON/YAML 不比"一元素一行 + 缩进"省：实测分别是它的 3.5 倍和 2.1 倍，因为后者把
+包含关系编码成缩进、把默认状态编码成"不写"。真正的浪费在别处——`list_apps` 无条件
+返回 133 个应用（12,933 字节，约 3,600 token，占一个三步回合的 85%），而其中 118
+个根本没有窗口、模型碰都碰不到。
+
+教训：先量一次真实回合的 token 分布再动手。最大的一笔开销往往不在你正在优化的那
+个字段上。
