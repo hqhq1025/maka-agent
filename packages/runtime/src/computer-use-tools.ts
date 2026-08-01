@@ -1463,7 +1463,15 @@ export function buildComputerUseTools(deps: {
                 let recaptured: CuObservation;
                 try {
                   recaptured = await deps.backend.captureObservation(
-                    { app: record.appId, windowId: record.windowId, includeScreenshot: true },
+                    // No picture between steps. This observation exists to find
+                    // the next control by name — element ids are renumbered per
+                    // snapshot and a calculator's 全部清除 becomes 清除 once a
+                    // digit is entered — and a name needs no pixels. Asking for
+                    // them made a capture failure end the whole sequence:
+                    // measured on a real run, `stopped at step 1 of 9:
+                    // capture_failed` with step 1 reported `ok`, so a nine-key
+                    // calculation could never get past its first key.
+                    { app: record.appId, windowId: record.windowId, includeScreenshot: false },
                     abortSignal,
                     runCtx,
                   );
@@ -1576,13 +1584,26 @@ export function buildComputerUseTools(deps: {
             try {
               const lease = state.beforeObservation();
               if (lease.ok) {
-                final = registerObservation(
-                  record,
-                  await deps.backend.captureObservation(
-                    { app: record.appId, windowId: record.windowId, includeScreenshot: true },
+                // The picture is wanted here and only here: this is the frame
+                // the mirror shows, and it is the last thing the sequence does,
+                // so nothing is waiting behind it. But it is not worth the
+                // observation — a capture that times out would leave the model
+                // with no fresh tree at all, which is the state it needs most
+                // after a sequence that stopped early. Ask for the picture,
+                // settle for the elements.
+                const capture = async (withPicture: boolean) =>
+                  deps.backend.captureObservation!(
+                    {
+                      app: record.appId!,
+                      windowId: record.windowId!,
+                      includeScreenshot: withPicture,
+                    },
                     abortSignal,
                     runCtx,
-                  ),
+                  );
+                final = registerObservation(
+                  record,
+                  await capture(true).catch(() => capture(false)),
                 );
               }
             } catch {

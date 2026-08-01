@@ -1120,6 +1120,63 @@ describe('buildComputerUseTools — the `maka_computer` MakaTool', () => {
     assert.match(result.text, /stopped at step 2 of 3: target_missing/);
   });
 
+  test('a sequence walks its steps without asking for a picture each time', async () => {
+    // Measured on a real run: `stopped at step 1 of 9: capture_failed` with
+    // step 1 reported `ok`. The capture between steps exists to find the next
+    // control by name — ids are renumbered per snapshot and a calculator's
+    // 全部清除 becomes 清除 once a digit is entered — and a name needs no
+    // pixels. Asking for them let one slow capture end a nine-key calculation
+    // after its first key.
+    const backend = fakeBackend() as CuDispatchBackend & {
+      observeApp: NonNullable<CuDispatchBackend['observeApp']>;
+      captureObservation: NonNullable<CuDispatchBackend['captureObservation']>;
+      runSemantic: NonNullable<CuDispatchBackend['runSemantic']>;
+    };
+    const asked: boolean[] = [];
+    const oneButton = (): CuObservation =>
+      observation({
+        elements: [
+          {
+            elementId: '1',
+            role: 'AXButton',
+            label: 'Yes',
+            identity: { role: 'AXButton', label: 'Yes' },
+          },
+        ],
+      });
+    backend.observeApp = async () => oneButton();
+    backend.captureObservation = async (request) => {
+      asked.push(request.includeScreenshot);
+      return oneButton();
+    };
+    backend.runSemantic = async () => ({ outcome: { ok: true, tier: 'ax', verified: true } });
+    const [tool] = buildComputerUseTools({ backend });
+    const observed = (await tool.impl(
+      { action: 'observe', app: 'Fixture', window_id: 7 } as never,
+      ctx(),
+    )) as { text: string };
+
+    const result = (await tool.impl(
+      {
+        action: 'element_sequence',
+        observation_id: JSON.parse(observed.text).observation_id,
+        steps: [{ label: 'Yes' }, { label: 'Yes' }, { label: 'Yes' }],
+      } as never,
+      ctx(undefined, { toolCallId: 'sequence-pictures' }),
+    )) as { text: string };
+
+    assert.match(result.text, /ok \(3 of 3 steps\)/);
+    assert.ok(asked.length >= 2, 'the sequence re-observed between steps');
+    // Every capture but the last one is between steps and wants no picture.
+    assert.deepEqual(
+      asked.slice(0, -1),
+      asked.slice(0, -1).map(() => false),
+      'a between-steps capture must not ask for a screenshot',
+    );
+    // The last one is the frame the mirror shows, and nothing waits behind it.
+    assert.equal(asked.at(-1), true);
+  });
+
   test('scroll_element reaches the executor at all', async () => {
     // It was in the action union, in the approval classes and in the semantic
     // dispatch branch — and missing from the one list that grants an action

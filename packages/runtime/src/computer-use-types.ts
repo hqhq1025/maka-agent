@@ -357,7 +357,13 @@ export interface CuDispatchBackend {
     input: {
       app?: string;
       windowId?: number;
-      includeScreenshot: true;
+      /**
+       * Pinned to `true` while every caller wanted one. They no longer do: a
+       * capture between the steps of a sequence exists to find the next control
+       * by name, and asking for pixels there made one slow capture end the
+       * whole sequence.
+       */
+      includeScreenshot: boolean;
       menu?: string;
       query?: string;
     },
