@@ -2451,4 +2451,36 @@ describe('buildComputerUseTools — the `maka_computer` MakaTool', () => {
     assert.match(r.text, /aborted/);
     assert.equal(backend.last, undefined, 'backend.run must not be called after abort');
   });
+
+  test('S19: a window that did not answer in time is not reported as missing', async () => {
+    // Every observe failure was `target_missing`, including a timeout — so the
+    // failure said "no such app" about an app that was running, in the same
+    // sentence that listed it among the apps that were. Three models read that
+    // and re-sent the identical call; one found `include_screenshot: false` by
+    // trying it, which is the answer this should have handed over.
+    const backend = fakeBackend() as CuDispatchBackend & {
+      observeApp: NonNullable<CuDispatchBackend['observeApp']>;
+      listApps: NonNullable<CuDispatchBackend['listApps']>;
+    };
+    backend.observeApp = async () => {
+      throw new Error('timeout: the operation did not finish in time');
+    };
+    backend.listApps = async () => [
+      { appId: 'com.apple.TextEdit', pid: 1, name: 'TextEdit', windowCount: 1 },
+    ];
+    const [tool] = buildComputerUseTools({ backend });
+
+    const failed = (await tool.impl(
+      { action: 'observe', app: 'com.apple.TextEdit' } as never,
+      ctx(),
+    )) as { text: string; modelText?: string };
+    const said = failed.modelText ?? failed.text;
+
+    assert.match(said, /timeout/);
+    assert.doesNotMatch(said, /target_missing/);
+    // The recovery, rather than a list of apps that includes the one it just
+    // said was missing.
+    assert.match(said, /include_screenshot/);
+    assert.doesNotMatch(said, /Apps with windows/);
+  });
 });

@@ -1687,17 +1687,32 @@ export function buildComputerUseTools(deps: {
               );
             } catch (error) {
               const detail = error instanceof Error ? error.message : String(error);
-              // `ambiguousApp` is a different fact than "no such window" and the
-              // enum already distinguishes them; anything else is the target
-              // not being there.
-              const code = /^ambiguous/i.test(detail) ? 'ambiguous_target' : 'target_missing';
+              // `ambiguousApp` is a different fact than "no such window", and a
+              // timeout is a third: the executor keeps them apart precisely
+              // because the caller's next move differs — one says try another
+              // name, one says say which one, and one says look again. Folding
+              // the timeout into `target_missing` said "no such app" about an
+              // app that was running, in the same sentence that went on to list
+              // it among the apps that were. Three models read that and re-sent
+              // the identical observe; one of them found `include_screenshot:
+              // false` by trying it, which is the answer this should have given.
+              const code = /^ambiguous/i.test(detail)
+                ? 'ambiguous_target'
+                : /\btimeout\b|did not finish in time/i.test(detail)
+                  ? 'timeout'
+                  : 'target_missing';
               // Carry the recovery in the failure. The names are the whole
               // reason this call failed, they are one `list_apps` away, and a
               // model that has to make that call spends a round trip finding
               // out something this message already knows. Bounded, because an
               // error is not a place to paste a hundred app names.
               let running = '';
-              if (code === 'target_missing' && input.app && deps.backend.listApps) {
+              if (code === 'timeout') {
+                running =
+                  input.include_screenshot === false
+                    ? ' The window is there and did not answer in time; observe it again.'
+                    : ' The window is there and did not answer in time. Capturing its picture is the slow part, so observe it again with include_screenshot: false — the elements come back either way.';
+              } else if (code === 'target_missing' && input.app && deps.backend.listApps) {
                 try {
                   const apps = await deps.backend.listApps(abortSignal);
                   const named = apps
