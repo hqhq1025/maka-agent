@@ -87,6 +87,7 @@ async function seedConnection(userDataDir, model) {
   await connections.setDefault(slug);
 }
 const SCRATCH = '/tmp/cu-scratch';
+const VSCODE_CLI = '/Applications/Visual Studio Code.app/Contents/Resources/app/bin/code';
 
 /** A separate process reading the same tree, owing Computer Use nothing. */
 async function oracle(bundle, role) {
@@ -178,11 +179,47 @@ const SCENARIOS = [
     app: 'Visual Studio Code',
     bundle: 'com.microsoft.VSCode',
     expect:
-      'Search is cmd+shift+F, then a field, then results. Tests whether a chord reaches an Electron app at all and whether the results panel is readable.',
+      'Search is cmd+shift+F — which cannot reach a background application — or the sidebar search icon, which is an element and can. Tests whether an Electron tree is readable enough to take the second route when the first is closed.',
     prompt:
       '用 computer use 在 Visual Studio Code 里搜索整个项目中包含 TODO 的地方，告诉我找到了多少个结果。只搜索，不要修改任何文件。',
     async before() {
-      return {};
+      // A project of its own, in a window of its own.
+      //
+      // This scenario used to search whatever the user had open. On a real run
+      // that was a remote project over a dropped SSH connection, so the model
+      // correctly reported that it could not search and the run measured the
+      // machine's networking rather than Computer Use. A scenario that depends
+      // on the operator's workspace is not measuring the product, and this
+      // suite's own rule is that a scenario brings its own state.
+      const project = join(SCRATCH, 'find-todo-project');
+      await mkdir(project, { recursive: true });
+      await writeFile(join(project, 'alpha.txt'), 'first line\n// TODO: wire the handler\n');
+      await writeFile(join(project, 'beta.txt'), 'nothing here\n');
+      await writeFile(join(project, 'gamma.txt'), '// TODO: drop the shim\nlast\n');
+      // VS Code's own CLI, because `open --args` does not reach an instance
+      // that is already running — measured: the flags were accepted, no window
+      // appeared, and the run went on searching whatever the user had open.
+      //
+      // `-n` is a new window, so nothing the user has open is touched. It does
+      // take the foreground, which no flag prevents, so the foreground is handed
+      // straight back: a target that is already in front would make
+      // "driving in the background never brought the target forward" pass for
+      // the wrong reason.
+      await exec(VSCODE_CLI, ['-n', project]).catch(() => {});
+      await new Promise((r) => setTimeout(r, 6000));
+      await exec('osascript', ['-e', 'tell application "Finder" to activate']).catch(() => {});
+      await new Promise((r) => setTimeout(r, 1200));
+      return { project };
+    },
+    async after({ project }) {
+      // The files, not the window.
+      //
+      // Closing it would mean asking VS Code to close *a* window, and the one
+      // it closes is whichever is frontmost — which may well be the operator's
+      // own. A scenario cleaning up must not be able to take away work that was
+      // not its own; the window it opened is empty and named after this
+      // directory, and is left to be closed deliberately.
+      await rm(project, { recursive: true, force: true }).catch(() => {});
     },
     async verify() {
       // The search field carrying the term is the fact; the count is the model's
@@ -393,6 +430,9 @@ for (const scenario of scenarios) {
         `[${witness.ok ? 'DONE' : 'NOT DONE'}] the task, when somebody else looks — ${witness.detail}`,
       );
     }
+    // After the witness, never before: cleanup that ran first would take away
+    // the state the witness exists to read.
+    await scenario.after?.(setup).catch?.(() => {});
 
     await writeFile(join(OUT, `${scenario.key}__${model}.log`), out);
     results.push({
