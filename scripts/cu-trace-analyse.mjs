@@ -171,6 +171,72 @@ for (const r of report) {
     console.log(`    BLIND — ${r.blind} mutating call(s) with no observation in front`);
 }
 
+// Which action wastes the most, and what a model does after each refusal.
+//
+// The per-run shapes above say a run went badly; these two say what to fix. On
+// the 30 runs that produced them: `secondary_action` was 36 of 217 calls with
+// 29 failures — the worst rate on the surface, and every one of them `raise` —
+// and the two commonest sequences in the whole corpus were
+// `secondary_action→dispatch_refused → secondary_action` (12) and
+// `secondary_action→reobserve_required → observe` (13). One action, 25 wasted
+// calls, and neither number is visible one run at a time.
+const everyCall = [];
+for (const file of files) {
+  const raw = await readFile(file, 'utf8').catch(() => '');
+  const parsed = raw
+    .split('\n')
+    .filter(Boolean)
+    .map((line) => {
+      try {
+        return JSON.parse(line);
+      } catch {
+        return null;
+      }
+    })
+    .filter(Boolean)
+    .map(classify)
+    .filter(Boolean);
+  parsed.forEach((call, index) => {
+    everyCall.push({ ...call, next: parsed[index + 1]?.action ?? null });
+  });
+}
+
+if (everyCall.length > 0) {
+  const byAction = new Map();
+  for (const call of everyCall) {
+    const row = byAction.get(call.action) ?? { calls: 0, failed: 0 };
+    row.calls += 1;
+    if (call.failed) row.failed += 1;
+    byAction.set(call.action, row);
+  }
+  const ranked = [...byAction.entries()]
+    .filter(([, row]) => row.failed > 0)
+    .sort((a, b) => b[1].failed - a[1].failed);
+  if (ranked.length > 0) {
+    console.log('\nWHAT FAILS, BY ACTION');
+    for (const [action, row] of ranked) {
+      console.log(
+        `    ${action.padEnd(20)} ${String(row.failed).padStart(3)}/${String(row.calls).padEnd(3)} ` +
+          `(${Math.round((row.failed / row.calls) * 100)}%)`,
+      );
+    }
+  }
+
+  const sequences = new Map();
+  for (const call of everyCall) {
+    if (!call.failed || !call.next) continue;
+    const key = `${call.action}→${call.failed} then ${call.next}`;
+    sequences.set(key, (sequences.get(key) ?? 0) + 1);
+  }
+  const common = [...sequences.entries()].sort((a, b) => b[1] - a[1]).slice(0, 8);
+  if (common.length > 0) {
+    console.log('\nWHAT A MODEL DOES NEXT, AFTER A REFUSAL');
+    // Same action again is a dead end; `observe` is the round trip a refusal
+    // that kept its frame would not have cost.
+    for (const [key, n] of common) console.log(`    ${key.padEnd(52)} × ${n}`);
+  }
+}
+
 const total = report.filter((r) => !r.empty);
 if (total.length > 0) {
   const calls = total.reduce((n, r) => n + r.calls, 0);
