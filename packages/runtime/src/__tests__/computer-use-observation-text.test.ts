@@ -8,7 +8,10 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { renderObservationForModel } from '../computer-use-observation-text.js';
+import {
+  renderObservationForModel,
+  renderObservationText,
+} from '../computer-use-observation-text.js';
 import type { CuObservation, CuObservedElement } from '../computer-use-types.js';
 
 function observation(elements: CuObservedElement[]): CuObservation {
@@ -309,4 +312,81 @@ test('a subrole is written only where it says something the role does not', () =
   assert.equal((rows[2] ?? '').includes('/'), false, 'a container keeps its bare role');
   assert.equal((rows[3] ?? '').includes('/'), false, 'a labelled control keeps its bare role');
   assert.match(rows[4] ?? '', /AXTextField\/SecureTextField/);
+});
+
+// ---------------------------------------------------------------------------
+// The offline evaluator's entry point
+// ---------------------------------------------------------------------------
+//
+// `scripts/cu-prune-eval.mjs` measures what a rendering change would cost
+// against recorded trajectories. It has to call the real renderer — the same
+// instrument built elsewhere reached a reversed conclusion twice because it
+// carried a hand-written copy of the policy — so the policy takes an option
+// instead. What must stay true is that the option changes nothing until it is
+// asked to.
+
+test('rendering with no options is byte-for-byte the shipped rendering', () => {
+  const sample = observation([
+    { elementId: '0', role: 'AXWindow', label: '文稿', actions: ['raise'] },
+    { elementId: '1', role: 'AXGroup', parentElementId: '0' },
+    { elementId: '2', role: 'AXGroup', parentElementId: '1' },
+    { elementId: '3', role: 'AXButton', label: '存储', parentElementId: '2' },
+    { elementId: '4', role: 'AXButton', label: '取消', parentElementId: '2' },
+    { elementId: '5', role: 'AXTextField', subrole: 'AXSecureTextField', parentElementId: '0' },
+    { elementId: '6', role: 'AXMenuBar', parentElementId: undefined },
+    { elementId: '7', role: 'AXMenuBarItem', label: '文件', parentElementId: '6' },
+    { elementId: '8', role: 'AXMenu', parentElementId: '7' },
+    { elementId: '9', role: 'AXMenuItem', label: '打开…', parentElementId: '8' },
+    { elementId: '10', role: 'AXMenuItem', enabled: false, parentElementId: '8' },
+  ]);
+  assert.equal(renderObservationText(sample), renderObservationForModel(sample));
+  assert.equal(renderObservationText(sample, {}), renderObservationForModel(sample));
+  assert.equal(
+    renderObservationText({ ...sample, query: '存储' }),
+    renderObservationForModel({ ...sample, query: '存储' }),
+  );
+});
+
+test('collapsing a wrapper is not the same thing as dropping one', () => {
+  // The relaxed form the evaluator measures lifts one clause and only one: a
+  // container may hold several children. It still may not carry a name, a
+  // value, an action, focus or selection — and it still must hold at least one
+  // child, because a childless container has nothing to lift into its parent
+  // and removing it would be a deletion wearing a collapse's name.
+  const sample = observation([
+    { elementId: '0', role: 'AXWindow' },
+    { elementId: '1', role: 'AXGroup', parentElementId: '0' },
+    { elementId: '2', role: 'AXButton', label: '一', parentElementId: '1' },
+    { elementId: '3', role: 'AXButton', label: '二', parentElementId: '1' },
+    { elementId: '4', role: 'AXGroup', parentElementId: '0' },
+    { elementId: '5', role: 'AXGroup', label: '分组', parentElementId: '0' },
+    { elementId: '6', role: 'AXButton', label: '三', parentElementId: '5' },
+  ]);
+  const shipped = lines(renderObservationForModel(sample)).slice(1);
+  assert.deepEqual(shipped, [
+    '0 AXWindow',
+    '\t1 AXGroup',
+    '\t\t2 AXButton "一"',
+    '\t\t3 AXButton "二"',
+    '\t4 AXGroup',
+    '\t5 AXGroup "分组"',
+    '\t\t6 AXButton "三"',
+  ]);
+  const relaxed = lines(renderObservationText(sample, { multiChildWrappers: true })).slice(1);
+  assert.deepEqual(relaxed, [
+    '0 AXWindow',
+    // The two-child wrapper is gone and both children moved up a level.
+    '\t2 AXButton "一"',
+    '\t3 AXButton "二"',
+    // The childless one stays: there is nothing to lift, so removing it would
+    // remove an element rather than a level.
+    '\t4 AXGroup',
+    // The named one stays: its name is what a model would point at.
+    '\t5 AXGroup "分组"',
+    '\t\t6 AXButton "三"',
+  ]);
+  // Nothing addressable was lost either way.
+  for (const id of ['0', '2', '3', '4', '5', '6']) {
+    assert.match(relaxed.join('\n'), new RegExp(`(^|\\t)${id} AX`, 'm'));
+  }
 });

@@ -67,7 +67,10 @@ const MAX_DEPTH = 24;
  * list, and that is real content. The only way past a tree that large is to
  * stop asking for all of it.
  */
-function matching(elements: readonly CuObservedElement[], query: string): CuObservedElement[] {
+export function matching(
+  elements: readonly CuObservedElement[],
+  query: string,
+): CuObservedElement[] {
   const needle = query.trim().toLowerCase();
   if (needle === '') return [...elements];
   const byId = new Map(elements.map((element) => [element.elementId, element]));
@@ -89,7 +92,38 @@ function matching(elements: readonly CuObservedElement[], query: string): CuObse
   return elements.filter((element) => keep.has(element.elementId));
 }
 
+/**
+ * Knobs the shipped rendering does not turn.
+ *
+ * They exist for `scripts/cu-prune-eval.mjs`, which measures what a rendering
+ * change would cost and save against recorded trajectories before anyone tries
+ * it on a real machine. The evaluator has to run the real renderer — the two
+ * previous attempts at this elsewhere both reached a *reversed* conclusion
+ * because the evaluator carried its own copy of the policy and the copy was
+ * subtly wrong. So the policy stays here, in one place, and the offline harness
+ * calls it with a different argument rather than reimplementing it.
+ *
+ * Every default is the shipped behaviour, and a test asserts that rendering
+ * with no options is byte-for-byte what `renderObservationForModel` produces.
+ */
+export interface ObservationRenderOptions {
+  /**
+   * Collapse structural containers that hold more than one child.
+   *
+   * Off. See `collapseStructuralWrappers` for why holding several children is
+   * treated as a statement rather than as a layer.
+   */
+  readonly multiChildWrappers?: boolean;
+}
+
 export function renderObservationForModel(observation: CuObservation): string {
+  return renderObservationText(observation);
+}
+
+export function renderObservationText(
+  observation: CuObservation,
+  options: ObservationRenderOptions = {},
+): string {
   // The menu bar is separated out and captioned rather than left to appear as a
   // second unexplained root. A model reading `AXMenuBar` under the window tree
   // has no way to know that those names open, that opening one costs an
@@ -99,7 +133,7 @@ export function renderObservationForModel(observation: CuObservation): string {
   const query = observation.query ?? '';
   const shown = query ? matching(window, query) : window;
   const lines: string[] = [header(observation, window.length, query, shown.length)];
-  for (const [element, depth] of walk(collapseStructuralWrappers(shown))) {
+  for (const [element, depth] of walk(collapseStructuralWrappers(shown, options))) {
     lines.push(`${'\t'.repeat(depth)}${elementLine(element)}`);
   }
   if (menu.length > 0) {
@@ -117,7 +151,7 @@ export function renderObservationForModel(observation: CuObservation): string {
  * one — and splitting on the `AXMenu` prefix would move it out of the window it
  * belongs to.
  */
-function splitMenu(elements: readonly CuObservedElement[]): {
+export function splitMenu(elements: readonly CuObservedElement[]): {
   window: CuObservedElement[];
   menu: CuObservedElement[];
 } {
@@ -208,7 +242,9 @@ function collapse(
 }
 
 /** `AXMenu` sits between a menu title and its commands and says nothing. */
-function collapseMenuContainers(elements: readonly CuObservedElement[]): CuObservedElement[] {
+export function collapseMenuContainers(
+  elements: readonly CuObservedElement[],
+): CuObservedElement[] {
   return collapse(elements, (element) => element.role === 'AXMenu');
 }
 
@@ -239,13 +275,27 @@ const STRUCTURAL_ROLES = new Set([
  * Every clause is load-bearing. A container with a `label` names its section; a
  * `value` or an action makes it a control; `focused` is where the keys go; and
  * more than one child is the grouping this is careful not to erase.
+ *
+ * `multiChildWrappers` lifts that last clause, and only that one. What it does
+ * not lift is the requirement that the container have a child at all: a
+ * childless node has nothing to lift into its parent, so collapsing one is a
+ * deletion rather than a collapse, and deletion is the thing this whole file
+ * refuses to do. Measured savings for the relaxed form live in
+ * `scripts/cu-prune-eval.mjs`; it is off here because the measurement, not the
+ * argument, is what should decide it.
  */
-function collapseStructuralWrappers(elements: readonly CuObservedElement[]): CuObservedElement[] {
+export function collapseStructuralWrappers(
+  elements: readonly CuObservedElement[],
+  options: ObservationRenderOptions = {},
+): CuObservedElement[] {
   const childCount = new Map<string, number>();
   for (const element of elements) {
     const parent = element.parentElementId;
     if (parent !== undefined) childCount.set(parent, (childCount.get(parent) ?? 0) + 1);
   }
+  const enoughChildren = options.multiChildWrappers
+    ? (count: number) => count >= 1
+    : (count: number) => count === 1;
   return collapse(
     elements,
     (element) =>
@@ -255,7 +305,7 @@ function collapseStructuralWrappers(elements: readonly CuObservedElement[]): CuO
       !(element.actions && element.actions.length > 0) &&
       element.focused !== true &&
       element.selected !== true &&
-      childCount.get(element.elementId) === 1,
+      enoughChildren(childCount.get(element.elementId) ?? 0),
   );
 }
 
@@ -276,7 +326,7 @@ function collapseStructuralWrappers(elements: readonly CuObservedElement[]): CuO
  * Ids are untouched — the separator keeps the id it was minted with, it is
  * simply not written down — so nothing downstream has to know this happened.
  */
-function dropSeparators(elements: readonly CuObservedElement[]): CuObservedElement[] {
+export function dropSeparators(elements: readonly CuObservedElement[]): CuObservedElement[] {
   const hasChildren = new Set<string>();
   for (const element of elements) {
     if (element.parentElementId !== undefined) hasChildren.add(element.parentElementId);
@@ -413,7 +463,7 @@ function roleOf(element: CuObservedElement): string {
   return `${element.role}/${subrole}`;
 }
 
-function elementLine(element: CuObservedElement): string {
+export function elementLine(element: CuObservedElement): string {
   // `role/subrole` rather than a separate field: it is the same answer to
   // "what is this", it is absent on most elements, and a password field that
   // reads `AXTextField/AXSecureTextField` is the one case where the model must
@@ -457,7 +507,7 @@ function elementLine(element: CuObservedElement): string {
  * prunes, so a reported child can outlive its reported parent, and hiding such
  * an element to keep the tree tidy would hide a real target.
  */
-function walk(elements: readonly CuObservedElement[]): Array<[CuObservedElement, number]> {
+export function walk(elements: readonly CuObservedElement[]): Array<[CuObservedElement, number]> {
   const byId = new Map<string, CuObservedElement>();
   for (const element of elements) byId.set(element.elementId, element);
 
