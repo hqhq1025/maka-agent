@@ -15,6 +15,8 @@ declare global {
 
 const frame = document.getElementById('frame') as HTMLImageElement;
 const cursor = document.getElementById('cursor') as HTMLDivElement;
+const placeholder = document.getElementById('placeholder') as HTMLDivElement;
+const chrome = document.getElementById('chrome') as HTMLDivElement;
 const controls = document.getElementById('controls') as HTMLDivElement;
 const resize = document.getElementById('resize') as HTMLDivElement;
 
@@ -50,12 +52,10 @@ window.computerUsePip.onFrame((payload) => {
   const heightPx = typeof payload.heightPx === 'number' ? payload.heightPx : 0;
   capture = { widthPx, heightPx };
   frame.src = src;
-  // Keep the cursor dot proportional to the mirror. Codex's tile defaults to a
-  // 200pt longest edge, where a fixed 11px dot covers 5.5% of the surface.
-  const shorter = Math.min(frame.clientWidth || 0, frame.clientHeight || 0);
-  if (shorter > 0) {
-    cursor.style.setProperty('--dot', `${Math.max(5, Math.min(11, shorter * 0.055))}px`);
-  }
+  // The mirror is streaming, so the loading placeholder has done its job. It
+  // is only ever taken down, never put back: a stream that stalls mid-run
+  // should hold the last frame, not claim to be starting again.
+  placeholder.dataset.visible = '0';
 });
 
 window.computerUsePip.onCursor((payload) => {
@@ -94,6 +94,7 @@ let dragging = false;
 window.computerUsePip.onControls((payload) => {
   const visible = isRecord(payload) && payload.visible === true ? '1' : '0';
   controls.dataset.visible = visible;
+  chrome.dataset.visible = visible;
   resize.dataset.visible = visible;
 });
 
