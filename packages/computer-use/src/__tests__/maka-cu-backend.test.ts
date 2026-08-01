@@ -47,6 +47,8 @@ const DISPATCH_ERROR = process.env.MAKACU_MOCK_DISPATCH_ERROR || '';
 const TIER = process.env.MAKACU_MOCK_TIER || 'ax';
 const PATH_NAME = process.env.MAKACU_MOCK_PATH || 'ax_action';
 const BAD_IMAGE_SHA = process.env.MAKACU_MOCK_BAD_IMAGE_SHA === '1';
+// A frame past the model-context cap: readable window, unreturnable picture.
+const BIG_IMAGE = process.env.MAKACU_MOCK_BIG_IMAGE === '1';
 const BARE_IMAGE_SHA = process.env.MAKACU_MOCK_BARE_IMAGE_SHA === '1';
 const NO_POST_SNAPSHOT = process.env.MAKACU_MOCK_NO_POST_SNAPSHOT === '1';
 // The action closed the thing it acted on, so the post-action observation could
@@ -89,15 +91,16 @@ function domainError(id, code, detail, extra) {
 }
 function writeImage(name) {
   const file = path.join(imageDir, name + '.png');
-  fs.writeFileSync(file, PNG);
-  const hex = crypto.createHash('sha256').update(PNG).digest('hex');
+  const bytes = BIG_IMAGE ? Buffer.alloc(9 * 1024 * 1024, 7) : PNG;
+  fs.writeFileSync(file, bytes);
+  const hex = crypto.createHash('sha256').update(bytes).digest('hex');
   const sha = BARE_IMAGE_SHA ? hex : 'sha256:' + hex;
   return {
     path: file,
     format: 'png',
     widthPx: 1200,
     heightPx: 800,
-    byteLength: PNG.byteLength,
+    byteLength: bytes.byteLength,
     sha256: BAD_IMAGE_SHA ? digest('a different frame') : sha,
     scale: 2,
   };
@@ -318,6 +321,7 @@ function makeBackend(
     tier?: string;
     path?: string;
     badImageSha?: boolean;
+    bigImage?: boolean;
     bareImageSha?: boolean;
     noPostSnapshot?: boolean;
     postWindowGone?: boolean;
@@ -349,6 +353,7 @@ function makeBackend(
   process.env.MAKACU_MOCK_TIER = opts.tier ?? 'ax';
   process.env.MAKACU_MOCK_PATH = opts.path ?? 'ax_action';
   process.env.MAKACU_MOCK_BAD_IMAGE_SHA = opts.badImageSha ? '1' : '';
+  process.env.MAKACU_MOCK_BIG_IMAGE = opts.bigImage ? '1' : '';
   process.env.MAKACU_MOCK_BARE_IMAGE_SHA = opts.bareImageSha ? '1' : '';
   process.env.MAKACU_MOCK_NO_POST_SNAPSHOT = opts.noPostSnapshot ? '1' : '';
   process.env.MAKACU_MOCK_POST_WINDOW_GONE = opts.postWindowGone ? '1' : '';
@@ -611,7 +616,12 @@ describe('maka-cu backend', () => {
   });
 
   it('rejects a tier/path pair outside the declared table instead of coercing it', async () => {
-    const { backend } = makeBackend({ tier: 'ax', path: 'cg_event_pid' });
+    const traces: any[] = [];
+    const { backend } = makeBackend({
+      tier: 'ax',
+      path: 'cg_event_pid',
+      onTrace: (event) => traces.push(event),
+    });
     const observation = await observeFixture(backend);
     const result = await backend.runSemantic!(
       { type: 'click_element', observationId: observation.observationId, elementId: 'el_2' },
@@ -619,7 +629,16 @@ describe('maka-cu backend', () => {
       RUN_CONTEXT,
     );
     assert.equal(!result.outcome.ok && result.outcome.error, 'service_mismatch');
-    assert.match(result.outcome.ok ? '' : result.outcome.message, /does not permit path/);
+    // Which pair was wrong is a fact about two implementations disagreeing, in
+    // wire vocabulary the tool surface does not have. It goes to the trace; the
+    // model reads the one thing that changes what it does next.
+    assert.match(
+      traces.find((event) => event.type === 'protocol_violation')?.reason ?? '',
+      /does not permit path/,
+    );
+    const message = result.outcome.ok ? '' : result.outcome.message;
+    assert.doesNotMatch(message, /tier|path|maka\.cu/);
+    assert.match(message, /restarted|another way/);
   });
 
   it('treats a global-pointer path as a compromised session', async () => {
@@ -639,8 +658,11 @@ describe('maka-cu backend', () => {
     // §6.3: the executor states the path and the host verifies it. A path that
     // was never permitted at handshake means the system cursor moved.
     assert.equal(!result.outcome.ok && result.outcome.error, 'service_mismatch');
-    assert.match(result.outcome.ok ? '' : result.outcome.message, /moves the system cursor/);
     assert.ok(traces.some((event) => event.type === 'protocol_violation'));
+    assert.match(
+      traces.find((event) => event.type === 'protocol_violation')?.reason ?? '',
+      /moves the system cursor/,
+    );
   });
 
   it('anchors a coordinate dispatch to the window digest in image pixels', async () => {
@@ -746,13 +768,55 @@ describe('maka-cu backend', () => {
     // dead executor and sends the reader to the wrong side. Observing an app
     // whose front window is a file dialog costs about eighteen seconds against
     // a twenty-second deadline, so this is the message a busy machine makes.
-    const { backend } = makeBackend({ hangObserve: true, timeoutMs: 300 });
+    //
+    // That distinction is for the person reading the trace. The model reads
+    // what it can act on, and what it must not do is repeat an action whose
+    // fate is unknown.
+    const traces: any[] = [];
+    const { backend } = makeBackend({
+      hangObserve: true,
+      timeoutMs: 300,
+      onTrace: (event) => traces.push(event),
+    });
     await assert.rejects(
       backend.captureObservation!({ windowId: 90210, includeScreenshot: true }, signal(), {
         ...RUN_CONTEXT,
       }),
-      /host deadline/,
+      /outcome_unknown/,
     );
+    const hostError = traces.find((event) => event.type === 'host_error');
+    assert.equal(hostError?.kind, 'executor_stopped_mid_action');
+    assert.match(hostError?.detail ?? '', /host deadline/);
+  });
+
+  it('keeps executor diagnostics out of what the model reads', async () => {
+    // `maka-cu dispatch.element: Invalid params (-32602)` was reaching the
+    // model: a wire method it cannot call, a JSON-RPC number it cannot act on,
+    // and no next move. Raw failure text — RPC bodies, stderr tails, error
+    // codes this build has never heard of — goes to the trace, and the model
+    // gets a sentence written for it.
+    const traces: any[] = [];
+    const { backend } = makeBackend({
+      dispatchError: 'wormhole_collapsed',
+      onTrace: (event) => traces.push(event),
+    });
+    const observation = await observeFixture(backend);
+    const result = await backend.runSemantic!(
+      { type: 'click_element', observationId: observation.observationId, elementId: 'el_2' },
+      signal(),
+      RUN_CONTEXT,
+    );
+    assert.equal(!result.outcome.ok && result.outcome.error, 'service_mismatch');
+    const message = result.outcome.ok ? '' : result.outcome.message;
+    // No wire method, no error code, no protocol name, and a next move.
+    assert.doesNotMatch(
+      message,
+      /dispatch\.element|maka-cu|maka\.cu|wormhole_collapsed|-?32\d\d\d/,
+    );
+    assert.match(message, /different action/);
+    const hostError = traces.find((event) => event.type === 'host_error');
+    assert.equal(hostError?.kind, 'unknown_refusal');
+    assert.match(hostError?.detail ?? '', /wormhole_collapsed/);
   });
 
   it('reports a refused launch with its mapped code, not a raw executor refusal', async () => {
@@ -1132,6 +1196,11 @@ describe('maka-cu backend', () => {
       RUN_CONTEXT,
     );
     assert.equal(!result.outcome.ok && result.outcome.error, 'stale_frame');
+    // The same sentence a refused element action gets: the id that failed, and
+    // the one thing that produces a working one.
+    const message = result.outcome.ok ? '' : result.outcome.message;
+    assert.match(message, /'el_404'/);
+    assert.match(message, /observe the window again/i);
     assert.equal(received(await readRecords(logPath), 'dispatch.key').length, 0);
   });
 
@@ -1220,7 +1289,11 @@ describe('maka-cu backend', () => {
   });
 
   it('rejects an ok result that declares a refusal', async () => {
-    const { backend } = makeBackend({ okOutcome: 'refused' });
+    const traces: any[] = [];
+    const { backend } = makeBackend({
+      okOutcome: 'refused',
+      onTrace: (event) => traces.push(event),
+    });
     const observation = await observeFixture(backend);
     const result = await backend.runSemantic!(
       { type: 'click_element', observationId: observation.observationId, elementId: 'el_2' },
@@ -1229,7 +1302,10 @@ describe('maka-cu backend', () => {
     );
     // §6.5: `outcome` selects the arm, so the two can never disagree.
     assert.equal(!result.outcome.ok && result.outcome.error, 'service_mismatch');
-    assert.match(result.outcome.ok ? '' : result.outcome.message, /contradicts the ok:true arm/);
+    assert.match(
+      traces.find((event) => event.type === 'protocol_violation')?.reason ?? '',
+      /contradicts the ok:true arm/,
+    );
   });
 
   // §7.1 — refused, not unsupported.
@@ -1274,18 +1350,23 @@ describe('maka-cu backend', () => {
       RUN_CONTEXT,
     );
     assert.equal(!again.outcome.ok && again.outcome.error, 'stale_frame');
-    assert.match(again.outcome.ok ? '' : again.outcome.message, /missing or already consumed/);
+    assert.match(again.outcome.ok ? '' : again.outcome.message, /observe the window again/i);
   });
 
   // §1.3 — one way to write a hash.
 
   it('rejects a bare-hex image digest instead of comparing against it', async () => {
-    const { backend } = makeBackend({ bareImageSha: true });
+    const traces: any[] = [];
+    const { backend } = makeBackend({ bareImageSha: true, onTrace: (event) => traces.push(event) });
     // §1.3: the host prefixes its own digest and never strips the executor's.
     // Accepting both spellings is what let the two ends disagree; comparing
     // bare hex against a prefixed value made every frame mismatch, and a
     // mismatched frame is teardown.
-    await assert.rejects(observeFixture(backend), /"sha256:" lowercase-hex digest/);
+    await assert.rejects(observeFixture(backend), /service_mismatch/);
+    assert.match(
+      traces.find((event) => event.type === 'protocol_violation')?.reason ?? '',
+      /"sha256:" lowercase-hex digest/,
+    );
   });
 
   // §5.2 / §5.4 / §5.5 — declared fields are not optional.
@@ -1298,20 +1379,36 @@ describe('maka-cu backend', () => {
   });
 
   it('refuses a window list entry with no zIndex rather than sorting it as 0', async () => {
-    const { backend } = makeBackend({ malformed: 'window_no_zindex' });
+    const traces: any[] = [];
+    const { backend } = makeBackend({
+      malformed: 'window_no_zindex',
+      onTrace: (event) => traces.push(event),
+    });
     // §5.4: the executor MUST NOT emit ties, and a defaulted 0 manufactures
     // them in the sort that picks the target window.
     await assert.rejects(
       backend.captureObservation!({ windowId: 90210, includeScreenshot: true }, signal(), {
         ...RUN_CONTEXT,
       }),
-      /window.zIndex/,
+      /service_mismatch/,
+    );
+    assert.match(
+      traces.find((event) => event.type === 'protocol_violation')?.reason ?? '',
+      /window\.zIndex/,
     );
   });
 
   it('refuses an apps.list entry with no windowCount rather than reporting zero', async () => {
-    const { backend } = makeBackend({ malformed: 'app_no_window_count' });
-    await assert.rejects(backend.listApps!(signal()), /app.windowCount/);
+    const traces: any[] = [];
+    const { backend } = makeBackend({
+      malformed: 'app_no_window_count',
+      onTrace: (event) => traces.push(event),
+    });
+    await assert.rejects(backend.listApps!(signal()), /service_mismatch/);
+    assert.match(
+      traces.find((event) => event.type === 'protocol_violation')?.reason ?? '',
+      /app\.windowCount/,
+    );
   });
 
   // §1.1 — a refusal from a helper is still an outcome.
@@ -1332,6 +1429,188 @@ describe('maka-cu backend', () => {
       }),
       /permission_missing/,
     );
+  });
+
+  // What the model reads. Every assertion below is about a sentence a model
+  // acted on wrongly on a real machine, not about a code path.
+
+  it('points a refused raise at the action that can move a window', async () => {
+    // Measured on a window-arrange run: `secondary_action raise` was refused
+    // and re-sent — twice by one model, once by another — because the refusal
+    // said the attempt had failed and nothing about there being another way to
+    // put a window where the user asked for it.
+    const { backend } = makeBackend({
+      dispatchError: 'dispatch_refused',
+      refusalPath: 'ax_action',
+      refusalOutcome: 'failed',
+      noWouldRequirePath: true,
+    });
+    const observation = await observeFixture(backend);
+    const result = await backend.runSemantic!(
+      {
+        type: 'secondary_action',
+        action: 'raise',
+        observationId: observation.observationId,
+        elementId: 'el_2',
+      },
+      signal(),
+      RUN_CONTEXT,
+    );
+    assert.equal(!result.outcome.ok && result.outcome.error, 'dispatch_refused');
+    const message = result.outcome.ok ? '' : result.outcome.message;
+    assert.match(message, /window_action/, 'names the action that moves a window');
+    assert.match(message, /click_element|element action/);
+  });
+
+  it('gives a refusal that was carried out and declined a next move too', async () => {
+    // `path: "none"` is what the two older branches key on, and a dispatch that
+    // reached the target and was declined does not report it — so this, the
+    // branch that renders on a real machine, was the one answering with the
+    // executor's bare sentence and no way forward.
+    const { backend } = makeBackend({
+      dispatchError: 'dispatch_refused',
+      refusalPath: 'ax_action',
+      refusalOutcome: 'failed',
+      noWouldRequirePath: true,
+    });
+    const observation = await observeFixture(backend);
+    const result = await backend.runSemantic!(
+      { type: 'click_element', observationId: observation.observationId, elementId: 'el_2' },
+      signal(),
+      RUN_CONTEXT,
+    );
+    const message = result.outcome.ok ? '' : result.outcome.message;
+    assert.match(message, /same answer|will not/, 'says repeating it is pointless');
+    assert.match(message, /window_action|element action/, 'and says what else there is');
+  });
+
+  it('names an unavailable action the way the tool spells it', async () => {
+    // The mock declares no window members, which is exactly the shape of a
+    // build whose executor is older than the tool surface. It used to answer a
+    // `window_action` with "does not advertise element action 'minimize_window'"
+    // — a word the tool's own schema rejects.
+    const { backend } = makeBackend({});
+    const observation = await observeFixture(backend);
+    const result = await backend.runSemantic!(
+      {
+        type: 'window_action',
+        action: 'minimize',
+        observationId: observation.observationId,
+        elementId: 'el_1',
+      },
+      signal(),
+      RUN_CONTEXT,
+    );
+    assert.equal(!result.outcome.ok && result.outcome.error, 'unsupported_action');
+    const message = result.outcome.ok ? '' : result.outcome.message;
+    assert.match(message, /window_action 'minimize'/);
+    assert.doesNotMatch(message, /minimize_window|maka-cu|advertise/);
+  });
+
+  it('says where a window_id comes from, and it is not list_apps', async () => {
+    // `list_apps` on this backend answers app id, pid, name and a window COUNT.
+    // Sending a model there for a window id sends it somewhere with none.
+    const { backend } = makeBackend({});
+    await assert.rejects(
+      backend.captureObservation!({ windowId: 424242, includeScreenshot: true }, signal(), {
+        ...RUN_CONTEXT,
+      }),
+      (error: Error) => {
+        assert.match(error.message, /window_id/);
+        assert.doesNotMatch(error.message, /list_apps/);
+        assert.doesNotMatch(error.message, /windowId/);
+        return true;
+      },
+    );
+  });
+
+  it('spells app_id the way the tool does when a pair does not resolve', async () => {
+    const { backend } = makeBackend({});
+    await assert.rejects(
+      backend.captureObservation!(
+        { app: 'com.example.Other', windowId: 90210, includeScreenshot: true },
+        signal(),
+        RUN_CONTEXT,
+      ),
+      (error: Error) => {
+        assert.match(error.message, /app_id/);
+        assert.doesNotMatch(error.message, /appId/);
+        return true;
+      },
+    );
+  });
+
+  it('answers a blocked keystroke with the actions that do work', async () => {
+    // `allowCompatibilityInputDispatch` is off in every shipping configuration,
+    // so this is the standard answer to typing, not an edge case. It used to be
+    // a sentence about synthetic events with no route in it at all.
+    const { backend } = makeBackend({});
+    const observation = await observeFixture(backend);
+    const result = await backend.run({ type: 'type', text: 'hello' }, signal(), {
+      ...RUN_CONTEXT,
+      boundAction: boundCoordinate(observation),
+    });
+    assert.equal(!result.outcome.ok && result.outcome.error, 'unsupported_action');
+    const message = result.outcome.ok ? '' : result.outcome.message;
+    assert.match(message, /'type'/, 'names the action the model sent, not a wire kind');
+    for (const alternative of ['click_element', 'set_value', 'secondary_action']) {
+      assert.ok(message.includes(alternative), `offers ${alternative}`);
+    }
+  });
+
+  it('tells a model with a dead element id to observe, without host vocabulary', async () => {
+    const { backend } = makeBackend({});
+    const observation = await observeFixture(backend);
+    const result = await backend.runSemantic!(
+      { type: 'click_element', observationId: observation.observationId, elementId: '404' },
+      signal(),
+      RUN_CONTEXT,
+    );
+    assert.equal(!result.outcome.ok && result.outcome.error, 'stale_frame');
+    const message = result.outcome.ok ? '' : result.outcome.message;
+    assert.match(message, /'404'/, 'names the id that did not resolve');
+    assert.match(message, /observe the window again/i);
+    // The model has no verb for binding or quoting an observation, so neither
+    // word can be part of an instruction to it.
+    assert.doesNotMatch(message, /quoted|bound|frame/i);
+  });
+
+  it('tells a coordinate action with no observation to observe first', async () => {
+    const { backend } = makeBackend({});
+    const result = await backend.run(
+      { type: 'left_click', coordinate: { x: 10, y: 10 } },
+      signal(),
+      RUN_CONTEXT,
+    );
+    assert.equal(!result.outcome.ok && result.outcome.error, 'no_active_frame');
+    const message = result.outcome.ok ? '' : result.outcome.message;
+    assert.match(message, /observe/i);
+    assert.doesNotMatch(message, /bound observation/i);
+  });
+
+  it('calls an oversized frame a size problem, not a privacy one', async () => {
+    // `sensitivity_blocked` reads as "policy will not let you see this", and a
+    // model that reads it stops asking for the window at all. The window is
+    // readable; only the picture of it is too big for a reply.
+    const { backend } = makeBackend({ bigImage: true });
+    await assert.rejects(observeFixture(backend), (error: Error) => {
+      assert.match(error.message, /capture_failed/);
+      assert.doesNotMatch(error.message, /sensitivity_blocked/);
+      assert.match(error.message, /include_screenshot/);
+      return true;
+    });
+  });
+
+  it('refuses an action it does not have without naming a protocol version', async () => {
+    // "not part of maka.cu/2" reads as a version problem a model might route
+    // around, and it cannot choose a protocol version.
+    const { backend } = makeBackend({});
+    const result = await backend.run({ type: 'cursor_position' }, signal(), RUN_CONTEXT);
+    assert.equal(!result.outcome.ok && result.outcome.error, 'unsupported_action');
+    const message = result.outcome.ok ? '' : result.outcome.message;
+    assert.match(message, /'cursor_position'/);
+    assert.doesNotMatch(message, /maka\.cu/);
+    assert.match(message, /observation/);
   });
 });
 

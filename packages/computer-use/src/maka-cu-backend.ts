@@ -150,7 +150,12 @@ export interface MakaCuBackendOptions {
    * otherwise — the model-facing tool contract already states these fail closed.
    */
   allowCompatibilityInputDispatch?: boolean;
-  /** Privacy-safe diagnostics: geometry, enums and counts only, never app text. */
+  /**
+   * Diagnostics: geometry, enums and counts, never app text — with the single
+   * declared exception of `host_error.detail`, which exists so that raw failure
+   * text (a JSON-RPC body, an executor stderr tail) has somewhere to go other
+   * than the model's context.
+   */
   onTrace?: (event: MakaCuTraceEvent) => void;
   onSessionInvalidated?: (input: {
     sessionId: string;
@@ -225,7 +230,66 @@ export type MakaCuTraceEvent =
       toolCallId?: string;
       method: string;
       reason: string;
+    }
+  | {
+      /**
+       * A failure whose only account of itself is raw text — a JSON-RPC error
+       * body, an executor stderr tail, a reader's violation reason, an error
+       * code this build has never heard of.
+       *
+       * That text used to go to the model. `failed: service_mismatch — maka-cu
+       * dispatch.element: Invalid params (-32602)` names a wire method and a
+       * JSON-RPC number, neither of which exists on the tool surface, and
+       * contains no next move; a stderr tail can carry anything the executor
+       * printed. It belongs where a person debugging can read it, which is
+       * here, and the model gets a fixed sentence chosen by `kind`.
+       */
+      type: 'host_error';
+      toolCallId?: string;
+      method: string;
+      kind: MakaCuHostErrorKind;
+      /** Raw diagnostic text. Never model-facing; may carry executor output. */
+      detail: string;
     };
+
+/** Why a request failed on the host side, for the one sentence the model reads. */
+export type MakaCuHostErrorKind =
+  | 'rpc_rejected'
+  | 'protocol_violation'
+  | 'unknown_refusal'
+  | 'executor_gone'
+  | 'executor_stopped_mid_action'
+  | 'cancelled';
+
+/**
+ * One host-written sentence per kind of host-side failure.
+ *
+ * Each says three things, because a refusal that says fewer is a refusal a
+ * model re-sends: what happened to the action, whether repeating it can help,
+ * and what to do instead.
+ */
+const HOST_ERROR_SENTENCE: Record<MakaCuHostErrorKind, string> = {
+  rpc_rejected:
+    'Computer Use rejected this request before it reached the screen, so nothing happened. ' +
+    'The fault is in Computer Use rather than in the target, and the same call will keep ' +
+    'failing the same way — reach the goal with a different action.',
+  protocol_violation:
+    'Computer Use and the program that drives the screen no longer agree on what they are ' +
+    'saying to each other, so nothing was performed and nothing more will be. Neither ' +
+    'observing nor acting will work for the rest of this conversation; finish the task ' +
+    'another way, or tell the user Computer Use needs to be restarted.',
+  unknown_refusal:
+    'The screen driver refused with a reason this build of Computer Use cannot read, so ' +
+    'nothing happened. Repeating the call cannot resolve it — try a different action.',
+  executor_gone:
+    'Computer Use is not running and could not be started, so nothing was observed and ' +
+    'nothing was performed. Waiting will not help; do the rest of the task another way.',
+  executor_stopped_mid_action:
+    'Computer Use stopped before it could report what happened, so whether this action ' +
+    'reached the screen is unknown. Do not send it again — observe the window first and ' +
+    'read the result off the screen.',
+  cancelled: 'This action was cancelled before anything was sent to the screen.',
+};
 
 interface StoredSnapshot {
   sessionId: string;
@@ -325,11 +389,62 @@ function informativeActions(actions: readonly string[], role: string): string[] 
  * failure; §6.5's `delivered == 0` is the executor's own test for "not one of
  * them landed". An element that advertises an action and then refuses it is a
  * property of that application, and no amount of retrying changes it.
+ *
+ * (The doc comment belongs to `nextMoveFor` below; the two helpers between here
+ * and it exist only to give that function the model's own words to answer in.)
  */
+
+/**
+ * The action the model asked for, spelled the way the model spells it.
+ *
+ * Every refusal below names an action, and the name it used to reach for was
+ * the one on the wire: a model that called `click_element` was told the
+ * executor "does not advertise element action 'click'", a `left_click_drag`
+ * was told 'drag', a `window_action` with minimize was told 'minimize_window'.
+ * Those are this file's own translations of the tool surface, and handing one
+ * back is handing the model a word its own schema will reject.
+ */
+interface DispatchAttempt {
+  /** The tool action name, snake_case, as it appears in the tool schema. */
+  name: string;
+  /** The named member, for the actions that take one (`secondary_action`). */
+  detail?: string;
+}
+
+function attemptLabel(attempt: DispatchAttempt): string {
+  return attempt.detail ? `${attempt.name} '${attempt.detail}'` : attempt.name;
+}
+
+/**
+ * What to try instead, when a dispatch was refused by the thing on the screen.
+ *
+ * A refusal with no alternative in it is re-sent: measured on a window-arrange
+ * run, one model repeated `secondary_action raise` twice and another once,
+ * each time after being told only that the attempt had failed. `raise` is the
+ * common case — a great many windows advertise `AXRaise` and decline it — and
+ * the thing the model wanted (a window somewhere else, or a control inside a
+ * window that is not in front) has two routes that do not go through raising.
+ */
+function alternativeRouteFor(attempt?: DispatchAttempt): string {
+  if (attempt?.name === 'secondary_action' && attempt.detail === 'raise') {
+    return (
+      ' Windows advertise raise far more often than they perform it. If the window itself is ' +
+      'the goal, window_action moves, resizes and minimizes it; if a control inside it is the ' +
+      'goal, click_element and the other element actions reach one without the window ' +
+      'being in front.'
+    );
+  }
+  return (
+    ' Reach the goal another way: an element action names a control and works on a window ' +
+    'that is not in front, and window_action moves, resizes or minimizes the window itself.'
+  );
+}
+
 function nextMoveFor(
   mapped: ComputerUseErrorCode,
   error: MakaCuDomainError,
   refusal?: MakaCuDispatchResult,
+  attempt?: DispatchAttempt,
 ): string {
   // A coordinate action needs the pixel it aims at to be the target's. Computer
   // Use drives what the user is not looking at, so the target is usually behind
@@ -359,13 +474,18 @@ function nextMoveFor(
   const detail = error.detail;
   const wouldRequirePath =
     detail && typeof detail.wouldRequirePath === 'string' ? detail.wouldRequirePath : undefined;
+  const alternative = alternativeRouteFor(attempt);
   if (refusal?.path === 'none' && wouldRequirePath === undefined) {
-    return `${error.message}. The control advertises this action and its application declined it, so the same call will not start working — an element can list an action it will not perform. Use a different control or a different route.`;
+    return `${error.message}. The control advertises this action and its application declined it, so the same call will not start working — an element can list an action it will not perform.${alternative}`;
   }
   if (refusal?.path === 'none') {
-    return `${error.message}. Nothing this executor is permitted to do could reach the target; retrying will not change that.`;
+    return `${error.message}. Nothing this executor is permitted to do could reach the target; retrying will not change that.${alternative}`;
   }
-  return error.message;
+  // The route was taken and the target refused at the end of it. Sending the
+  // same call down the same route is the definition of no new information, and
+  // this was the branch that rendered on the real runs — the two above need
+  // `path: "none"`, which a performed-and-declined action does not report.
+  return `${error.message}. The action was carried out against the target and it did not take effect, so sending it again produces the same answer.${alternative}`;
 }
 
 function failure(error: ComputerUseErrorCode, message: string): CaptureFailure {
@@ -532,9 +652,32 @@ export function createMakaCuBackend(opts: MakaCuBackendOptions): CuDispatchBacke
     }
   }
 
+  /**
+   * The one door raw failure text may not walk through.
+   *
+   * Everything that knows only its own error string — a JSON-RPC body, a
+   * lifecycle error carrying an executor stderr tail, an error code from a
+   * newer executor — ends here: the text goes to `onTrace`, and the model reads
+   * a sentence this file wrote for that kind of failure. Before this, a model
+   * driving a real screen was told `service_mismatch — maka-cu
+   * dispatch.element: Invalid params (-32602)`, which names a method it cannot
+   * call and a number it cannot act on.
+   */
+  function hostErrorFailure(
+    method: string,
+    code: ComputerUseErrorCode,
+    kind: MakaCuHostErrorKind,
+    detail: string,
+  ): CaptureFailure {
+    trace({ type: 'host_error', method, kind, detail });
+    return failure(code, HOST_ERROR_SENTENCE[kind]);
+  }
+
   /** Translate an executor or transport failure into a Maka outcome. */
   function backendFailure(method: string, error: unknown): CaptureFailure | undefined {
-    if (error instanceof MakaCuSessionCleared) return failure('aborted', error.message);
+    if (error instanceof MakaCuSessionCleared) {
+      return hostErrorFailure(method, 'aborted', 'cancelled', error.message);
+    }
     if (error instanceof MakaCuDomainRefusal) {
       // A refusal is an outcome the model must read (§1.1), wherever in the
       // sequence it was raised.
@@ -542,25 +685,46 @@ export function createMakaCuBackend(opts: MakaCuBackendOptions): CuDispatchBacke
     }
     if (error instanceof MakaCuHostRefusal) return failure(error.code, error.message);
     if (isMakaCuLifecycleError(error)) {
-      return failure(error.code === 'aborted' ? 'aborted' : error.code, error.message);
+      // The lifecycle text is written for whoever is debugging the executor —
+      // "restart budget exhausted", with the child's stderr tail appended. That
+      // tail is the executor's own output, which the host cannot vouch for, and
+      // none of it tells a model what to do next.
+      const kind: MakaCuHostErrorKind =
+        error.code === 'aborted'
+          ? 'cancelled'
+          : error.code === 'outcome_unknown'
+            ? 'executor_stopped_mid_action'
+            : error.code === 'service_mismatch'
+              ? 'protocol_violation'
+              : 'executor_gone';
+      return hostErrorFailure(method, error.code, kind, error.message);
     }
     if (error instanceof MakaCuProtocolViolation) {
+      // The reason ("window.zIndex must be a number", 'expected a "sha256:"
+      // lowercase-hex digest') is written for whoever is comparing the two
+      // implementations. It names wire fields the tool surface does not have,
+      // and there is nothing a model could do differently for having read it —
+      // so it goes to the trace, in full, and the model is told the one thing
+      // that changes its behaviour: this session cannot drive the screen again.
       trace({ type: 'protocol_violation', method, reason: error.reason });
       // §6.3: a response the protocol forbids means the executor is not the one
       // this host negotiated with. The session is compromised, not retryable.
       service.reportProtocolViolation();
-      return failure('service_mismatch', error.message);
+      return failure('service_mismatch', HOST_ERROR_SENTENCE.protocol_violation);
     }
     if (error instanceof MakaCuRpcError) {
       if (error.body.code === MAKA_CU_RPC_ERROR.sessionUnknown) {
-        return failure('stale_frame', 'the executor no longer holds this session; observe again');
+        return failure(
+          'stale_frame',
+          'the window this action refers to is no longer being observed; observe it again and act on the ids from the new observation',
+        );
       }
       if (error.body.code === MAKA_CU_RPC_ERROR.shuttingDown) {
-        return failure('service_unavailable', 'maka-cu is shutting down');
+        return hostErrorFailure(method, 'service_unavailable', 'executor_gone', error.message);
       }
       // Every other JSON-RPC error means the host sent something unusable (§1.1),
       // which is a host bug rather than a fact about the screen.
-      return failure('service_mismatch', error.message);
+      return hostErrorFailure(method, 'service_mismatch', 'rpc_rejected', error.message);
     }
     return undefined;
   }
@@ -570,6 +734,7 @@ export function createMakaCuBackend(opts: MakaCuBackendOptions): CuDispatchBacke
     error: MakaCuDomainError,
     toolCallId?: string,
     refusal?: MakaCuDispatchResult,
+    attempt?: DispatchAttempt,
   ): CaptureFailure {
     trace({
       type: 'refusal',
@@ -590,9 +755,11 @@ export function createMakaCuBackend(opts: MakaCuBackendOptions): CuDispatchBacke
       // §7.1 is a closed table. An unknown code is version skew, and guessing a
       // Maka code for it is exactly the archaeology this protocol removes.
       service.reportProtocolViolation();
-      return failure(
+      return hostErrorFailure(
+        method,
         'service_mismatch',
-        `maka-cu answered ${method} with unknown error code '${error.code}'`,
+        'unknown_refusal',
+        `unknown error code '${error.code}'`,
       );
     }
     const detail = error.detail;
@@ -605,7 +772,7 @@ export function createMakaCuBackend(opts: MakaCuBackendOptions): CuDispatchBacke
         // §1.2: `message` is a fixed sentence chosen by `code` and carries no
         // application content, so it passes through without a redaction pass —
         // and, for the same reason, may be shown to the model.
-        message: nextMoveFor(mapped, error, refusal),
+        message: nextMoveFor(mapped, error, refusal, attempt),
         messageIsAppTextFree: true,
         // §7.1: the executor's enum-only detail is the evidence the model gets.
         // `path` tells a refusal that was attempted and rejected from one where
@@ -637,11 +804,24 @@ export function createMakaCuBackend(opts: MakaCuBackendOptions): CuDispatchBacke
     );
   }
 
-  function compatibilityInputBlocked(actionType: string): CaptureFailure {
+  /**
+   * The standard answer, not an edge case.
+   *
+   * `allowCompatibilityInputDispatch` is off in every shipping configuration,
+   * so every `type`, every `key`, every `press_key` and every coordinate action
+   * ends here. It used to end here with one clause about synthetic events and
+   * no mention of the actions that do work — which is how a model learns that
+   * Computer Use cannot type, rather than that it types by naming the field.
+   */
+  function compatibilityInputBlocked(toolAction: string): CaptureFailure {
     return failure(
       'unsupported_action',
-      `background '${actionType}' is disabled because synthetic event dispatch can ` +
-        "interfere with the user's physical input",
+      `'${toolAction}' would synthesize a keystroke or a pointer event, which this build ` +
+        "does not do — it would land wherever the user's own hands have just put the focus " +
+        '— so nothing was sent. The actions that do work name a control instead of a pixel: ' +
+        'click_element presses it, set_value writes a whole value into a field, select_text ' +
+        "selects inside it, and secondary_action performs one of the names on that element's " +
+        "'+' list. element_sequence runs several of them against one observation.",
     );
   }
 
@@ -741,10 +921,19 @@ export function createMakaCuBackend(opts: MakaCuBackendOptions): CuDispatchBacke
     dropExpired();
     const snapshot = snapshots.get(snapshotId);
     if (!snapshot) {
-      return failure('stale_frame', 'observation is missing or already consumed');
+      // No "consumed", no "quoted", no "bound": the model has no verb for
+      // binding an observation and no way to un-consume one. What it can act on
+      // is the instruction — observe, then use the ids that observation returns.
+      return failure(
+        'stale_frame',
+        'that observation is no longer available — acting on one uses it up, and it expires on its own. Observe the window again and use the element ids from the new observation.',
+      );
     }
     if (snapshot.sessionId !== context.sessionId || snapshot.turnId !== context.turnId) {
-      return failure('stale_frame', 'observation belongs to another session or turn');
+      return failure(
+        'stale_frame',
+        'that observation id was not produced in this exchange. Observe the window again and use the element ids from the observation that comes back.',
+      );
     }
     return snapshot;
   }
@@ -757,7 +946,10 @@ export function createMakaCuBackend(opts: MakaCuBackendOptions): CuDispatchBacke
   function boundSnapshot(context: CuRunContext): StoredSnapshot | CaptureFailure {
     const target = context.boundAction?.target;
     if (!target) {
-      return failure('no_active_frame', 'this action requires a bound observation');
+      return failure(
+        'no_active_frame',
+        'this action works on the window from the most recent observation, and there is none yet. Observe the window first, then send this action again.',
+      );
     }
     dropExpired();
     const candidates = [...snapshots.values()].filter(
@@ -770,7 +962,10 @@ export function createMakaCuBackend(opts: MakaCuBackendOptions): CuDispatchBacke
     const newest = candidates.sort((a, b) => b.capturedAt - a.capturedAt)[0];
     return (
       newest ??
-      failure('stale_frame', 'no live observation of the bound window; observe before acting')
+      failure(
+        'stale_frame',
+        'there is no current observation of the window this action aims at. Observe that window again, then send this action.',
+      )
     );
   }
 
@@ -812,7 +1007,14 @@ export function createMakaCuBackend(opts: MakaCuBackendOptions): CuDispatchBacke
       byteLength = Buffer.from(base64, 'base64').byteLength;
     }
     if (exceedsFrameCap(byteLength)) {
-      return failure('sensitivity_blocked', `window frame ${byteLength}B exceeds cap`);
+      // Not `sensitivity_blocked`. That code says "policy would not let you see
+      // this", and a model reading it stops asking for the window at all —
+      // whereas the window is readable, and only the picture of it is too big.
+      // `capture_failed` plus the way round is the true account.
+      return failure(
+        'capture_failed',
+        `the screenshot of this window is ${byteLength} bytes, which is more than can be returned. The window's contents can still be read: observe it again with include_screenshot false, which returns every element and its position without the picture.`,
+      );
     }
     return { base64, mimeType, widthPx: image.widthPx, heightPx: image.heightPx };
   }
@@ -1057,9 +1259,13 @@ export function createMakaCuBackend(opts: MakaCuBackendOptions): CuDispatchBacke
     // on-screen state: the caller named one window, not "one of the visible ones".
     const winner = windows.find((window) => window.windowId === input.windowId);
     if (!winner) {
+      // Where a window_id actually comes from. This used to say "from
+      // list_apps", and `list_apps` on this backend answers with app id, pid,
+      // name and a window COUNT — no window ids at all. A model sent there
+      // reads the list, finds nothing to quote, and comes back with a guess.
       throw new MakaCuHostRefusal(
         'target_missing',
-        `no window with id ${input.windowId} is open. Window ids come from list_apps and from the windowId on an observation, and do not survive the window being closed.`,
+        `no window with id ${input.windowId} is open. A window_id comes from the window_id field of an observation, and stops resolving once that window closes — observe the app by app_id to get the id of a window it has now.`,
       );
     }
     // §5.1: both were supplied, so both must hold, and no window satisfies the
@@ -1071,7 +1277,7 @@ export function createMakaCuBackend(opts: MakaCuBackendOptions): CuDispatchBacke
     if (input.app && input.app !== winner.appId) {
       throw new MakaCuHostRefusal(
         'target_missing',
-        `window ${input.windowId} does not belong to ${input.app}. App ids come from list_apps and from the appId on an observation, and are the executor's own strings — not a display name.`,
+        `window ${input.windowId} does not belong to ${input.app}. An app_id is the id string list_apps returns, or the app_id field of an observation — never an application's display name. Pass just the window_id to observe that window whichever app owns it.`,
       );
     }
     return { kind: 'window', pid: winner.pid, windowId: winner.windowId };
@@ -1323,6 +1529,34 @@ export function createMakaCuBackend(opts: MakaCuBackendOptions): CuDispatchBacke
     }
   }
 
+  /**
+   * The tool-surface spelling of a semantic action, for the refusals that name
+   * one. `secondary_action` and `window_action` carry the member too, because
+   * "window_action is unavailable" and "window_action minimize is unavailable"
+   * lead to different next calls.
+   */
+  function attemptFor(action: CuSemanticAction): DispatchAttempt {
+    if (action.type === 'secondary_action') return { name: action.type, detail: action.action };
+    if (action.type === 'window_action') return { name: action.type, detail: action.action };
+    return { name: action.type };
+  }
+
+  /**
+   * "This build cannot do it", in the model's own vocabulary.
+   *
+   * The executor declares its action sets at handshake in wire names, and this
+   * refusal used to quote them back: a `click_element` was answered with "does
+   * not advertise element action 'click'". `click` is not a value the tool
+   * schema accepts, so the model's next call either repeats the same thing or
+   * invents a word from the reply.
+   */
+  function unavailableAction(attempt: DispatchAttempt): CaptureFailure {
+    return failure(
+      'unsupported_action',
+      `${attemptLabel(attempt)} is not available in this build of Computer Use, so nothing was attempted. It will not become available later in this conversation — reach the goal with one of the actions the observation's elements list, or with a different action on the tool.`,
+    );
+  }
+
   async function dispatchElement(
     action: Exclude<CuSemanticAction, { type: 'press_key' }>,
     snapshot: StoredSnapshot,
@@ -1333,16 +1567,18 @@ export function createMakaCuBackend(opts: MakaCuBackendOptions): CuDispatchBacke
     const elementToken = snapshot.modelIds.get(action.elementId) ?? action.elementId;
     const digest = snapshot.digests.get(elementToken);
     if (!digest) {
-      return failure('stale_frame', 'element is not part of the quoted observation');
+      return failure(
+        'stale_frame',
+        `element_id '${action.elementId}' is not in that observation. An element id only means anything in the observation that listed it — observe the window again and read the id off the new listing.`,
+      );
     }
+    const attempt = attemptFor(action);
     const resolved = elementAction(action);
     if ('refusal' in resolved) return resolved.refusal;
     const wire = resolved.wire;
     const capability = service.negotiated()?.capabilities.elementActions ?? [];
     const kind = String(wire.kind);
-    if (!capability.includes(kind)) {
-      return failure('unsupported_action', `maka-cu does not advertise element action '${kind}'`);
-    }
+    if (!capability.includes(kind)) return unavailableAction(attempt);
     // No physical-input guard here, and that is the point of this path.
     //
     // The guard exists because a synthesized click or keystroke lands wherever
@@ -1384,7 +1620,9 @@ export function createMakaCuBackend(opts: MakaCuBackendOptions): CuDispatchBacke
       },
       signal,
     );
-    if (!envelope.ok) return refusedDispatch('dispatch.element', envelope, snapshot, context);
+    if (!envelope.ok) {
+      return refusedDispatch('dispatch.element', envelope, snapshot, context, attempt);
+    }
     return completeDispatch('dispatch.element', envelope, snapshot, context);
   }
 
@@ -1417,10 +1655,11 @@ export function createMakaCuBackend(opts: MakaCuBackendOptions): CuDispatchBacke
     envelope: Extract<MakaCuEnvelope, { ok: false }>,
     snapshot: StoredSnapshot,
     context: CuRunContext,
+    attempt?: DispatchAttempt,
   ): CuRunResult {
     const refusal = readDispatchResult(method, envelope, MAKA_CU_ALLOW_GLOBAL_POINTER);
     forgetUnusableSnapshot(envelope.error, snapshot);
-    return domainFailure(method, envelope.error, context.toolCallId, refusal);
+    return domainFailure(method, envelope.error, context.toolCallId, refusal, attempt);
   }
 
   async function dispatchKey(
@@ -1428,6 +1667,8 @@ export function createMakaCuBackend(opts: MakaCuBackendOptions): CuDispatchBacke
     snapshot: StoredSnapshot,
     signal: AbortSignal,
     context: CuRunContext,
+    /** The tool action the model sent: `press_key`, `type` or `key`. */
+    attempt: DispatchAttempt,
     /**
      * The control the model named, when it named one. §6.4 makes `focusToken`
      * required either way — the difference is `focusPolicy`: without a named
@@ -1437,7 +1678,7 @@ export function createMakaCuBackend(opts: MakaCuBackendOptions): CuDispatchBacke
     target?: { token: string; digest: string },
   ): Promise<CuRunResult> {
     if (opts.allowCompatibilityInputDispatch !== true) {
-      return compatibilityInputBlocked(String(wire.kind));
+      return compatibilityInputBlocked(attempt.name);
     }
     if (!target && !snapshot.focused) {
       // §6.4: focusToken is required and verified. Without a focused element in
@@ -1449,12 +1690,7 @@ export function createMakaCuBackend(opts: MakaCuBackendOptions): CuDispatchBacke
       );
     }
     const capability = service.negotiated()?.capabilities.keyActions ?? [];
-    if (!capability.includes(String(wire.kind))) {
-      return failure(
-        'unsupported_action',
-        `maka-cu does not advertise key action '${String(wire.kind)}'`,
-      );
-    }
+    if (!capability.includes(String(wire.kind))) return unavailableAction(attempt);
     const intervention = await physicalInputFailure();
     if (intervention) return intervention;
     const focus = target ?? {
@@ -1479,7 +1715,7 @@ export function createMakaCuBackend(opts: MakaCuBackendOptions): CuDispatchBacke
       },
       signal,
     );
-    if (!envelope.ok) return refusedDispatch('dispatch.key', envelope, snapshot, context);
+    if (!envelope.ok) return refusedDispatch('dispatch.key', envelope, snapshot, context, attempt);
     return completeDispatch('dispatch.key', envelope, snapshot, context);
   }
 
@@ -1490,17 +1726,14 @@ export function createMakaCuBackend(opts: MakaCuBackendOptions): CuDispatchBacke
     snapshot: StoredSnapshot,
     signal: AbortSignal,
     context: CuRunContext,
+    /** The tool action the model sent: `left_click`, `left_click_drag`, … */
+    attempt: DispatchAttempt,
   ): Promise<CuRunResult> {
     if (opts.allowCompatibilityInputDispatch !== true) {
-      return compatibilityInputBlocked(String(wire.kind));
+      return compatibilityInputBlocked(attempt.name);
     }
     const capability = service.negotiated()?.capabilities.pointActions ?? [];
-    if (!capability.includes(String(wire.kind))) {
-      return failure(
-        'unsupported_action',
-        `maka-cu does not advertise point action '${String(wire.kind)}'`,
-      );
-    }
+    if (!capability.includes(String(wire.kind))) return unavailableAction(attempt);
     const intervention = await physicalInputFailure();
     if (intervention) return intervention;
     const envelope = await service.call(
@@ -1521,7 +1754,9 @@ export function createMakaCuBackend(opts: MakaCuBackendOptions): CuDispatchBacke
       },
       signal,
     );
-    if (!envelope.ok) return refusedDispatch('dispatch.point', envelope, snapshot, context);
+    if (!envelope.ok) {
+      return refusedDispatch('dispatch.point', envelope, snapshot, context, attempt);
+    }
     return completeDispatch('dispatch.point', envelope, snapshot, context);
   }
 
@@ -1724,8 +1959,9 @@ export function createMakaCuBackend(opts: MakaCuBackendOptions): CuDispatchBacke
             if (action.type === 'press_key') {
               const key = keyAction(action.key);
               if ('refusal' in key) return key.refusal;
+              const attempt: DispatchAttempt = { name: 'press_key' };
               if (action.elementId === undefined) {
-                return dispatchKey(key.wire, snapshot, signal, context);
+                return dispatchKey(key.wire, snapshot, signal, context, attempt);
               }
               // The model quoted a short id; the wire takes the token. Same
               // lookup as an element action, so a key aimed at a control that
@@ -1733,9 +1969,12 @@ export function createMakaCuBackend(opts: MakaCuBackendOptions): CuDispatchBacke
               const token = snapshot.modelIds.get(action.elementId) ?? action.elementId;
               const digest = snapshot.digests.get(token);
               if (!digest) {
-                return failure('stale_frame', 'element is not part of the quoted observation');
+                return failure(
+                  'stale_frame',
+                  `element_id '${action.elementId}' is not in that observation. An element id only means anything in the observation that listed it — observe the window again and read the id off the new listing.`,
+                );
               }
-              return dispatchKey(key.wire, snapshot, signal, context, { token, digest });
+              return dispatchKey(key.wire, snapshot, signal, context, attempt, { token, digest });
             }
             return dispatchElement(action, snapshot, signal, context);
           },
@@ -1767,7 +2006,7 @@ export function createMakaCuBackend(opts: MakaCuBackendOptions): CuDispatchBacke
               await ensureSession(context.sessionId, signal);
               const snapshot = boundSnapshot(context);
               if ('outcome' in snapshot) return snapshot;
-              return dispatchKey(wire.wire, snapshot, signal, context);
+              return dispatchKey(wire.wire, snapshot, signal, context, { name: action.type });
             }
             const wire = pointActionFor(action);
             if (!wire) {
@@ -1775,9 +2014,13 @@ export function createMakaCuBackend(opts: MakaCuBackendOptions): CuDispatchBacke
               // method. Reading the cursor is meaningless for an executor that
               // never moves it, and the other two are not in the protocol's
               // action sets — feature detection, not silent degradation.
+              //
+              // The protocol's name for itself is not a fact a model can use:
+              // it cannot choose a protocol version, and "not part of
+              // maka.cu/2" reads as a version problem it might route around.
               return failure(
                 'unsupported_action',
-                `action '${action.type}' is not part of maka.cu/2`,
+                `'${action.type}' is not one of the actions Computer Use can perform, and nothing was attempted. There is no other spelling of it — the observation lists every element with its position and the actions it accepts, and those are what this window can be driven with.`,
               );
             }
             await ensureSession(context.sessionId, signal);
@@ -1787,7 +2030,7 @@ export function createMakaCuBackend(opts: MakaCuBackendOptions): CuDispatchBacke
             if (!point) {
               return failure(
                 'invalid_coordinate',
-                'the bound action carries no window-screenshot-local coordinate',
+                'this action has no point inside the observed window to aim at. Observe the window with a screenshot and give a coordinate inside that screenshot — or name the control instead, with click_element, which needs no coordinate.',
               );
             }
             const startPoint =
@@ -1795,10 +2038,12 @@ export function createMakaCuBackend(opts: MakaCuBackendOptions): CuDispatchBacke
             if (action.type === 'left_click_drag' && !startPoint) {
               return failure(
                 'invalid_coordinate',
-                'drag requires a bound start coordinate in the same space',
+                'a drag needs both the point it starts from and the point it ends at, in the screenshot of the window that was observed.',
               );
             }
-            return dispatchPoint(wire, point, startPoint, snapshot, signal, context);
+            return dispatchPoint(wire, point, startPoint, snapshot, signal, context, {
+              name: action.type,
+            });
           },
           context.sessionId,
         );
