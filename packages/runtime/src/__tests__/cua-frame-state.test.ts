@@ -153,7 +153,6 @@ describe('CuaFrameState', () => {
     );
   });
 
-
   // A refusal the executor never dispatched must not cost the frame.
   //
   // Measured on a real save-as-PDF run: `click_element` was refused
