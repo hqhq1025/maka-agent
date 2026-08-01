@@ -236,12 +236,19 @@ const SCENARIOS = [
   },
   {
     key: 'window-arrange',
-    expectRefusal: true,
     ask: '把计算器窗口挪到屏幕左边',
     app: 'Calculator',
     bundle: 'com.apple.calculator',
+    // Was expected to fail, twice over, and for two different reasons. First
+    // there was no verb: the model reached for a title-bar drag, which is a
+    // coordinate action on a window that is behind something else, and spent 57
+    // calls on it in one run. Then there was a verb the model could not send —
+    // `window_action` was in the strict union and not in the wire schema, so
+    // the SDK rejected every call before the tool saw it, above the layer the
+    // debug journal records. Now: three calls, `verified=true`,
+    // `effect=confirmed`, foreground unchanged.
     expect:
-      'Window management has no verb in the protocol. Expected to fail; what matters is whether the refusal names the reason or the model invents a route.',
+      'AXPosition is settable on every window measured (17 of 17) and writing it does not bring the application forward. The task is a control for window_action being reachable from the wire schema, not only from the union.',
     prompt:
       '用 computer use 把计算器的窗口移动到屏幕的左半边。做不到就直接说做不到以及为什么，不要用别的办法绕过去。',
     async before() {

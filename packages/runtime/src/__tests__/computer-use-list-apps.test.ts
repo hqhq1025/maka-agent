@@ -13,6 +13,10 @@ import type { CuAppSummary, CuDispatchBackend } from '../computer-use-types.js';
 
 const APPS: CuAppSummary[] = [
   { appId: 'com.apple.TextEdit', pid: 1, name: '文本编辑', windowCount: 1 },
+  // macOS reports the localized name, and it is often shorter than what a
+  // person calls the application. This one is exactly that case.
+  { appId: 'com.microsoft.VSCode', pid: 5, name: 'Code', windowCount: 1 },
+  { appId: 'com.google.Chrome', pid: 6, name: 'Google Chrome', windowCount: 1 },
   { appId: 'com.apple.calculator', pid: 2, name: '计算器', windowCount: 1 },
   { appId: 'com.apple.dock', pid: 3, name: '程序坞', windowCount: 0 },
   { appId: 'com.apple.controlcenter', pid: 4, name: '控制中心', windowCount: 0 },
@@ -51,7 +55,7 @@ test('an unfiltered list leaves out apps the model could not drive anyway', asyn
   // nothing to do with. Measured on a real machine: 133 apps, 15 with windows.
   assert.deepEqual(
     apps.map((a) => a.app_id),
-    ['com.apple.TextEdit', 'com.apple.calculator'],
+    ['com.apple.TextEdit', 'com.microsoft.VSCode', 'com.google.Chrome', 'com.apple.calculator'],
   );
 });
 
@@ -89,7 +93,12 @@ test('nothing matched says what there is, so the next call is not the whole list
   assert.equal(answer.no_match_for, 'Sublime Text');
   // Without this the recovery is an unfiltered `list_apps`, which is the cost
   // the filter exists to avoid.
-  assert.deepEqual(answer.apps_with_windows, ['com.apple.TextEdit', 'com.apple.calculator']);
+  assert.deepEqual(answer.apps_with_windows, [
+    'com.apple.TextEdit',
+    'com.microsoft.VSCode',
+    'com.google.Chrome',
+    'com.apple.calculator',
+  ]);
 });
 
 test('a filtered list is a fraction of the size of the whole one', async () => {

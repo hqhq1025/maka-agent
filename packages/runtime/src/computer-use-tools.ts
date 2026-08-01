@@ -319,6 +319,25 @@ const REOBSERVABLE_FAILURES = new Set<ComputerUseErrorCode>([
   'invalid_coordinate',
 ]);
 
+/**
+ * Whether a name the user used names this application.
+ *
+ * Containment both ways, because macOS reports `NSRunningApplication`'s
+ * localized name and that is often shorter than what a person calls the app.
+ * Visual Studio Code answers `"Code"`: a one-way `name.includes(query)` finds
+ * nothing for "Visual Studio Code", and a real run got `app_count: 0` for an
+ * application that was running with a window, then recovered by picking the id
+ * out of the `apps_with_windows` list — a round trip for a name that was right.
+ *
+ * The reverse direction is floored at three characters so that a short name
+ * cannot match most queries: `"Go"` inside "Google Chrome" is a coincidence,
+ * `"Code"` inside "Visual Studio Code" is the application.
+ */
+function matchesAppQuery(candidate: string, query: string): boolean {
+  if (candidate.includes(query)) return true;
+  return candidate.length >= 3 && query.includes(candidate);
+}
+
 function shouldReobserveAfter(outcome: CuRunResult['outcome']): boolean {
   return outcome.ok || REOBSERVABLE_FAILURES.has(outcome.error);
 }
@@ -1452,7 +1471,7 @@ export function buildComputerUseTools(deps: {
             const apps = query
               ? everything.filter((app) =>
                   [app.appId, app.name].some(
-                    (candidate) => candidate && candidate.toLowerCase().includes(query),
+                    (candidate) => candidate && matchesAppQuery(candidate.toLowerCase(), query),
                   ),
                 )
               : everything.filter((app) => app.windowCount > 0);
@@ -1863,7 +1882,12 @@ export function buildComputerUseTools(deps: {
             // spend that call whatever the state machine allows, and the round
             // trip is the whole cost this is removing.
             const stillCurrent = dispatchedNothing(result)
-              ? ` Observation ${semanticAction.observationId} is still current: nothing was dispatched, so the window is as it was. Use it to address a different element rather than observing again.`
+              ? // `input.observation_id`, not the semantic action's: the action
+                // carries the backend's snapshot id and the model has never seen
+                // one. Quoting `snap_d5e1da77…` at a model holding
+                // `0e7f922c-…` is worse than saying nothing — it reads as a
+                // third frame that came from nowhere.
+                ` Observation ${input.observation_id} is still current: nothing was dispatched, so the window is as it was. Use it to address a different element rather than observing again.`
               : '';
             const text = `${summarize(semanticAction, result)}${stillCurrent}`;
             const failureClass =
