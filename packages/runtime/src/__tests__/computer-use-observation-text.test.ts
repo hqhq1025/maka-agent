@@ -365,17 +365,8 @@ test('collapsing a wrapper is not the same thing as dropping one', () => {
   const shipped = lines(renderObservationForModel(sample)).slice(1);
   assert.deepEqual(shipped, [
     '0 AXWindow',
-    '\t1 AXGroup',
-    '\t\t2 AXButton "一"',
-    '\t\t3 AXButton "二"',
-    '\t4 AXGroup',
-    '\t5 AXGroup "分组"',
-    '\t\t6 AXButton "三"',
-  ]);
-  const relaxed = lines(renderObservationText(sample, { multiChildWrappers: true })).slice(1);
-  assert.deepEqual(relaxed, [
-    '0 AXWindow',
-    // The two-child wrapper is gone and both children moved up a level.
+    // The two-child wrapper is gone and both children moved up a level: the
+    // line went, the elements did not.
     '\t2 AXButton "一"',
     '\t3 AXButton "二"',
     // The childless one stays: there is nothing to lift, so removing it would
@@ -385,8 +376,23 @@ test('collapsing a wrapper is not the same thing as dropping one', () => {
     '\t5 AXGroup "分组"',
     '\t\t6 AXButton "三"',
   ]);
-  // Nothing addressable was lost either way.
+  // Nothing addressable was lost: element 1 is the line that went, and every
+  // id that could be acted on is still there to be named.
   for (const id of ['0', '2', '3', '4', '5', '6']) {
-    assert.match(relaxed.join('\n'), new RegExp(`(^|\\t)${id} AX`, 'm'));
+    assert.match(shipped.join('\n'), new RegExp(`(^|\\t)${id} AX`, 'm'));
   }
+
+  // The strict form is still reachable, and is what the evaluator baselines
+  // against — otherwise baseline and candidate would be the same renderer and
+  // every measured saving would read as zero.
+  const strict = lines(renderObservationText(sample, { multiChildWrappers: false })).slice(1);
+  assert.deepEqual(strict, [
+    '0 AXWindow',
+    '\t1 AXGroup',
+    '\t\t2 AXButton "一"',
+    '\t\t3 AXButton "二"',
+    '\t4 AXGroup',
+    '\t5 AXGroup "分组"',
+    '\t\t6 AXButton "三"',
+  ]);
 });

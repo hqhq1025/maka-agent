@@ -398,14 +398,18 @@ const INTERACTIVE_ROLES = new Set([
 
 const STRATEGIES = [
   {
-    name: 'current',
-    what: 'shipped: collapse structural containers holding exactly one child',
-    render: (observation) => renderObservationText(observation),
+    // The baseline is the strict form, which is what shipped before the
+    // relaxed one was measured. It has to be asked for explicitly now, or the
+    // baseline and the candidate would be the same renderer and every saving
+    // would read as zero.
+    name: 'single-child-only (previous default)',
+    what: 'collapse structural containers holding exactly one child',
+    render: (observation) => renderObservationText(observation, { multiChildWrappers: false }),
   },
   {
-    name: 'collapse-multi-child',
-    what: 'collapse structural containers holding one child OR MORE',
-    render: (observation) => renderObservationText(observation, { multiChildWrappers: true }),
+    name: 'current: collapse-multi-child',
+    what: 'shipped: collapse structural containers holding one child OR MORE',
+    render: (observation) => renderObservationText(observation),
   },
   {
     name: 'drop-unnamed-leaves (control)',
@@ -435,6 +439,9 @@ const STRATEGIES = [
     },
   },
 ];
+
+/** The first strategy is the yardstick every other one is read against. */
+const BASELINE = STRATEGIES[0].name;
 
 // ---------------------------------------------------------------------------
 // Retention
@@ -631,7 +638,7 @@ export function measure(corpus) {
       const tokens = estimateTokens(text.length);
       for (const tally of tallies) bump(tally.tokens, strategy.name, tokens);
     }
-    const baseline = estimateTokens(rendered.get('current').length);
+    const baseline = estimateTokens(rendered.get(BASELINE).length);
     // The corpus spans several days of renderer changes: some observations were
     // recorded before the shipped single-child collapse existed, and their
     // stored text is longer than what the same tree renders as today. Comparing
@@ -641,7 +648,7 @@ export function measure(corpus) {
     for (const tally of tallies) {
       tally.baselineTokens += baseline;
       tally.storedTokens += estimateTokens(entry.storedText.length);
-      if (entry.storedText.split('\n').length > rendered.get('current').split('\n').length) {
+      if (entry.storedText.split('\n').length > rendered.get(BASELINE).split('\n').length) {
         tally.recordedBeforeCollapse += 1;
       }
     }
@@ -756,13 +763,13 @@ async function main() {
   lines.push('');
   reportTally('ALL APPS', overall, lines);
   for (const [app, tally] of [...perApp.entries()].sort(
-    (a, b) => b[1].tokens.get('current') - a[1].tokens.get('current'),
+    (a, b) => b[1].tokens.get(BASELINE) - a[1].tokens.get(BASELINE),
   )) {
     reportTally(app, tally, lines);
   }
 
   lines.push('arithmetic on the same corpus (not rendered strategies, nothing to retain):');
-  const currentTokens = overall.tokens.get('current') ?? 1;
+  const currentTokens = overall.tokens.get(BASELINE) ?? 1;
   lines.push(
     `  element frames (@x,y wxh)   ${estimateTokens(frameChars)} tokens, ` +
       `${((estimateTokens(frameChars) / currentTokens) * 100).toFixed(1)}% of the current rendering`,

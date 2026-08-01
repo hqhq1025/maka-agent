@@ -272,17 +272,30 @@ const STRUCTURAL_ROLES = new Set([
  * several children, and holding several is a statement that they belong
  * together. One child is not a grouping, it is a layer.
  *
- * Every clause is load-bearing. A container with a `label` names its section; a
- * `value` or an action makes it a control; `focused` is where the keys go; and
- * more than one child is the grouping this is careful not to erase.
+ * Every clause is load-bearing except one. A container with a `label` names its
+ * section; a `value` or an action makes it a control; `focused` is where the
+ * keys go. Those stay.
  *
- * `multiChildWrappers` lifts that last clause, and only that one. What it does
- * not lift is the requirement that the container have a child at all: a
- * childless node has nothing to lift into its parent, so collapsing one is a
- * deletion rather than a collapse, and deletion is the thing this whole file
- * refuses to do. Measured savings for the relaxed form live in
- * `scripts/cu-prune-eval.mjs`; it is off here because the measurement, not the
- * argument, is what should decide it.
+ * The clause that went was "exactly one child". The argument for it — that
+ * holding several children is a statement that they belong together — sounded
+ * right and did not survive being measured: `scripts/cu-prune-eval.mjs` replays
+ * both forms over 76 recorded observations and the relaxed one keeps every
+ * operated element and every named ancestor that identifies one, at 87% of the
+ * tokens. It cannot do otherwise, because lifting a child into its parent is
+ * not a deletion; what it erases is a line, and that line said nothing.
+ *
+ * The saving is not evenly spread and should not be quoted as one number. VS
+ * Code gives back 1,277 tokens per observation, Calculator 17, Finder 16,
+ * TextEdit and Preview nothing at all: web views build deep chains of unnamed
+ * boxes, AppKit does not. So this is worth having for the windows that are
+ * hardest to observe, and is invisible everywhere else.
+ *
+ * `multiChildWrappers: false` restores the strict form, which is what the
+ * evaluator uses as its baseline.
+ *
+ * What is still not lifted is a childless node: it has nothing to lift into its
+ * parent, so collapsing one is a deletion rather than a collapse, and deletion
+ * is the thing this whole file refuses to do.
  */
 export function collapseStructuralWrappers(
   elements: readonly CuObservedElement[],
@@ -293,9 +306,10 @@ export function collapseStructuralWrappers(
     const parent = element.parentElementId;
     if (parent !== undefined) childCount.set(parent, (childCount.get(parent) ?? 0) + 1);
   }
-  const enoughChildren = options.multiChildWrappers
-    ? (count: number) => count >= 1
-    : (count: number) => count === 1;
+  const enoughChildren =
+    options.multiChildWrappers === false
+      ? (count: number) => count === 1
+      : (count: number) => count >= 1;
   return collapse(
     elements,
     (element) =>
