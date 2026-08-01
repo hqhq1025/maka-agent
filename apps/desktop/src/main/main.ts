@@ -91,6 +91,7 @@ import { createDailyReviewArchiveStore } from './daily-review-archive-store.js';
 import { resolveE2eFixture, seedE2eFixture } from './e2e-fixture.js';
 import { resolveBuildInfo } from './build-info.js';
 import { resolveShellEnv } from './shell-env.js';
+import { startupStep } from './startup-step.js';
 import { OpenGatewayService } from './open-gateway.js';
 import { LocalMemoryService } from './local-memory-service.js';
 import { createAttachmentApprovalRegistry } from './attachment-approval.js';
@@ -233,9 +234,12 @@ if (e2eFixture) {
   console.log(`[e2e-fixture] scenario=${e2eFixture.scenario} workspace=${workspaceRoot}`);
   await seedE2eFixture({ workspaceRoot, fixture: e2eFixture, credentialStore });
 } else {
-  const storageRoot = await resolveDesktopStorageRoot(workspaceRoot, {
-    confirmRepair: confirmDesktopStorageRootRepair,
-  });
+  const storageRoot = await startupStep(
+    'storage root',
+    resolveDesktopStorageRoot(workspaceRoot, {
+      confirmRepair: confirmDesktopStorageRootRepair,
+    }),
+  );
   if (!storageRoot) {
     app.exit(0);
     await new Promise<never>(() => {});
@@ -271,11 +275,13 @@ const projectCatalog = createProjectCatalog(workspaceRoot);
 const worktreeChildExecutor = createGitWorktreeChildExecutor({ storageRoot: workspaceRoot });
 const planStore = createPlanStore(workspaceRoot);
 const runStore = createAgentRunStore(workspaceRoot);
-const runtimePersistence = await openRuntimeEventPersistence({
-  workspaceRoot,
-  sqliteCanonical: process.env.MAKA_RUNTIME_SQLITE_CANONICAL === '1',
-});
-const runtimeEventStore = runtimePersistence.runtimeEventStore;
+const runtimePersistence = await startupStep(
+  'runtime event persistence',
+  openRuntimeEventPersistence({
+    workspaceRoot,
+    sqliteCanonical: process.env.MAKA_RUNTIME_SQLITE_CANONICAL === '1',
+  }),
+);const runtimeEventStore = runtimePersistence.runtimeEventStore;
 const shellRunStore = createShellRunStore(workspaceRoot);
 const connectionStore = createConnectionStore(workspaceRoot);
 const settingsStore = createSettingsStore(workspaceRoot);
