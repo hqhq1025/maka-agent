@@ -50,6 +50,7 @@ const BAD_IMAGE_SHA = process.env.MAKACU_MOCK_BAD_IMAGE_SHA === '1';
 // A frame past the model-context cap: readable window, unreturnable picture.
 const BIG_IMAGE = process.env.MAKACU_MOCK_BIG_IMAGE === '1';
 const BARE_IMAGE_SHA = process.env.MAKACU_MOCK_BARE_IMAGE_SHA === '1';
+const UNVERIFIED_EFFECT = process.env.MAKACU_MOCK_UNVERIFIED_EFFECT === '1';
 const NO_POST_SNAPSHOT = process.env.MAKACU_MOCK_NO_POST_SNAPSHOT === '1';
 // The action closed the thing it acted on, so the post-action observation could
 // not be taken and never will be.
@@ -178,7 +179,7 @@ function dispatchReply(id, params) {
     outcome: OK_OUTCOME,
     tier: TIER,
     path: PATH_NAME,
-    effect: OK_OUTCOME === 'ok' ? 'confirmed' : 'unverifiable',
+    effect: UNVERIFIED_EFFECT || OK_OUTCOME !== 'ok' ? 'unverifiable' : 'confirmed',
     verification: { method: 'tree_delta', observedChange: true },
     settle: { waitedMs: 12, quiesced: true, reason: 'quiesced' },
     snapshot: NO_POST_SNAPSHOT || POST_WINDOW_GONE ? null : snapshot(true),
@@ -324,6 +325,7 @@ function makeBackend(
     bigImage?: boolean;
     bareImageSha?: boolean;
     noPostSnapshot?: boolean;
+    unverifiedEffect?: boolean;
     postWindowGone?: boolean;
     bareRefusal?: boolean;
     refusalPath?: string;
@@ -356,6 +358,7 @@ function makeBackend(
   process.env.MAKACU_MOCK_BIG_IMAGE = opts.bigImage ? '1' : '';
   process.env.MAKACU_MOCK_BARE_IMAGE_SHA = opts.bareImageSha ? '1' : '';
   process.env.MAKACU_MOCK_NO_POST_SNAPSHOT = opts.noPostSnapshot ? '1' : '';
+  process.env.MAKACU_MOCK_UNVERIFIED_EFFECT = opts.unverifiedEffect ? '1' : '';
   process.env.MAKACU_MOCK_POST_WINDOW_GONE = opts.postWindowGone ? '1' : '';
   process.env.MAKACU_MOCK_BARE_REFUSAL = opts.bareRefusal ? '1' : '';
   process.env.MAKACU_MOCK_REFUSAL_PATH = opts.refusalPath ?? 'none';
@@ -1030,7 +1033,9 @@ describe('maka-cu backend', () => {
   });
 
   it('reports a delivered dispatch with no fresh frame as outcome_unknown', async () => {
-    const { backend } = makeBackend({ noPostSnapshot: true });
+    // Nothing checked whether this landed, and no frame came back to check it
+    // against, so the outcome really is unknown.
+    const { backend } = makeBackend({ noPostSnapshot: true, unverifiedEffect: true });
     const observation = await observeFixture(backend);
     const result = await backend.runSemantic!(
       { type: 'click_element', observationId: observation.observationId, elementId: 'el_2' },
@@ -1039,6 +1044,31 @@ describe('maka-cu backend', () => {
     );
     assert.equal(!result.outcome.ok && result.outcome.error, 'outcome_unknown');
     assert.equal(result.outcome.evidence?.effect, 'unverifiable');
+  });
+
+  it('reports an effect the executor confirmed as done, even with no fresh frame', async () => {
+    // The frame after the action is what could not be read; whether the action
+    // happened was already answered. `confirmed` means the executor compared
+    // the tree before and after and saw the change, and a screenshot timing out
+    // afterwards does not retract that.
+    //
+    // Measured on a real cross-application run: four element dispatches came
+    // back `outcome: ok, effect: confirmed, verificationMethod: tree_delta`,
+    // all four were reported to the model as failures, and the next observation
+    // showed every one had landed. The cost was not the four calls — it was
+    // that the model then held a wrong picture of the screen, and the honest
+    // `target_missing` three calls later was the child of this dishonest
+    // `outcome_unknown`.
+    const { backend } = makeBackend({ noPostSnapshot: true });
+    const observation = await observeFixture(backend);
+    const result = await backend.runSemantic!(
+      { type: 'click_element', observationId: observation.observationId, elementId: 'el_2' },
+      signal(),
+      RUN_CONTEXT,
+    );
+    assert.equal(result.outcome.ok, true);
+    assert.equal(result.outcome.evidence?.effect, 'confirmed');
+    assert.equal(result.outcome.evidence?.reason, 'dispatch.element:confirmed_without_frame');
   });
 
   it('reports an action that closed its own target as done, not as unknown', async () => {

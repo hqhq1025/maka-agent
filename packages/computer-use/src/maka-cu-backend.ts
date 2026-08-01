@@ -1420,6 +1420,36 @@ export function createMakaCuBackend(opts: MakaCuBackendOptions): CuDispatchBacke
           },
         };
       }
+      // An effect the executor confirmed is not an unknown outcome either.
+      //
+      // Same shape as the window-gone case above, and the same sentence: what
+      // could not be read back is the frame after the action, not whether the
+      // action happened. `confirmed` in §6.5 means the executor compared the
+      // tree before and after and saw the change — that evidence does not
+      // expire because a screenshot timed out afterwards.
+      //
+      // Measured on a real cross-application run: four element dispatches came
+      // back `outcome: ok, effect: confirmed, verificationMethod: tree_delta`,
+      // all four were reported to the model as failures, and the next
+      // observation showed every one of them had landed — the calculator's
+      // display had gone from `0` to `8` and its 全部清除 button had become
+      // 清除. The cost is not the four calls. It is that the model then holds a
+      // picture of the screen that is wrong, and the honest `target_missing`
+      // three calls later is the child of this dishonest `outcome_unknown`.
+      //
+      // Deliberately narrow: only `confirmed`. `unverifiable` means nothing was
+      // checked or the check was inconclusive, and that is still unknown.
+      if (result.outcome === 'ok' && result.effect === 'confirmed') {
+        return {
+          outcome: {
+            ...outcome,
+            evidence: {
+              ...outcome.evidence,
+              reason: `${method}:confirmed_without_frame`,
+            },
+          },
+        };
+      }
       // §6.1: the action happened and must be reported even though the frame
       // after it could not be. Same host policy as the cua-driver backend: a
       // delivered dispatch without a fresh frame is outcome_unknown.
