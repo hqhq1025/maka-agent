@@ -116,7 +116,10 @@ describe('Swarm orchestration admission', () => {
     await invoke(second, exclusiveFirst);
     const rejectedOrdinary = await invoke(second, ordinarySecond);
     assert.deepEqual(second.calls, ['agent_swarm']);
-    assert.match(JSON.stringify(rejectedOrdinary), /exclusive tool agent_swarm/i);
+    // A refusal has to say the call did not run, or a model cannot tell it
+    // apart from a failure and may send it a second time.
+    assert.match(JSON.stringify(rejectedOrdinary), /Tool Read did not run/);
+    assert.match(JSON.stringify(rejectedOrdinary), /agent_swarm cannot share an assistant step/i);
   });
 
   test('exclusive admission is scoped to one assistant step', async () => {
