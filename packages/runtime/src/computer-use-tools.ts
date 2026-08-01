@@ -1823,18 +1823,25 @@ export function buildComputerUseTools(deps: {
                   'report that to the user rather than trying other computer actions.',
               };
             }
-            // Measured on one real run: five observes asking for a screenshot
-            // took 5.8–8.0s and every one of them timed out; eight asking for
-            // none took 0.8–7.4s and every one succeeded. With the default on
-            // the screenshot side, each task paid one guaranteed timeout, read
-            // the failure, and re-sent without the picture — a wasted call per
-            // run, every run.
+            // A picture is not what an element action needs, and it is not free.
             //
-            // The element list is what element actions need, and it is complete
-            // without pixels: element_id, role, label, value, frame and the
-            // available secondary actions all come from Accessibility. A
-            // picture serves coordinate actions and a human look at the screen,
-            // and those are worth asking for rather than paying for by default.
+            // The element list is complete without pixels — element_id, role,
+            // label, value, frame and the available secondary actions all come
+            // from Accessibility — while the image roughly triples what an
+            // observation costs: measured across these runs the text alone is
+            // about 428 tokens, and a 460x816 capture adds roughly 500 more on
+            // top of a 267-token increase in the text. A picture serves
+            // coordinate actions and a person glancing at the screen, and those
+            // are worth asking for rather than paying for by default.
+            //
+            // An earlier version of this comment justified the default with
+            // five observes that took 5.8–8.0s and timed out. That reading was
+            // wrong and is recorded here so it is not rediscovered: those runs
+            // were on a machine at load 63, and a window capture measures 155ms
+            // idle. With the executor's batched attribute reads, a full
+            // observation of the largest window measured (1500 elements) takes
+            // 1.0s with the picture included. Capturing is affordable; it is
+            // simply not what this call is for.
             const includeScreenshot = input.include_screenshot ?? false;
             if (includeScreenshot && !tcc.screenRecording) {
               return {
@@ -1892,13 +1899,18 @@ export function buildComputerUseTools(deps: {
               // error is not a place to paste a hundred app names.
               let running = '';
               if (code === 'timeout') {
-                // Keyed off the effective value, not the field. Since the
-                // default is no screenshot, an absent field means the picture
-                // was never the slow part and telling the model to turn it off
-                // would name something it did not ask for.
-                running = includeScreenshot
-                  ? ' The window is there and did not answer in time. Capturing its picture is the slow part, so observe it again without include_screenshot — the elements come back either way.'
-                  : ' The window is there and did not answer in time; observe it again.';
+                // What is actually slow is the tree, not the picture. Measured
+                // per window: a capture costs a flat 66–85ms, while walking
+                // System Settings costs 684ms and Finder 175ms with no picture
+                // at all. Telling a model to drop the screenshot sends it to
+                // save a fixed tenth of a second on a call whose cost is the
+                // element count — and on the default path it does not even
+                // have a screenshot to drop.
+                //
+                // `query` is the lever that matches the cause: it narrows what
+                // is written without narrowing what can be addressed.
+                running =
+                  ' The window is there and did not answer in time. A large window is the usual reason, so observe it again with `query` naming what you are looking for — the ids stay addressable either way.';
               } else if (code === 'target_missing' && input.app && deps.backend.listApps) {
                 try {
                   const apps = await deps.backend.listApps(abortSignal);

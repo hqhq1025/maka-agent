@@ -2456,8 +2456,7 @@ describe('buildComputerUseTools — the `maka_computer` MakaTool', () => {
     // Every observe failure was `target_missing`, including a timeout — so the
     // failure said "no such app" about an app that was running, in the same
     // sentence that listed it among the apps that were. Three models read that
-    // and re-sent the identical call; one found `include_screenshot: false` by
-    // trying it, which is the answer this should have handed over.
+    // and re-sent the identical call.
     const backend = fakeBackend() as CuDispatchBackend & {
       observeApp: NonNullable<CuDispatchBackend['observeApp']>;
       listApps: NonNullable<CuDispatchBackend['listApps']>;
@@ -2471,19 +2470,19 @@ describe('buildComputerUseTools — the `maka_computer` MakaTool', () => {
     const [tool] = buildComputerUseTools({ backend });
 
     const failed = (await tool.impl(
-      // With the screenshot asked for explicitly, because it is no longer on by
-      // default: the "capture is the slow part" recovery is only true of an
-      // observe that was capturing.
-      { action: 'observe', app: 'com.apple.TextEdit', include_screenshot: true } as never,
+      { action: 'observe', app: 'com.apple.TextEdit' } as never,
       ctx(),
     )) as { text: string; modelText?: string };
     const said = failed.modelText ?? failed.text;
 
     assert.match(said, /timeout/);
     assert.doesNotMatch(said, /target_missing/);
-    // The recovery, rather than a list of apps that includes the one it just
-    // said was missing.
-    assert.match(said, /include_screenshot/);
+    // The recovery names the cause. A capture costs a flat 66–85ms while
+    // walking a large window costs hundreds, so `query` is the lever that
+    // matches — and telling it to drop a screenshot it did not ask for names
+    // something it cannot act on.
+    assert.match(said, /query/);
+    assert.doesNotMatch(said, /include_screenshot/);
     assert.doesNotMatch(said, /Apps with windows/);
   });
 });

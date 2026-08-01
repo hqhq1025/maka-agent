@@ -207,9 +207,10 @@ describe('observe does not capture a picture unless asked', () => {
    * model sent. The default is only worth anything if it reaches the capture:
    * a default that is read but not passed through costs the same timeout.
    *
-   * Measured on one real run: five observes that captured a picture took
-   * 5.8-8.0s and all five timed out; eight that did not took 0.8-7.4s and all
-   * eight came back.
+   * The default is worth having because a picture roughly triples what an
+   * observation costs in tokens, not because capturing is slow: a window
+   * capture measures 66-85ms, while walking a large window costs hundreds of
+   * milliseconds with no picture at all.
    */
   function recordingBackend(): CuDispatchBackend & { requests: Array<boolean | undefined> } {
     const requests: Array<boolean | undefined> = [];
@@ -256,22 +257,29 @@ describe('observe does not capture a picture unless asked', () => {
     assert.deepEqual(backend.requests, [false]);
   });
 
-  test('a timeout only blames the screenshot when one was asked for', async () => {
+  test('a timeout points at the size of the window, which is what costs', async () => {
+    // An earlier version blamed the screenshot. Measured per window, a capture
+    // is a flat 66-85ms while walking System Settings is 684ms and Finder 175ms
+    // with no picture at all — so dropping the picture saves a tenth of a
+    // second on a call whose cost is the element count, and on the default path
+    // there is no picture to drop.
     const backend = recordingBackend();
     backend.observeApp = async () => {
       throw new Error('observe timeout');
     };
     const [tool] = buildComputerUseTools({ backend });
-    const plain = (await tool.impl({ action: 'observe', app: 'Fixture' } as never, ctx())) as {
-      text: string;
-    };
-    assert.match(plain.text, /timeout/);
-    assert.doesNotMatch(plain.text, /include_screenshot/);
-    const withPicture = (await tool.impl(
-      { action: 'observe', app: 'Fixture', include_screenshot: true } as never,
-      ctx({ sessionId: 's2' }),
-    )) as { text: string };
-    assert.match(withPicture.text, /include_screenshot/);
+
+    for (const [label, args] of [
+      ['default', { action: 'observe', app: 'Fixture' }],
+      ['with a picture', { action: 'observe', app: 'Fixture', include_screenshot: true }],
+    ] as const) {
+      const result = (await tool.impl(args as never, ctx({ sessionId: label }))) as {
+        text: string;
+      };
+      assert.match(result.text, /timeout/, label);
+      assert.match(result.text, /query/, label);
+      assert.doesNotMatch(result.text, /include_screenshot/, label);
+    }
   });
 });
 
