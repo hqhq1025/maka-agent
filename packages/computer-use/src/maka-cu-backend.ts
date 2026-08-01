@@ -1249,10 +1249,14 @@ export function createMakaCuBackend(opts: MakaCuBackendOptions): CuDispatchBacke
           // §5: the executor maps raw AX names; the host never sends `AXPress`,
           // and an unknown name is refused instead of being tried and failing
           // with "'X' is not a valid secondary action".
+          // The names, not just the verdict. cua-driver answers a miss on a
+          // popup with `Available: ["A", "B", …]`, and that is the difference
+          // between a model correcting itself and a model guessing a second
+          // time. The set is closed and short enough to print whole.
           return {
             refusal: failure(
               'unsupported_action',
-              `secondary action '${action.action}' is outside the protocol's action set`,
+              `secondary action '${action.action}' is not one this protocol has. The names are: ${ELEMENT_ACTION_NAMES.join(', ')}. An element's own list is the '+name,name' suffix on its line in the observation.`,
             ),
           };
         }

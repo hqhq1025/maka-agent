@@ -838,6 +838,38 @@ describe('maka-cu backend', () => {
     assert.equal(plain?.actions, undefined, 'an element offering only press says nothing');
   });
 
+  it('names the secondary actions there are, rather than only the one there is not', async () => {
+    // cua-driver answers a miss on a popup with `Available: ["A", "B", …]`, and
+    // that is the difference between a model correcting itself and a model
+    // guessing a second time. The set here is closed and short enough to print
+    // whole, so a refusal can carry it — measured against the previous message,
+    // which said only that the guess was "outside the protocol's action set"
+    // and left the model to find the inside by trial.
+    const { backend } = makeBackend({});
+    const observation = await observeFixture(backend);
+    const result = await backend.runSemantic!(
+      {
+        type: 'secondary_action',
+        action: 'expand',
+        observationId: observation.observationId,
+        elementId: 'el_2',
+        elementIdentity: { token: 'el_2', role: 'AXButton' },
+      },
+      signal(),
+      RUN_CONTEXT,
+    );
+
+    assert.equal(result.outcome.ok, false);
+    const message = result.outcome.ok ? '' : result.outcome.message;
+    assert.match(message, /'expand'/, 'says which name was refused');
+    for (const name of ['press', 'raise', 'pick', 'increment', 'scroll_up']) {
+      assert.ok(message.includes(name), `lists ${name}`);
+    }
+    // And points at where this element's own shorter list is written, which is
+    // the answer to the question the model is actually asking.
+    assert.match(message, /\+name,name/);
+  });
+
   it('reads an element with no rectangle instead of refusing the whole window', async () => {
     // §5 declares `frame` optional. Reading it as required cost a whole
     // application: one element without one in System Settings turned every
