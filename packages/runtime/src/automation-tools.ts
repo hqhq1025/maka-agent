@@ -143,7 +143,7 @@ export function buildAutomationTool(deps: AutomationToolDeps): MakaTool<Automati
           result = handleById(input, (id) =>
             deps.automationManager.delete(id, ctx.sessionId)
               ? `Automation "${id}" deleted.`
-              : `Automation "${id}" not found or not owned by this session.`,
+              : explainManageFailure(deps, id, ctx.sessionId, 'delete'),
           );
           break;
         case 'list':
@@ -153,7 +153,7 @@ export function buildAutomationTool(deps: AutomationToolDeps): MakaTool<Automati
             const r = deps.automationManager.pause(id, ctx.sessionId);
             return r
               ? `Automation "${r.name}" paused. Use mode "resume" to reactivate.`
-              : `Cannot pause "${id}": not found, not owned, or not active.`;
+              : explainManageFailure(deps, id, ctx.sessionId, 'pause');
           });
           break;
         }
@@ -174,7 +174,7 @@ export function buildAutomationTool(deps: AutomationToolDeps): MakaTool<Automati
                 return `Cannot resume "${id}": its fire budget is exhausted (fired ${existing.fireCount}${existing.maxFires != null ? `/${existing.maxFires}` : ''} time(s)). Create a new automation instead.`;
               }
             }
-            return `Cannot resume "${id}": not found, not owned, or not paused.`;
+            return explainManageFailure(deps, id, ctx.sessionId, 'resume');
           });
           break;
         }
@@ -188,6 +188,39 @@ export function buildAutomationTool(deps: AutomationToolDeps): MakaTool<Automati
 function handleById(input: AutomationInput, run: (id: string) => string): string {
   if (!input.id) return 'Error: "id" is required for delete/pause/resume.';
   return run(input.id);
+}
+
+/**
+ * Say which of the three independent reasons actually blocked delete/pause/
+ * resume. Collapsing them into "not found, not owned, or not active" told the
+ * model nothing it could act on: two of the three are fixed by looking at
+ * mode "list", the third can never be fixed by retrying the same call.
+ */
+function explainManageFailure(
+  deps: AutomationToolDeps,
+  id: string,
+  sessionId: string,
+  verb: 'delete' | 'pause' | 'resume',
+): string {
+  const existing = deps.automationManager.get(id);
+  const listHint = 'Use mode "list" to see the automations you can manage and their ids.';
+  if (!existing) {
+    return `Cannot ${verb} "${id}": no automation has that id. ${listHint}`;
+  }
+  // Mirrors AutomationManager.manageableBy: a session manages its own
+  // automations plus every durable (app-global) one.
+  if (existing.sessionId !== sessionId && existing.durable !== true) {
+    return `Cannot ${verb} "${id}": it belongs to another session and is not durable, so this session cannot manage it. ${listHint}`;
+  }
+  if (verb === 'pause') {
+    return `Cannot pause "${id}": it is ${existing.status}, and only an active automation can be paused.`;
+  }
+  if (verb === 'resume') {
+    return existing.status === 'paused'
+      ? `Cannot resume "${id}": it is paused but can no longer fire. Create a new automation instead.`
+      : `Cannot resume "${id}": it is ${existing.status}, and only a paused automation can be resumed.${existing.status === 'completed' || existing.status === 'expired' ? ' Create a new automation instead.' : ''}`;
+  }
+  return `Cannot delete "${id}". ${listHint}`;
 }
 
 function handleCreate(
