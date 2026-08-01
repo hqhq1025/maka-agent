@@ -304,6 +304,58 @@ export interface ComputerUseModelCallArgs {
   window_id?: number;
   observation_id?: string;
   element_id?: string;
+  /** Every other argument the call carried, values reduced to their shape. */
+  [key: string]: string | number | boolean | undefined;
+}
+
+/**
+ * Fields the host adds for its own approval projection, which the model never
+ * sent and must never be shown as though it had.
+ */
+const HOST_ONLY_ARGS = new Set(['approvalClass', 'rememberForTurnAllowed']);
+
+/** The keys projected by name above, so the sweep below does not repeat them. */
+const MODEL_CALL_NAMED_ARGS = new Set([
+  'action',
+  'app',
+  'window_id',
+  'windowId',
+  'observation_id',
+  'observationId',
+  'element_id',
+  'elementId',
+]);
+
+/**
+ * Arguments whose value is the model's own choice from a fixed set, a number,
+ * or a word it wrote itself — nothing here comes off the screen.
+ */
+const MODEL_CALL_PLAIN_VALUES = new Set([
+  'include_screenshot',
+  'scroll_direction',
+  'scroll_amount',
+  'window_action',
+  'duration',
+  'menu',
+  'query',
+]);
+
+/**
+ * A screen-derived or typed argument, kept as a shape.
+ *
+ * The value is what a person typed or what a window showed, so it stays out.
+ * The key does not: without it the model reads its own history as a call it
+ * never made.
+ */
+function shapeOf(value: unknown): string {
+  if (Array.isArray(value)) {
+    return value.length === 2 && value.every((v) => typeof v === 'number')
+      ? '<point>'
+      : `<${value.length} ${value.length === 1 ? 'item' : 'items'}>`;
+  }
+  if (typeof value === 'string') return '<text>';
+  if (typeof value === 'number' || typeof value === 'boolean') return String(value);
+  return '<value>';
 }
 
 export function computerUseModelCallArgs(args: unknown): ComputerUseModelCallArgs {
@@ -316,6 +368,27 @@ export function computerUseModelCallArgs(args: unknown): ComputerUseModelCallArg
   const observationId =
     ownDataProperty(record, 'observation_id') ?? ownDataProperty(record, 'observationId');
   const elementId = ownDataProperty(record, 'element_id') ?? ownDataProperty(record, 'elementId');
+  // Every remaining argument the model sent, as a shape. This projection used
+  // to name five keys and drop the rest, so `element_sequence` came back to the
+  // model as a call carrying only an observation id, `press_key` as one with no
+  // key, `set_value` as one with no value. The model reads that as the shape
+  // that worked and sends it again — and a real session refused eighteen calls
+  // for missing exactly the fields this had removed. The privacy boundary is
+  // about values, and only values are withheld.
+  const rest: Record<string, string | number | boolean> = {};
+  for (const [key, value] of Object.entries(record ?? {})) {
+    if (MODEL_CALL_NAMED_ARGS.has(key) || HOST_ONLY_ARGS.has(key)) continue;
+    if (MODEL_CALL_PLAIN_VALUES.has(key)) {
+      rest[key] =
+        typeof value === 'string'
+          ? boundedDisplay(redactSecrets(value), 256)
+          : typeof value === 'number' || typeof value === 'boolean'
+            ? value
+            : shapeOf(value);
+      continue;
+    }
+    rest[key] = shapeOf(value);
+  }
   return {
     action,
     ...(typeof app === 'string' && app.length > 0
@@ -328,6 +401,7 @@ export function computerUseModelCallArgs(args: unknown): ComputerUseModelCallArg
     ...(typeof elementId === 'string' && elementId.length > 0
       ? { element_id: boundedDisplay(redactSecrets(elementId), 256) }
       : {}),
+    ...rest,
   };
 }
 
