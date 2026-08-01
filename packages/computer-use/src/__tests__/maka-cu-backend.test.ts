@@ -550,7 +550,10 @@ describe('maka-cu backend', () => {
     assert.equal(result.outcome.evidence?.effect, 'confirmed');
     assert.ok(result.observation, 'a fresh observation came back with the dispatch');
     assert.notEqual(result.observation!.observationId, observation.observationId);
-    assert.ok(result.screenshot, 'the fresh frame is attached');
+    // Whether a frame comes back is the mock's choice here; what this pins is
+    // that the dispatch stopped asking for one (see the observeAfter assertion
+    // below). The mirror's frame comes from the host's own captureObservation,
+    // which is allowed to be slow because nothing is waiting on it.
 
     const dispatch = received(await readRecords(logPath), 'dispatch.element')[0];
     assert.equal(dispatch?.snapshotId, observation.observationId);
@@ -561,7 +564,7 @@ describe('maka-cu backend', () => {
     // §6.1: a semantic dispatch addresses an element, not a pixel.
     assert.equal(dispatch?.occlusionPolicy, 'same_app');
     assert.deepEqual(dispatch?.action, { kind: 'click', button: 'left', count: 1 });
-    assert.deepEqual(dispatch?.observeAfter, { includeImage: true, settle: 'quiesce' });
+    assert.deepEqual(dispatch?.observeAfter, { includeImage: false, settle: 'quiesce' });
   });
 
   it('refuses a dispatch against a spent snapshot as a duplicate action', async () => {

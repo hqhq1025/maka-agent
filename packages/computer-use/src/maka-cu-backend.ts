@@ -1646,7 +1646,19 @@ export function createMakaCuBackend(opts: MakaCuBackendOptions): CuDispatchBacke
         // freshly launched (bottom of z-order) app fail.
         occlusionPolicy: 'same_app',
         action: wire,
-        observeAfter: { includeImage: true, settle: 'quiesce' },
+        // No image. What the frame after an action has to say is what the
+        // screen became, and the elements say it; the picture is what made the
+        // frame unaffordable. A window capture runs into its own ceiling often
+        // enough that the post-action observation was failing outright — and a
+        // dispatch with no frame cannot be verified by tree delta, so it came
+        // back `effect: unverifiable` and was reported to the model as a
+        // failure. Measured: element_sequence `stopped at step 1 of 9:
+        // outcome_unknown` on a calculator whose display had already changed.
+        //
+        // The mirror is not paying for this. Its frame comes from the host's
+        // own `captureObservation`, which asks for an image on a path that is
+        // allowed to be slow because nothing is waiting on it.
+        observeAfter: { includeImage: false, settle: 'quiesce' },
       },
       signal,
     );
@@ -1741,7 +1753,7 @@ export function createMakaCuBackend(opts: MakaCuBackendOptions): CuDispatchBacke
         // clicking the element to focus it — is a press, not a focus.
         ...(target ? { focusPolicy: 'acquire' } : {}),
         action: wire,
-        observeAfter: { includeImage: true, settle: 'quiesce' },
+        observeAfter: { includeImage: false, settle: 'quiesce' },
       },
       signal,
     );
@@ -1780,7 +1792,7 @@ export function createMakaCuBackend(opts: MakaCuBackendOptions): CuDispatchBacke
         // §6.3: a pixel is a pixel — anything on top of it owns it.
         occlusionPolicy: 'any',
         action: wire,
-        observeAfter: { includeImage: true, settle: 'quiesce' },
+        observeAfter: { includeImage: false, settle: 'quiesce' },
       },
       signal,
     );
