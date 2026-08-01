@@ -308,7 +308,8 @@ describe('expert_dispatch tool', () => {
         abortSignal: new AbortController().signal,
         emitOutput: () => {},
       } as never);
-    }, /spawnChildAgent capability is unavailable/);
+      // Names expert_dispatch and a fallback, not the injected host capability.
+    }, /expert_dispatch is not available.*yourself/s);
   });
 
   test('builds a tool by team id and returns undefined for unknown teams', () => {

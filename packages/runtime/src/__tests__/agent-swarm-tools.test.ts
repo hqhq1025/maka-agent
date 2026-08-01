@@ -642,7 +642,9 @@ describe('AgentSwarm adapter', () => {
 
     await assert.rejects(
       Promise.resolve(tool.impl({ items: [swarmItem(0)] }, context())),
-      /spawnChildSession capability is unavailable/,
+      // The refusal must name the tool the model called and a fallback it can act on,
+      // not the host function that happened to be missing.
+      /agent_swarm cannot start new child agents.*yourself/s,
     );
   });
 

@@ -292,12 +292,13 @@ describe('agent team collaboration tools', () => {
           { type: 'broadcast', content: 'x' },
           memberContext({ agentTeam: undefined }),
         ),
-      /unavailable outside an expert-team run/,
+      // Names the team tools and what to do instead of retrying them.
+      /team_message.*expert-team run.*your own reply/s,
     );
     await assert.rejects(
       async () =>
         await findTool(tools, TEAM_TASK_CLAIM_TOOL_NAME).impl({ task_id: 'T1' }, leadContext()),
-      /only to expert-team members/,
+      /team_task_claim are for team members only.*expert_dispatch/s,
     );
   });
 });

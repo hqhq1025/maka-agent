@@ -203,13 +203,27 @@ function buildTeamTaskClaimTool(taskLedger: TaskLedgerStore): MakaTool {
 }
 
 function requireAgentTeamExecution(ctx: MakaToolContext): AgentTeamExecutionContext {
-  if (!ctx.agentTeam)
-    throw new Error('Agent team capability is unavailable outside an expert-team run');
+  if (!ctx.agentTeam) throw new Error(agentTeamUnavailableMessage());
   requireRunId(ctx);
   if (ctx.agentTeam.role === 'member' && !ctx.agentTeam.parentRunId) {
-    throw new Error('Expert-team member is missing its parent AgentRun identity');
+    throw new Error(agentTeamUnavailableMessage());
   }
   return ctx.agentTeam;
+}
+
+/**
+ * One model-facing sentence for every way the team tools can be unusable. The
+ * distinctions behind them (missing team context, missing AgentRun identity, a
+ * member without a parent run) are host bookkeeping the model cannot influence,
+ * so they must all resolve to the same next action rather than to three
+ * different internal nouns.
+ */
+function agentTeamUnavailableMessage(): string {
+  return (
+    `The team tools (${TEAM_MESSAGE_TOOL_NAME}, ${TEAM_INBOX_TOOL_NAME}, ${TEAM_TASK_LIST_TOOL_NAME}, ${TEAM_TASK_CLAIM_TOOL_NAME}) ` +
+    'only work inside an expert-team run, and this is not one, so nothing was sent or read. ' +
+    'Retrying will fail the same way — put what you wanted to send into your own reply instead.'
+  );
 }
 
 function requireMemberExecution(
@@ -217,13 +231,16 @@ function requireMemberExecution(
 ): AgentTeamExecutionContext & { role: 'member'; parentRunId: string } {
   const execution = requireAgentTeamExecution(ctx);
   if (execution.role !== 'member' || !execution.parentRunId) {
-    throw new Error('Shared task self-claim is available only to expert-team members');
+    throw new Error(
+      `${TEAM_TASK_LIST_TOOL_NAME} and ${TEAM_TASK_CLAIM_TOOL_NAME} are for team members only, and you are running as the team lead. ` +
+        'Retrying will fail the same way — assign the task with expert_dispatch instead of claiming it.',
+    );
   }
   return execution as AgentTeamExecutionContext & { role: 'member'; parentRunId: string };
 }
 
 function requireRunId(ctx: MakaToolContext): string {
-  if (!ctx.runId) throw new Error('Agent team tool requires a durable AgentRun identity');
+  if (!ctx.runId) throw new Error(agentTeamUnavailableMessage());
   return ctx.runId;
 }
 
@@ -254,8 +271,17 @@ function resolveRecipient(
   }
   const team = getExpertTeam(execution.teamId);
   const member = team?.members.find((candidate) => candidate.id === recipient);
-  if (!team || !member)
-    throw new Error(`Unknown member "${recipient}" for expert team "${execution.teamId}"`);
+  if (!team || !member) {
+    // The model is holding the wrong recipient string; the only useful reply is
+    // the set of strings that would work. The team's internal id is not one of
+    // them, so name the team the way its roster does instead.
+    const roster = team?.members.map((candidate) => candidate.id).join(', ');
+    throw new Error(
+      roster
+        ? `That recipient is not on this team. Address one of: "lead", ${roster}.`
+        : 'That recipient is not on this team, and this run has no member roster. Address "lead" instead.',
+    );
+  }
   const agentId = buildExpertAgentId(team.id, member.id);
   if (agentId === execution.agentId) throw new Error('Team messages cannot target the sender');
   return { role: 'member', agentId };

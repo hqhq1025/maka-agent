@@ -79,11 +79,19 @@ export function buildExpertDispatchTool(
     impl: async (input, ctx) => {
       const member = team.members.find((entry) => entry.id === input.member);
       if (!member) {
-        // Unreachable via the enum, but keep a precise error if the schema is bypassed.
-        throw new Error(`Unknown member "${input.member}" for expert team "${team.id}".`);
+        // Unreachable via the enum, but keep a precise error if the schema is
+        // bypassed. The recovery the model needs is the member list, not the
+        // team's internal id.
+        throw new Error(
+          `"${input.member}" is not a member of the "${team.name}". ` +
+            `Dispatch one of: ${team.members.map((entry) => entry.id).join(', ')}.`,
+        );
       }
       if (!ctx.spawnChildAgent) {
-        throw new Error('spawnChildAgent capability is unavailable in this runtime context');
+        throw new Error(
+          'expert_dispatch is not available in this session, so no member was dispatched. ' +
+            'Retrying expert_dispatch will fail the same way — carry out the member task yourself with the tools you already have.',
+        );
       }
       const definition = materializeExpertAgentDefinition(team, member);
       let ready: { turnId: string; agentId: string } | undefined;
