@@ -2509,6 +2509,102 @@ describe('buildComputerUseTools — the `maka_computer` MakaTool', () => {
     assert.equal(backend.last, undefined, 'backend.run must not be called after abort');
   });
 
+  test('S20: observe takes the name a person uses, not only a bundle id', async () => {
+    // Across 37 recorded runs, 34 spent their first call turning 计算器 into
+    // com.apple.calculator, and 39 of those 44 list_apps calls already carried
+    // an app filter — the model knew which application it wanted and was only
+    // asking for the spelling. 100% of runs, 100% success, 0% of them doing
+    // anything.
+    const backend = fakeBackend() as CuDispatchBackend & {
+      observeApp: NonNullable<CuDispatchBackend['observeApp']>;
+      listApps: NonNullable<CuDispatchBackend['listApps']>;
+    };
+    const asked: Array<string | undefined> = [];
+    backend.listApps = async () => [
+      { appId: 'com.apple.calculator', pid: 1, name: '计算器', windowCount: 1 },
+      { appId: 'com.apple.TextEdit', pid: 2, name: '文本编辑', windowCount: 1 },
+    ];
+    backend.observeApp = async (request) => {
+      asked.push(request.app);
+      return observation();
+    };
+    const [tool] = buildComputerUseTools({ backend });
+
+    for (const name of ['计算器', 'Calculator', 'calculator']) {
+      await tool.impl(
+        { action: 'observe', app: name } as never,
+        ctx(undefined, { sessionId: name }),
+      );
+    }
+    assert.deepEqual(asked, [
+      'com.apple.calculator',
+      'com.apple.calculator',
+      'com.apple.calculator',
+    ]);
+
+    // A string that could already be an id goes through untouched, so an
+    // executor that knows ids this host has never seen keeps working.
+    asked.length = 0;
+    await tool.impl(
+      { action: 'observe', app: 'com.example.unheard' } as never,
+      ctx(undefined, { sessionId: 'passthrough' }),
+    );
+    assert.deepEqual(asked, ['com.example.unheard']);
+  });
+
+  test("S21: a name matching two applications is the model's to settle", async () => {
+    const backend = fakeBackend() as CuDispatchBackend & {
+      observeApp: NonNullable<CuDispatchBackend['observeApp']>;
+      listApps: NonNullable<CuDispatchBackend['listApps']>;
+    };
+    let observed = 0;
+    backend.listApps = async () => [
+      { appId: 'com.apple.Safari', pid: 1, name: 'Safari', windowCount: 1 },
+      {
+        appId: 'com.apple.SafariTechnologyPreview',
+        pid: 2,
+        name: 'Safari Preview',
+        windowCount: 2,
+      },
+    ];
+    backend.observeApp = async () => {
+      observed += 1;
+      return observation();
+    };
+    const [tool] = buildComputerUseTools({ backend });
+
+    const result = (await tool.impl({ action: 'observe', app: 'Safari' } as never, ctx())) as {
+      text: string;
+    };
+
+    // Picking one silently would drive the wrong window and report success.
+    assert.match(result.text, /ambiguous_target/);
+    assert.match(result.text, /com\.apple\.Safari/);
+    assert.match(result.text, /com\.apple\.SafariTechnologyPreview/);
+    assert.equal(observed, 0, 'nothing was observed while the target was in doubt');
+  });
+
+  test('S22: a lookup that fails leaves the name alone', async () => {
+    // The executor has its own account of an application it cannot find, and
+    // that account is better than one invented from an empty list.
+    const backend = fakeBackend() as CuDispatchBackend & {
+      observeApp: NonNullable<CuDispatchBackend['observeApp']>;
+      listApps: NonNullable<CuDispatchBackend['listApps']>;
+    };
+    const asked: Array<string | undefined> = [];
+    backend.listApps = async () => {
+      throw new Error('the executor is not answering');
+    };
+    backend.observeApp = async (request) => {
+      asked.push(request.app);
+      return observation();
+    };
+    const [tool] = buildComputerUseTools({ backend });
+
+    await tool.impl({ action: 'observe', app: 'Calculator' } as never, ctx());
+    assert.deepEqual(asked, ['Calculator']);
+  });
+
   test('S19: a window that did not answer in time is not reported as missing', async () => {
     // Every observe failure was `target_missing`, including a timeout — so the
     // failure said "no such app" about an app that was running, in the same

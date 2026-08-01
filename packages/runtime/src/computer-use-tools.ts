@@ -137,9 +137,9 @@ export const computerWireParams = z
       .max(512)
       .optional()
       .describe(
-        'The app id list_apps reports — a reverse-DNS bundle id like com.apple.calculator, never a display name. ' +
-          'A real run asked to observe "Calculator" and was told no application matched. Display names are localized and ' +
-          'are legal only on launch_app, which is the one call that names an app that is not running yet. ' +
+        'The application to look at: either a bundle id like com.apple.calculator, or the name a person would ' +
+          'use for it — "Calculator", "计算器", "Visual Studio Code" all resolve. A name that matches two running ' +
+          'applications comes back as ambiguous with both ids, rather than one of them being picked for you. ' +
           'Required for observe unless window_id is supplied.',
       ),
     window_id: z
@@ -973,6 +973,46 @@ export function buildComputerUseTools(deps: {
   ): ComputerToolResult | undefined {
     const retirement = record.state.retireAction(action);
     return retirement.ok ? undefined : bindingFailure(retirement.reason);
+  }
+
+  /**
+   * Turn the name a person used into the id the executor takes.
+   *
+   * Returns `undefined` when there is nothing to do — no name, a name that
+   * could already be an id, or no way to look one up — and the caller passes
+   * the original through. A lookup that fails is not an error here: the
+   * executor has its own account of an app it cannot find, and that account is
+   * better than one invented from an empty list.
+   */
+  async function resolveAppName(
+    app: string | undefined,
+    signal: AbortSignal,
+  ): Promise<{ app: string } | { ambiguous: string[] } | undefined> {
+    // A dot is what a bundle id has and a display name does not. Anything that
+    // could already be an id goes through untouched, so an executor that knows
+    // ids this host has never seen keeps working.
+    if (!app || app.includes('.') || !deps.backend.listApps) return undefined;
+    const query = app.trim().toLowerCase();
+    if (query.length === 0) return undefined;
+    let apps: Awaited<ReturnType<NonNullable<typeof deps.backend.listApps>>>;
+    try {
+      apps = await deps.backend.listApps(signal);
+    } catch {
+      return undefined;
+    }
+    const hits = apps.filter((candidate) =>
+      [candidate.appId, candidate.name].some(
+        (name) => name && matchesAppQuery(name.toLowerCase(), query),
+      ),
+    );
+    if (hits.length === 0) return undefined;
+    if (hits.length === 1) return { app: hits[0]!.appId };
+    // Two applications answering to one name is the model's to settle, not the
+    // host's: picking one silently would drive the wrong window and report
+    // success for it.
+    const withWindows = hits.filter((candidate) => (candidate.windowCount ?? 0) > 0);
+    if (withWindows.length === 1) return { app: withWindows[0]!.appId };
+    return { ambiguous: hits.slice(0, 8).map((candidate) => candidate.appId) };
   }
 
   async function freshFullObservation(
@@ -1886,11 +1926,32 @@ export function buildComputerUseTools(deps: {
             // "Calculator" when the app is named 计算器 produced a thrown
             // `invalidApp`, and the model read it as "the app is not running"
             // and launched a second copy rather than looking the name up.
+            // The bridge from the name a person used to the id the executor
+            // takes. Without it, `list_apps` is that bridge and nothing else
+            // is: across 37 recorded runs, 34 spent their first call turning
+            // "计算器" into `com.apple.calculator`, and 39 of those 44 calls
+            // already carried an `app` filter — the model knew which
+            // application it wanted and was only asking for the spelling.
+            //
+            // 100% of runs, 100% success, 0% of them doing anything. The same
+            // matching `list_apps` uses, applied one layer earlier.
+            //
+            // Only when the name cannot already be an id: a string with a dot
+            // is passed through untouched, so an executor that resolves ids the
+            // host has never heard of keeps working.
+            const resolvedApp = await resolveAppName(input.app, abortSignal);
+            if (resolvedApp && 'ambiguous' in resolvedApp) {
+              return {
+                text:
+                  `maka_computer.observe failed: ambiguous_target — "${input.app}" matches ` +
+                  `${resolvedApp.ambiguous.join(', ')}. Name one of them.`,
+              };
+            }
             let backendObservation;
             try {
               backendObservation = await deps.backend.observeApp(
                 {
-                  app: input.app,
+                  app: resolvedApp?.app ?? input.app,
                   windowId: input.window_id,
                   includeScreenshot,
                   ...(input.menu ? { menu: input.menu } : {}),
