@@ -2471,7 +2471,10 @@ describe('buildComputerUseTools — the `maka_computer` MakaTool', () => {
     const [tool] = buildComputerUseTools({ backend });
 
     const failed = (await tool.impl(
-      { action: 'observe', app: 'com.apple.TextEdit' } as never,
+      // With the screenshot asked for explicitly, because it is no longer on by
+      // default: the "capture is the slow part" recovery is only true of an
+      // observe that was capturing.
+      { action: 'observe', app: 'com.apple.TextEdit', include_screenshot: true } as never,
       ctx(),
     )) as { text: string; modelText?: string };
     const said = failed.modelText ?? failed.text;

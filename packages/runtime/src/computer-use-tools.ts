@@ -151,7 +151,12 @@ export const computerWireParams = z
     include_screenshot: z
       .boolean()
       .optional()
-      .describe('For observe, include a screenshot. Defaults to true.'),
+      .describe(
+        'For observe, also capture a picture of the window. Defaults to false: the element ' +
+          'list is what element actions need, and capturing the picture is the slow part. ' +
+          'Pass true only when the pixels themselves matter — a coordinate action, or a ' +
+          'control the element list does not describe.',
+      ),
     menu: z
       .string()
       .min(1)
@@ -584,8 +589,87 @@ export function buildComputerUseTools(deps: {
     record.elements = undefined;
   }
 
-  function sessionFailure(reason: CuaSessionActionBlockReason): ComputerToolResult {
-    return { text: `maka_computer failed: ${reason}`, error: reason };
+  // `unsupported_action` carries two facts that call for opposite next moves.
+  // The executor uses it for "this element does not offer that", which means
+  // pick another element. Every use in this file means the other thing: the
+  // capability is absent from this build, so no element and no window makes it
+  // appear, and retrying is guaranteed to fail the same way. The code is shared
+  // (it is fixed in `COMPUTER_USE_ERROR_CODES`), so the sentence has to be what
+  // tells the two apart.
+  const MISSING_CAPABILITY =
+    'this Computer Use build does not provide that capability at all, so retrying it, ' +
+    'or retrying it against another target, will fail the same way.';
+
+  // A refusal that names only the reason teaches the model the reason, which is
+  // a host state machine label it cannot act on. Every one of these has exactly
+  // one call that clears it, and the ones that have none have to say so — a
+  // model that is not told a refusal is terminal re-sends it. Measured on real
+  // traces: `reobserve_required` came back 13 times in one session, and the
+  // model never once answered it with `observe`, because nothing said to.
+  const SESSION_BLOCK_RECOVERY: Record<CuaSessionActionBlockReason, string> = {
+    no_active_frame:
+      'no observation is active yet. Call action:"observe" with an app or window_id first, ' +
+      'then quote the observation_id it returns.',
+    reobserve_required:
+      'observation consumed; call action:"observe" before the next coordinate or element action.',
+    user_intervened:
+      'the user was at the keyboard or the pointer, so nothing was sent. ' +
+      'Call action:"observe" to get a current observation, then send the action again.',
+    screen_locked:
+      'the screen is locked, so nothing on it can be read or driven. ' +
+      'Do not retry; tell the user to unlock the screen.',
+    blocked_url:
+      'this target is refused for the rest of this session and retrying it will not change that. ' +
+      'Work on a different app or window, or report that this one is off limits.',
+    user_stopped:
+      'the user stopped computer use for this session. Do not send any further computer action; ' +
+      'report that it was stopped.',
+  };
+
+  // Reasons the frame layer produces. `invalid_binding` and `action_not_claimed`
+  // are internal rejection labels rather than Computer Use error codes, so they
+  // travel to the model as `stale_frame` — but they still need their own
+  // sentence, because "look again" is the answer to all three and nothing in
+  // the bare code said it.
+  const BINDING_FAILURE_RECOVERY: Record<BindingFailureReason, string> = {
+    invalid_binding:
+      'the observation_id sent with this action is not one this session handed out. ' +
+      'Call action:"observe" and quote the observation_id from its header line verbatim.',
+    no_active_frame:
+      'no observation is active yet. Call action:"observe" with an app or window_id first, ' +
+      'then quote the observation_id it returns.',
+    stale_epoch:
+      'the screen moved on after the observation this action quotes. ' +
+      'Call action:"observe" again and re-pick the element from the new observation.',
+    stale_frame:
+      'the observation this action quotes is no longer the current one. ' +
+      'Call action:"observe" again and re-pick the element from the new observation.',
+    duplicate_action:
+      'this exact action was already sent against this observation and was not sent twice. ' +
+      'Call action:"observe" to see whether it took effect instead of sending it again.',
+    action_not_claimed:
+      'this action was not registered against the observation it quotes. ' +
+      'Call action:"observe" and send the action again with the observation_id it returns.',
+    target_missing:
+      'that element is not in the window any more. ' +
+      'Call action:"observe" and pick an element_id from the new observation.',
+    target_changed:
+      'the window changed under this action, so it was not sent. ' +
+      'Call action:"observe" and decide again from what it shows.',
+    capture_failed:
+      'the window could not be read, so the outcome of this action is unknown. ' +
+      'Call action:"observe" before sending anything else.',
+  };
+
+  function sessionFailure(
+    reason: CuaSessionActionBlockReason,
+    action?: string,
+  ): ComputerToolResult {
+    const tool = action ? `maka_computer.${action}` : 'maka_computer';
+    return {
+      text: `${tool} failed: ${reason} — ${SESSION_BLOCK_RECOVERY[reason]}`,
+      error: reason,
+    };
   }
 
   function validateActionLease(
@@ -697,9 +781,13 @@ export function buildComputerUseTools(deps: {
     | 'target_changed'
     | 'capture_failed';
 
-  function bindingFailure(reason: BindingFailureReason): ComputerToolResult {
+  function bindingFailure(reason: BindingFailureReason, action?: string): ComputerToolResult {
     const error: ComputerUseErrorCode = isComputerUseErrorCode(reason) ? reason : 'stale_frame';
-    return { text: `maka_computer failed: ${error}`, error };
+    const tool = action ? `maka_computer.${action}` : 'maka_computer';
+    return {
+      text: `${tool} failed: ${error} — ${BINDING_FAILURE_RECOVERY[reason]}`,
+      error,
+    };
   }
 
   function preservePartialDelivery(result: CuRunResult): CuRunResult {
@@ -715,7 +803,10 @@ export function buildComputerUseTools(deps: {
       outcome: {
         ...result.outcome,
         error: 'outcome_unknown',
-        message: 'computer action was partially delivered; final state is unknown',
+        message:
+          'computer action was partially delivered; final state is unknown. ' +
+          'Do not send it again — part of it already landed and repeating it can apply that part twice. ' +
+          'Call action:"observe" first and check what actually took effect.',
       },
     };
   }
@@ -733,14 +824,21 @@ export function buildComputerUseTools(deps: {
     result: CuRunResult,
   ): ComputerToolResult {
     const evidence = summarizeEvidence(result.outcome.evidence);
+    const hostEvidence = summarizeEvidence(result.outcome.evidence, 'host');
     const screenshot = result.screenshot;
     return {
       text:
-        `computer.${action.type} failed: outcome_unknown${evidence}` +
-        ' — the action reached the executor but a required fresh observation was unavailable; re-observe before continuing and do not retry blindly',
+        `maka_computer.${action.type} failed: outcome_unknown${hostEvidence}` +
+        ' — the action reached the executor but a required fresh observation was unavailable, ' +
+        'so whether it took effect is not known. Do not send it again: it may already have ' +
+        'landed and repeating it would apply it twice. Call action:"observe" first and check ' +
+        'whether it took effect; send it again only if the observation shows it did not.',
       modelText:
-        `computer.${action.type} failed: outcome_unknown${evidence}` +
-        ' — the action may have changed the target. Call observe before deciding whether to retry.',
+        `maka_computer.${action.type} failed: outcome_unknown${evidence}` +
+        ' — the action reached the executor and may already have taken effect, but that could ' +
+        'not be confirmed. Do not send it again: repeating it can apply it twice. Call ' +
+        'action:"observe" first and check whether it took effect; send it again only if the ' +
+        'observation shows it did not.',
       error: 'outcome_unknown',
       ...(screenshot
         ? {
@@ -751,6 +849,32 @@ export function buildComputerUseTools(deps: {
           }
         : {}),
     };
+  }
+
+  /**
+   * The frame the mirror shows, when the dispatch itself did not produce one.
+   *
+   * `presentToPip` reads `result.screenshot ?? result.observation?.screenshot`,
+   * and the executor attaches both only on its success arm. Every failure arm —
+   * `outcome_unknown`, `dispatch_refused`, `target_occluded`, `stale_frame`,
+   * `target_changed`, `reobserve_required` — returns an outcome and nothing
+   * else, so the mirror had nothing to draw. Across 30 traces the split was
+   * exact: 11 runs where the mirror appeared all had at least one success that
+   * carried a screenshot; the 19 where it never appeared had none.
+   *
+   * The frame exists either way. A refused action is followed here by a full
+   * observation captured with a screenshot — the one that becomes the "Fresh
+   * observation:" tail the model reads. It was simply never handed to the
+   * overlay, which left the mirror blank at exactly the moment a person most
+   * wants to look at it: the turn that went wrong.
+   */
+  function withMirrorFrame(
+    result: CuRunResult,
+    freshObservation: CuObservation | undefined,
+  ): CuRunResult {
+    if (!freshObservation?.screenshot) return result;
+    if (result.screenshot || result.observation?.screenshot) return result;
+    return { ...result, observation: freshObservation };
   }
 
   function claimBoundAction(
@@ -1127,12 +1251,26 @@ export function buildComputerUseTools(deps: {
       'Maka semantic computer harness. Use action=observe to read the current computer state before acting, then use the same function ' +
       'for semantic element actions, exact Electron page actions, wait, zoom, or another observation. Every successful mutating action returns a fresh screenshot when available ' +
       'and controlled path/effect/verified evidence; inspect that new state before retrying or continuing. ' +
-      'The retained background mutation paths are native Accessibility element actions and exact Electron page semantic actions. ' +
+      // "The retained background mutation paths are native Accessibility element
+      // actions and exact Electron page semantic actions" named two host
+      // dispatch implementations. Neither is a thing the model selects, so
+      // there was no behaviour it could change on reading it. What it can act
+      // on is which action to reach for.
+      'Everything here runs without bringing the target application to the front. ' +
       'Prefer click_element or set_value using an element_id from the immediately preceding observation. ' +
       'An observation is a header line of observation_id/app/pid/window_id followed by one line per element, ' +
       'indented to show containment: "<element_id> <role> \\"<label>\\" =\\"<value>\\" [<state>] @x,y wxh". ' +
       'Absent parts are omitted, and state is written only when it is not the default, so an element carrying ' +
       'no [disabled] is enabled. A value ending in "…(+N chars)" was shortened for length and is not the whole value. ' +
+      // Capturing the picture is what made observe time out on a real machine:
+      // five of five with a screenshot failed, eight of eight without one
+      // succeeded. A model that thinks a pictureless observation is a broken
+      // one asks for the screenshot back and pays that again.
+      'An observation carries no picture unless you ask for one with include_screenshot: true. ' +
+      'That is not a degraded observation: the element list is the whole window as element actions ' +
+      'see it, and it is all click_element, set_value, secondary_action and the rest need. ' +
+      'Ask for the picture when the pixels are the point — a coordinate action, or a control the ' +
+      'element list does not describe. ' +
       // Measured, not inferred: `cmd+a` did not land on a background TextEdit even
       // carrying its character, and landed the instant that application was
       // activated. A main-menu key equivalent is dispatched through NSApp's key
@@ -1150,11 +1288,15 @@ export function buildComputerUseTools(deps: {
       'Coordinate click, pointer move, scroll and drag aim at a pixel and need the window where it is; the element actions aim at a control and do not, ' +
       'which is the difference that shows when the window is behind something else. Prefer an element action whenever one exists. ' +
       'Synthesized input is refused while the user is at the keyboard or the pointer, so a coordinate action can come back user_intervened through no fault of yours. ' +
-      'Do not describe exact Electron semantic dispatch as pixel compatibility: it uses a uniquely resolved page identity plus DOM/CDP read-back. ' +
       'Never guess the current foreground app; list_apps or observe an explicit app/window first. ' +
       'When the user asks for an application to be operated, operate it here. Do not substitute a shell route to the same ' +
       'visible effect — osascript/AppleScript, System Events, `open`, cliclick, screencapture, or a framework called from a ' +
-      'script. Those bypass the observation, the frame binding and the approval class that make this auditable and reversible, ' +
+      // "the frame binding and the approval class" named two host mechanisms
+      // that have no tool-facing surface: the model can neither bind a frame
+      // nor pick a class, so the sentence gave it nothing to do differently.
+      // What it can act on is that a shell route is not recorded as an action
+      // on the user's screen and cannot be undone the way one here can.
+      'script. Those are not observed, not recorded as computer actions and not reversible, ' +
       'and they leave the user believing their computer was driven when it was not. If an action here fails, report the failure; ' +
       'do not route around it. (Shell tools remain correct for work that is not operating a GUI application.) ' +
       'set_value replaces the whole value of a field; it does not insert, and it does not refuse a field that already holds something. Read the value in the observation before writing one. ' +
@@ -1227,7 +1369,7 @@ export function buildComputerUseTools(deps: {
             input.action === 'wait';
           const observationLease = requiresObservationLease ? state.beforeObservation() : undefined;
           if (observationLease && !observationLease.ok) {
-            return sessionFailure(observationLease.reason);
+            return sessionFailure(observationLease.reason, input.action);
           }
           const requiresActionLease =
             input.action === 'click_element' ||
@@ -1259,7 +1401,7 @@ export function buildComputerUseTools(deps: {
             input.action === 'hold_key';
           const leaseResult = requiresActionLease ? state.beforeAction() : undefined;
           if (leaseResult && !leaseResult.ok) {
-            return sessionFailure(leaseResult.reason);
+            return sessionFailure(leaseResult.reason, input.action);
           }
           const actionLease = leaseResult?.ok ? leaseResult.lease : undefined;
 
@@ -1267,13 +1409,18 @@ export function buildComputerUseTools(deps: {
           const tcc = await deps.backend.preflight(abortSignal);
           if (!tcc.accessibility) {
             return {
-              text: 'computer failed: permission_missing — Accessibility not granted (System Settings → Privacy & Security → Accessibility)',
+              text: 'maka_computer failed: permission_missing — Accessibility not granted (System Settings → Privacy & Security → Accessibility)',
             };
           }
           const runCtx: CuRunContext = { sessionId, turnId, toolCallId };
           if (input.action === 'element_sequence') {
             if (!deps.backend.runSemantic || !deps.backend.captureObservation) {
-              return { text: 'maka_computer.element_sequence failed: unsupported_action' };
+              return {
+                text:
+                  'maka_computer.element_sequence failed: unsupported_action — ' +
+                  `${MISSING_CAPABILITY} Send the steps one at a time with click_element or ` +
+                  'set_value, calling action:"observe" between them.',
+              };
             }
             if (!tcc.screenRecording) {
               return {
@@ -1283,10 +1430,11 @@ export function buildComputerUseTools(deps: {
             const record = sessionObservation(sessionId, turnId);
             const hintConflict = targetHintConflict(input, record);
             if (hintConflict) return { text: hintConflict };
-            if (!record.appId || !record.windowId) return bindingFailure('no_active_frame');
+            if (!record.appId || !record.windowId)
+              return bindingFailure('no_active_frame', 'element_sequence');
             const active = record.state.activeObservation();
             if (!active || active.frameId !== input.observation_id) {
-              return bindingFailure('stale_frame');
+              return bindingFailure('stale_frame', 'element_sequence');
             }
             let current: CuObservation | undefined = record.elements
               ? {
@@ -1439,8 +1587,8 @@ export function buildComputerUseTools(deps: {
               final = undefined;
             }
             const headline = stopped
-              ? `computer.element_sequence stopped at step ${done.length} of ${input.steps.length}: ${stopped}`
-              : `computer.element_sequence ok (${done.length} of ${input.steps.length} steps)`;
+              ? `maka_computer.element_sequence stopped at step ${done.length} of ${input.steps.length}: ${stopped}`
+              : `maka_computer.element_sequence ok (${done.length} of ${input.steps.length} steps)`;
             const persistedTail = final
               ? `\nFresh observation: ${persistedObservationText(final)}`
               : '';
@@ -1467,7 +1615,12 @@ export function buildComputerUseTools(deps: {
           }
           if (input.action === 'launch_app') {
             if (!deps.backend.launchApp) {
-              return { text: 'maka_computer.launch_app failed: unsupported_action' };
+              return {
+                text:
+                  'maka_computer.launch_app failed: unsupported_action — ' +
+                  `${MISSING_CAPABILITY} Ask the user to open the application, then call ` +
+                  'action:"observe" naming it.',
+              };
             }
             const launched = await deps.backend.launchApp({ app: input.app }, abortSignal, runCtx);
             // A launch changes the window set and z-order, so every frame the
@@ -1492,7 +1645,12 @@ export function buildComputerUseTools(deps: {
           }
           if (input.action === 'list_apps') {
             if (!deps.backend.listApps) {
-              return { text: 'maka_computer.list_apps failed: unsupported_action' };
+              return {
+                text:
+                  'maka_computer.list_apps failed: unsupported_action — ' +
+                  `${MISSING_CAPABILITY} Name the application directly in action:"observe" ` +
+                  'instead of looking it up here.',
+              };
             }
             const everything = await deps.backend.listApps(abortSignal);
             // Two reductions, both measured on a real run where this call was
@@ -1522,7 +1680,10 @@ export function buildComputerUseTools(deps: {
               !state.validateObservationLease(observationLease.lease).ok
             ) {
               const blocked = state.beforeAction();
-              return sessionFailure(blocked.ok ? 'reobserve_required' : blocked.reason);
+              return sessionFailure(
+                blocked.ok ? 'reobserve_required' : blocked.reason,
+                'list_apps',
+              );
             }
             if (query && apps.length === 0) {
               // Nothing matched, so say what there is rather than nothing: the
@@ -1610,7 +1771,7 @@ export function buildComputerUseTools(deps: {
                 // failure for `text`, rather than an error either way.
                 if (!wantPresent) {
                   return {
-                    text: 'computer.wait ok — the window is gone, so the text is too',
+                    text: 'maka_computer.wait ok — the window is gone, so the text is too',
                   };
                 }
                 return {
@@ -1630,7 +1791,7 @@ export function buildComputerUseTools(deps: {
                   (Date.now() - (deadline - Math.round((input.duration ?? 5) * 1000))) /
                   1000
                 ).toFixed(1);
-                const text = `computer.wait ok — ${wantPresent ? 'appeared' : 'gone'} after ${waited}s`;
+                const text = `maka_computer.wait ok — ${wantPresent ? 'appeared' : 'gone'} after ${waited}s`;
                 return {
                   text: `${text}\n${persistedObservationText(observation)}`,
                   modelText: `${text}\n${observationText(observation)}`,
@@ -1655,11 +1816,34 @@ export function buildComputerUseTools(deps: {
           }
           if (input.action === 'observe') {
             if (!deps.backend.observeApp) {
-              return { text: 'maka_computer.observe failed: unsupported_action' };
+              return {
+                text:
+                  'maka_computer.observe failed: unsupported_action — ' +
+                  `${MISSING_CAPABILITY} Nothing on this computer can be read or driven; ` +
+                  'report that to the user rather than trying other computer actions.',
+              };
             }
-            const includeScreenshot = input.include_screenshot ?? true;
+            // Measured on one real run: five observes asking for a screenshot
+            // took 5.8–8.0s and every one of them timed out; eight asking for
+            // none took 0.8–7.4s and every one succeeded. With the default on
+            // the screenshot side, each task paid one guaranteed timeout, read
+            // the failure, and re-sent without the picture — a wasted call per
+            // run, every run.
+            //
+            // The element list is what element actions need, and it is complete
+            // without pixels: element_id, role, label, value, frame and the
+            // available secondary actions all come from Accessibility. A
+            // picture serves coordinate actions and a human look at the screen,
+            // and those are worth asking for rather than paying for by default.
+            const includeScreenshot = input.include_screenshot ?? false;
             if (includeScreenshot && !tcc.screenRecording) {
-              return { text: 'maka_computer.observe failed: permission_missing' };
+              return {
+                text:
+                  'maka_computer.observe failed: permission_missing — Screen Recording not ' +
+                  'granted (System Settings → Privacy & Security → Screen Recording). ' +
+                  'Only the screenshot needs that grant: drop include_screenshot and the full ' +
+                  'element list comes back without it.',
+              };
             }
             // A backend that cannot resolve the target reports it, and the
             // report belongs in the tool's own result shape.
@@ -1708,10 +1892,13 @@ export function buildComputerUseTools(deps: {
               // error is not a place to paste a hundred app names.
               let running = '';
               if (code === 'timeout') {
-                running =
-                  input.include_screenshot === false
-                    ? ' The window is there and did not answer in time; observe it again.'
-                    : ' The window is there and did not answer in time. Capturing its picture is the slow part, so observe it again with include_screenshot: false — the elements come back either way.';
+                // Keyed off the effective value, not the field. Since the
+                // default is no screenshot, an absent field means the picture
+                // was never the slow part and telling the model to turn it off
+                // would name something it did not ask for.
+                running = includeScreenshot
+                  ? ' The window is there and did not answer in time. Capturing its picture is the slow part, so observe it again without include_screenshot — the elements come back either way.'
+                  : ' The window is there and did not answer in time; observe it again.';
               } else if (code === 'target_missing' && input.app && deps.backend.listApps) {
                 try {
                   const apps = await deps.backend.listApps(abortSignal);
@@ -1742,7 +1929,7 @@ export function buildComputerUseTools(deps: {
               !state.validateObservationLease(observationLease.lease).ok
             ) {
               const blocked = state.beforeAction();
-              return sessionFailure(blocked.ok ? 'reobserve_required' : blocked.reason);
+              return sessionFailure(blocked.ok ? 'reobserve_required' : blocked.reason, 'observe');
             }
             const record = sessionObservation(sessionId, turnId);
             const observation = registerObservation(record, backendObservation);
@@ -1767,7 +1954,12 @@ export function buildComputerUseTools(deps: {
           }
           if (input.action === 'screenshot') {
             if (!deps.backend.observeApp) {
-              return { text: 'maka_computer.screenshot failed: unsupported_action' };
+              return {
+                text:
+                  'maka_computer.screenshot failed: unsupported_action — ' +
+                  `${MISSING_CAPABILITY} Use action:"observe", which returns the same window ` +
+                  'as an element list.',
+              };
             }
             if (!tcc.screenRecording) {
               return {
@@ -1791,7 +1983,10 @@ export function buildComputerUseTools(deps: {
               !state.validateObservationLease(observationLease.lease).ok
             ) {
               const blocked = state.beforeAction();
-              return sessionFailure(blocked.ok ? 'reobserve_required' : blocked.reason);
+              return sessionFailure(
+                blocked.ok ? 'reobserve_required' : blocked.reason,
+                'screenshot',
+              );
             }
             if (!screenshotObservation.screenshot) {
               return { text: 'maka_computer.screenshot failed: capture_failed' };
@@ -1828,7 +2023,12 @@ export function buildComputerUseTools(deps: {
             input.action === 'press_key'
           ) {
             if (!deps.backend.runSemantic) {
-              return { text: `maka_computer.${input.action} failed: unsupported_action` };
+              return {
+                text:
+                  `maka_computer.${input.action} failed: unsupported_action — ` +
+                  `${MISSING_CAPABILITY} No element offers it either; report the limit instead ` +
+                  'of retrying against a different element.',
+              };
             }
             if (!tcc.screenRecording) {
               return {
@@ -1910,8 +2110,8 @@ export function buildComputerUseTools(deps: {
                                 }),
                     };
             const binding = claimBoundAction(record, input.observation_id, modelAction);
-            if ('rejection' in binding) return bindingFailure(binding.rejection);
-            if (!record.backendObservationId) return bindingFailure('stale_frame');
+            if ('rejection' in binding) return bindingFailure(binding.rejection, input.action);
+            if (!record.backendObservationId) return bindingFailure('stale_frame', input.action);
             const semanticAction: CuSemanticAction = {
               ...modelAction,
               observationId: record.backendObservationId,
@@ -1942,7 +2142,7 @@ export function buildComputerUseTools(deps: {
             let consumeFailure: ComputerToolResult | undefined;
             let presentation: Awaited<ReturnType<typeof runWithPresentation>> | undefined;
             try {
-              if (!actionLease) return sessionFailure('no_active_frame');
+              if (!actionLease) return sessionFailure('no_active_frame', input.action);
               const leaseFailure = validateActionLease(state, actionLease);
               if (leaseFailure) return leaseFailure;
               const operationContext = { ...runCtx, boundAction: binding };
@@ -1955,7 +2155,7 @@ export function buildComputerUseTools(deps: {
                 invocationGeneration,
               );
               if (presentation.blocked) return presentation.blocked;
-              if (!presentation.result) return bindingFailure('capture_failed');
+              if (!presentation.result) return bindingFailure('capture_failed', input.action);
               result = preservePartialDelivery(presentation.result);
               applyTypedOutcomeState(state, result.outcome);
               if (result.outcome.ok) {
@@ -1988,7 +2188,7 @@ export function buildComputerUseTools(deps: {
             }
             if (!result) {
               presentation?.finish();
-              return bindingFailure('capture_failed');
+              return bindingFailure('capture_failed', input.action);
             }
             // One action removes its own target on purpose, and the machinery
             // below reads a missing target as an uncertain outcome.
@@ -1998,8 +2198,8 @@ export function buildComputerUseTools(deps: {
             // `.optionOnScreenOnly` — so the fresh observation every dispatch
             // takes afterwards cannot find it. Measured on a real machine: the
             // dispatch came back `effect=confirmed` and the model was handed
-            // `failed: outcome_unknown — the action may have changed the target.
-            // Call observe before deciding whether to retry.` The action had
+            // `failed: outcome_unknown` telling it not to send the action again
+            // until an observe had confirmed it. The action had
             // worked, the report said it might not have, and the observe it
             // asked for would have failed too.
             //
@@ -2042,7 +2242,7 @@ export function buildComputerUseTools(deps: {
               presentation?.finish(result);
               return deliveredWithoutFreshObservation(semanticAction, result);
             }
-            presentation?.finish(result);
+            presentation?.finish(withMirrorFrame(result, freshObservation));
             // Say the frame survived, because every other refusal has spent it.
             // A model that has learned "a failure means observe again" will
             // spend that call whatever the state machine allows, and the round
@@ -2066,7 +2266,12 @@ export function buildComputerUseTools(deps: {
               semanticAction.action === 'minimize'
                 ? ' The window is now in the Dock and is no longer in the window list, so it cannot be observed or restored from here — only the person at the machine can bring it back.'
                 : '';
-            const text = `${summarize(semanticAction, result)}${stillCurrent}${minimised}`;
+            // Two summaries, not one. The session log is a host record and
+            // keeps the dispatch path, tier and refusal reason; the model reads
+            // a surface it can act on, which is `effect` and `verified` and not
+            // the name of a macOS dispatch route it cannot select.
+            const headline = `${summarize(semanticAction, result)}${stillCurrent}${minimised}`;
+            const hostHeadline = `${summarize(semanticAction, result, 'host')}${stillCurrent}${minimised}`;
             const failureClass =
               !result.outcome.ok && /ambiguous/i.test(result.outcome.message)
                 ? ('ambiguous_target' as const)
@@ -2080,8 +2285,8 @@ export function buildComputerUseTools(deps: {
             const screenshot = freshObservation?.screenshot ?? result.screenshot;
             return screenshot
               ? {
-                  text: `${text}${freshPersistedState}`,
-                  modelText: `${text}${freshModelState}`,
+                  text: `${hostHeadline}${freshPersistedState}`,
+                  modelText: `${headline}${freshModelState}`,
                   ...(!result.outcome.ok ? { error: result.outcome.error } : {}),
                   ...(failureClass ? { failureClass } : {}),
                   screenshot: {
@@ -2090,8 +2295,8 @@ export function buildComputerUseTools(deps: {
                   },
                 }
               : {
-                  text: `${text}${freshPersistedState}`,
-                  modelText: `${text}${freshModelState}`,
+                  text: `${hostHeadline}${freshPersistedState}`,
+                  modelText: `${headline}${freshModelState}`,
                   ...(!result.outcome.ok ? { error: result.outcome.error } : {}),
                   ...(failureClass ? { failureClass } : {}),
                 };
@@ -2104,19 +2309,19 @@ export function buildComputerUseTools(deps: {
           if (requiresActionLease) {
             if (!tcc.screenRecording) {
               return {
-                text: `computer.${action.type} failed: permission_missing — Screen Recording not granted (System Settings → Privacy & Security → Screen Recording)`,
+                text: `maka_computer.${action.type} failed: permission_missing — Screen Recording not granted (System Settings → Privacy & Security → Screen Recording)`,
               };
             }
-            if (!observationId) return bindingFailure('no_active_frame');
+            if (!observationId) return bindingFailure('no_active_frame', input.action);
             const binding = claimBoundAction(record, observationId, action);
-            if ('rejection' in binding) return bindingFailure(binding.rejection);
+            if ('rejection' in binding) return bindingFailure(binding.rejection, input.action);
             boundAction = binding;
           }
           // A capture-bearing action additionally needs Screen Recording (S12).
           const capturing = action.type === 'screenshot' || action.type === 'zoom';
           if (capturing && !tcc.screenRecording) {
             return {
-              text: 'computer failed: permission_missing — Screen Recording not granted (System Settings → Privacy & Security → Screen Recording)',
+              text: 'maka_computer failed: permission_missing — Screen Recording not granted (System Settings → Privacy & Security → Screen Recording)',
             };
           }
           let result: CuRunResult | undefined;
@@ -2176,7 +2381,7 @@ export function buildComputerUseTools(deps: {
             }
             if (!result) {
               presentation?.finish();
-              return bindingFailure('capture_failed');
+              return bindingFailure('capture_failed', input.action);
             }
             let freshObservation: CuObservation | undefined;
             try {
@@ -2199,7 +2404,7 @@ export function buildComputerUseTools(deps: {
               presentation?.finish(result);
               return deliveredWithoutFreshObservation(modelAction, result);
             }
-            presentation?.finish(result);
+            presentation?.finish(withMirrorFrame(result, freshObservation));
             const modelRefresh = freshObservation
               ? `\nFresh observation:\n${observationText(freshObservation)}`
               : actionLease
@@ -2210,7 +2415,7 @@ export function buildComputerUseTools(deps: {
               : actionLease
                 ? '\nObservation consumed; call observe before the next action.'
                 : '';
-            const text = `${summarize(modelAction, result)}${persistedRefresh}`;
+            const text = `${summarize(modelAction, result, 'host')}${persistedRefresh}`;
             const modelText = `${summarize(modelAction, result)}${modelRefresh}`;
             const failureClass =
               !result.outcome.ok && /ambiguous/i.test(result.outcome.message)
