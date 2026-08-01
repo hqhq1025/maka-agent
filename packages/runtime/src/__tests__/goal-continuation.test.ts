@@ -275,7 +275,7 @@ describe('GoalContinuationCoordinator settlement', () => {
       await set.impl({ condition: 'replacement' }, goalToolContext('turn-old')),
     );
 
-    assert.match(output, /no longer owns Goal activation/);
+    assert.match(output, /changed while this turn was running.*GoalStatus/s);
     assert.equal(manager.get(SESSION)?.status, 'cleared');
     assert.equal(manager.get(SESSION)?.condition, 'first');
   });
@@ -297,7 +297,7 @@ describe('GoalContinuationCoordinator settlement', () => {
       await set.impl({ condition: 'replacement' }, goalToolContext('turn-old')),
     );
 
-    assert.match(output, /no longer owns Goal activation/);
+    assert.match(output, /changed while this turn was running.*GoalStatus/s);
     assert.equal(manager.get(SESSION)?.condition, 'paused goal');
     assert.equal(manager.get(SESSION)?.status, 'cleared');
   });
@@ -321,11 +321,11 @@ describe('GoalContinuationCoordinator settlement', () => {
 
     assert.match(
       String(await pause.impl({}, goalToolContext('turn-old'))),
-      /no longer owns Goal control/,
+      /changed while this turn was running.*GoalStatus/s,
     );
     assert.match(
       String(await clear.impl({}, goalToolContext('turn-old'))),
-      /no longer owns Goal control/,
+      /changed while this turn was running.*GoalStatus/s,
     );
     assert.equal(manager.get(SESSION)?.condition, 'replacement');
     assert.equal(manager.get(SESSION)?.status, 'active');
@@ -347,7 +347,7 @@ describe('GoalContinuationCoordinator settlement', () => {
         await set.impl({ condition: 'must not exist' }, goalToolContext('turn-deleted')),
       );
 
-      assert.match(output, /no longer owns Goal activation/);
+      assert.match(output, /changed while this turn was running.*GoalStatus/s);
       assert.equal(manager.get(SESSION), undefined);
     });
 
@@ -369,7 +369,7 @@ describe('GoalContinuationCoordinator settlement', () => {
       manager.pause(SESSION);
       const output = String(await resume.impl({}, goalToolContext('turn-archived')));
 
-      assert.match(output, /no longer owns Goal activation/);
+      assert.match(output, /changed while this turn was running.*GoalStatus/s);
       assert.equal(manager.get(SESSION)?.condition, 'replacement');
       assert.equal(manager.get(SESSION)?.status, 'paused');
     });
