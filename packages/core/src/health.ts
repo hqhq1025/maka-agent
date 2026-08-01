@@ -311,8 +311,6 @@ function userVisibleCapabilityReason(reason: string | undefined): string | undef
       return '等待填写平台凭据。';
     case 'macOS TCC only':
       return '仅 macOS 系统权限可探测。';
-    case 'no Electron API for per-target Apple Events TCC status':
-      return '系统未提供可直接读取的授权状态。';
     default:
       return /[\u3400-\u9fff]/.test(raw) ? raw : '状态详情请见对应设置页。';
   }

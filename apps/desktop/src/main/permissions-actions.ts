@@ -38,7 +38,6 @@ const MACOS_DEEP_LINKS: Record<OsPermissionId, string | null> = {
   accessibility: 'x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility',
   screen_recording: 'x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture',
   microphone: 'x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone',
-  automation: 'x-apple.systempreferences:com.apple.preference.security?Privacy_Automation',
   notifications: 'x-apple.systempreferences:com.apple.preference.notifications',
 };
 
@@ -91,9 +90,8 @@ export async function requestPermissionAccess(input: unknown): Promise<Permissio
       }
       case 'accessibility':
       case 'screen_recording':
-      case 'automation':
         // macOS does not expose a programmatic consent dialog for these
-        // three; we deep-link into the relevant System Settings pane
+        // two; we deep-link into the relevant System Settings pane
         // instead so the action button is never inert.
         return openSystemPermissionPane(id);
     }

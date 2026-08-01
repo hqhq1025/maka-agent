@@ -22,7 +22,7 @@ import {
 import type { BotStatus } from '@maka/runtime';
 import type { computerUseServiceHealth } from './computer-use-host.js';
 
-const MAC_TCC_PERMISSIONS: OsPermissionId[] = ['accessibility', 'screen_recording', 'microphone', 'automation'];
+const MAC_TCC_PERMISSIONS: OsPermissionId[] = ['accessibility', 'screen_recording', 'microphone'];
 
 export function buildPermissionSnapshot(now = Date.now(), platform: NodeJS.Platform = process.platform): PermissionSnapshot {
   return {
@@ -33,7 +33,6 @@ export function buildPermissionSnapshot(now = Date.now(), platform: NodeJS.Platf
       screen_recording: mediaPermissionSnapshot('screen_recording', 'screen', now, platform),
       microphone: mediaPermissionSnapshot('microphone', 'microphone', now, platform),
       notifications: notificationSnapshot(now, platform),
-      automation: automationSnapshot(now, platform),
     },
   };
 }
@@ -348,19 +347,6 @@ function notificationSnapshot(now: number, platform: NodeJS.Platform): OsPermiss
     reason: Notification.isSupported() ? '主进程暂时无法读取通知授权状态' : 'Electron 通知能力不可用',
     canOpenSettings: platform === 'darwin',
     canRequest: Notification.isSupported(),
-  };
-}
-
-function automationSnapshot(now: number, platform: NodeJS.Platform): OsPermissionSnapshot {
-  if (platform !== 'darwin') return unsupportedPermission('automation', now, '仅 macOS TCC 权限适用');
-  return {
-    id: 'automation',
-    status: 'unknown',
-    source: 'static',
-    checkedAt: now,
-    reason: 'Electron 暂不支持读取逐 App 的 Apple Events 授权状态',
-    canOpenSettings: true,
-    canRequest: false,
   };
 }
 

@@ -4,7 +4,6 @@ import {
   Bell,
   Mic,
   Monitor,
-  MousePointer2,
   type LucideProps,
 } from '@maka/ui/icons';
 import type {
@@ -48,7 +47,6 @@ const OS_PERMISSION_ICONS: Record<OsPermissionId, ComponentType<LucideProps>> = 
   screen_recording: Monitor,
   microphone: Mic,
   notifications: Bell,
-  automation: MousePointer2,
 };
 
 export function PermissionCenterPage() {

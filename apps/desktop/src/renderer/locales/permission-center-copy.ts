@@ -81,7 +81,6 @@ const PERMISSION_CENTER_COPY = {
       screen_recording: { label: '屏幕录制', purpose: 'Computer Use 需要它来读取窗口内容；未来屏幕活动录制也会使用。', impact: 'Computer Use · 截屏上下文' },
       microphone: { label: '麦克风', purpose: 'Voice 通道需要它来采集语音输入。', impact: '语音输入' },
       notifications: { label: '通知', purpose: '权限申请、回顾完成等系统通知需要它。', impact: '权限申请提醒 · 每日回顾完成通知' },
-      automation: { label: '自动化（Apple Events）', purpose: 'Computer Use 控制其他 App 需要逐 target 授权。', impact: 'Computer Use · 跨 App 自动化' },
     },
     osStates: {
       unsupported: { label: '当前平台不支持', tone: 'neutral' }, unknown: { label: '无法读取状态', tone: 'neutral' },
@@ -95,7 +94,7 @@ const PERMISSION_CENTER_COPY = {
     osSection: '系统权限', osSectionHelp: 'Maka 读到的 OS 级权限状态。点击右侧按钮可以直接前往「系统设置 → 隐私与安全性」对应分区。', osListAria: '系统权限列表',
     capabilitiesSection: '功能能力', capabilitiesHelp: '每个能力的就绪状态由「功能开关 · 配置 · 系统权限 · 运行态探测」共同决定。',
     collapseDetails: '收起详情', expandDetails: '展开详情', capabilityListAria: '功能能力列表',
-    footnote: 'Maka 不会自动授予 Accessibility、Automation 或 Screen Recording。高风险自动化能力必须保持逐项审批、可审计、可撤销。这里只读取系统权限与功能能力的当前快照，授权变更仍需在「系统设置 → 隐私与安全性」完成。',
+    footnote: 'Maka 不会自动授予 Accessibility 或 Screen Recording。高风险自动化能力必须保持逐项审批、可审计、可撤销。这里只读取系统权限与功能能力的当前快照，授权变更仍需在「系统设置 → 隐私与安全性」完成。',
     layers: {
       aria: (label) => `${label}能力状态明细`, feature: '功能开关', configuration: '配置', approval: '操作审批', memory: '记忆写入', runtime: '运行态探测',
       featureStates: { enabled: '已开启', partial: '部分可用', disabled: '已关闭', not_available: '未开放' },
@@ -121,7 +120,6 @@ const PERMISSION_CENTER_COPY = {
       screen_recording: { label: 'Screen Recording', purpose: 'Computer Use needs it to read window contents; future screen activity recording will use it too.', impact: 'Computer Use · screenshot context' },
       microphone: { label: 'Microphone', purpose: 'The Voice channel needs it to capture speech input.', impact: 'Voice input' },
       notifications: { label: 'Notifications', purpose: 'System alerts use it for permission requests and completed reviews.', impact: 'Permission alerts · Daily Review completion' },
-      automation: { label: 'Automation (Apple Events)', purpose: 'Computer Use needs per-target authorization to control other apps.', impact: 'Computer Use · cross-app automation' },
     },
     osStates: {
       unsupported: { label: 'Unsupported on this platform', tone: 'neutral' }, unknown: { label: 'Status unavailable', tone: 'neutral' },
@@ -135,7 +133,7 @@ const PERMISSION_CENTER_COPY = {
     osSection: 'System permissions', osSectionHelp: 'OS-level permission states reported to Maka. Use the action on the right to open the matching Privacy & Security section in System Settings.', osListAria: 'System permission list',
     capabilitiesSection: 'Feature capabilities', capabilitiesHelp: 'Each readiness state combines the feature toggle, configuration, system permissions, and runtime probe.',
     collapseDetails: 'Hide details', expandDetails: 'Show details', capabilityListAria: 'Feature capability list',
-    footnote: 'Maka never grants Accessibility, Automation, or Screen Recording automatically. High-risk automation must remain individually approved, auditable, and revocable. This page only reads the current snapshot; permission changes still happen in System Settings under Privacy & Security.',
+    footnote: 'Maka never grants Accessibility or Screen Recording automatically. High-risk automation must remain individually approved, auditable, and revocable. This page only reads the current snapshot; permission changes still happen in System Settings under Privacy & Security.',
     layers: {
       aria: (label) => `${label} capability state details`, feature: 'Feature toggle', configuration: 'Configuration', approval: 'Action approval', memory: 'Memory writes', runtime: 'Runtime probe',
       featureStates: { enabled: 'Enabled', partial: 'Partially available', disabled: 'Disabled', not_available: 'Unavailable' },

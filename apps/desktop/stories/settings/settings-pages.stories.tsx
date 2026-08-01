@@ -412,12 +412,6 @@ const permissionSnapshot: PermissionSnapshot = {
       status: 'granted',
       canRequest: true,
     }),
-    automation: makeOsPermission({
-      id: 'automation',
-      status: 'unsupported',
-      reason: '当前系统版本不暴露自动化授权状态。',
-      canOpenSettings: false,
-    }),
   },
 };
 

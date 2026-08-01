@@ -5,7 +5,6 @@ export const OS_PERMISSION_IDS = [
   'screen_recording',
   'microphone',
   'notifications',
-  'automation',
 ] as const;
 export type OsPermissionId = (typeof OS_PERMISSION_IDS)[number];
 

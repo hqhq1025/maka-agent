@@ -75,13 +75,6 @@ export function permissionSnapshotE2eFixture(now: number): PermissionSnapshot | 
         now,
         canRequest: true,
       }),
-      automation: fixtureOsPermission({
-        id: 'automation',
-        status: 'unsupported',
-        now,
-        reason: '当前系统版本不暴露自动化授权状态。',
-        canOpenSettings: false,
-      }),
     },
   };
 }

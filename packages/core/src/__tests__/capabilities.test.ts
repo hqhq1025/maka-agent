@@ -129,7 +129,7 @@ describe('permission and capability snapshot contracts', () => {
       deriveCapabilityReadiness({
         feature: enabledFeature,
         configuration: presentConfig,
-        osPermissions: [requiredPermission('automation', 'unknown')],
+        osPermissions: [requiredPermission('notifications', 'unknown')],
         runtimeProbe: noRuntime,
       }),
     ).toBe('not_configured');

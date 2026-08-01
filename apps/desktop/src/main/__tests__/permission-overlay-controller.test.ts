@@ -136,7 +136,6 @@ describe('drag-to-grant permission overlay', () => {
     // routing them through a drag card would be theatre.
     assert.equal(isDragGrantPermission('microphone'), false);
     assert.equal(isDragGrantPermission('notifications'), false);
-    assert.equal(isDragGrantPermission('automation'), false);
     assert.equal(isDragGrantPermission(undefined), false);
   });
 

@@ -244,7 +244,6 @@ describe('voice capture smoke Settings contract', () => {
     assert.match(snapshot, /未配置平台凭据/, 'bot missing credentials state must be localized');
     assert.match(snapshot, /macOS 不区分辅助功能权限是未授权还是未申请/, 'Accessibility TCC limitation must be localized');
     assert.match(snapshot, /主进程暂时无法读取通知授权状态/, 'notification unknown state must be localized');
-    assert.match(snapshot, /Electron 暂不支持读取逐 App 的 Apple Events 授权状态/, 'Automation TCC limitation must be localized');
     assert.doesNotMatch(
       snapshot,
       /missing platform credentials|macOS does not expose|main process cannot read|no Electron API|macOS TCC only|Electron Notification unsupported/,
