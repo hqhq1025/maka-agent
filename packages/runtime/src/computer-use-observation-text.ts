@@ -421,6 +421,13 @@ function elementLine(element: CuObservedElement): string {
   const parts = [element.elementId, roleOf(element)];
   if (element.label) parts.push(quote(element.label));
   if (element.value !== undefined) parts.push(`=${quote(truncate(element.value))}`);
+  // `~` rather than `=`, one glyph apart from a value and meaning the opposite:
+  // this field is empty and this is what it is prompting for. Written only when
+  // there is no value, because a control showing both has content and the
+  // prompt is no longer what a model needs to know about it.
+  if (element.value === undefined && element.placeholder !== undefined) {
+    parts.push(`~${quote(truncate(element.placeholder))}`);
+  }
   // Only the informative half of each state is written. Every element the
   // driver reports is enabled and unselected unless it says otherwise, so
   // spelling that out for all of them costs tokens to say nothing.

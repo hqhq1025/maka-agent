@@ -116,7 +116,7 @@ function element(index, label, focused) {
     axIdentifier: 'id_' + index,
     label: label,
     value: null,
-    placeholder: null,
+    placeholder: index === 2 ? 'Search your files' : null,
     enabled: true,
     focused: !!focused,
     selected: null,
@@ -1000,6 +1000,24 @@ describe('maka-cu backend', () => {
     assert.ok(secure, 'the fixture element carrying a subrole reaches the observation');
     const plain = observation.elements.find((e) => e.role === 'AXWindow');
     assert.equal(plain?.subrole, undefined, 'an element without one carries nothing');
+  });
+
+  it('carries the placeholder, kept apart from the value it is not', async () => {
+    // Placeholder text reads like content while the field holds nothing. The
+    // executor sends it and the protocol validates it; this backend dropped it,
+    // the third field to go missing at exactly this boundary after `subrole`
+    // and `window_action`'s wire schema. A model that never sees it cannot tell
+    // an empty search box from one already holding a query.
+    const { backend } = makeBackend({});
+    const observation = await observeFixture(backend);
+    const prompted = observation.elements.find((e) => e.placeholder !== undefined);
+    assert.ok(prompted, 'the fixture element carrying a placeholder reaches the observation');
+    assert.equal(prompted?.placeholder, 'Search your files');
+    // Never folded in: the field is empty, and saying so through `value` would
+    // have a model skip a field it still has to fill.
+    assert.equal(prompted?.value, undefined);
+    const plain = observation.elements.find((e) => e.role === 'AXWindow');
+    assert.equal(plain?.placeholder, undefined, 'an element without one carries nothing');
   });
 
   it('says nothing about truncation when the tree was complete', async () => {

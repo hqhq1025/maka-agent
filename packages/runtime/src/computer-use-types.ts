@@ -93,6 +93,18 @@ export interface CuObservedElement {
   subrole?: string;
   label?: string;
   value?: string;
+  /**
+   * Prompt text a control shows while it is empty.
+   *
+   * Never folded into `value`, because it is the opposite of one: it reads like
+   * content while the field holds nothing, so a model that saw it as a value
+   * would skip a field it still has to fill, or read the prompt back as data.
+   *
+   * The executor sends it and the protocol validates it; it was being dropped
+   * on the way here — the third field to go missing at this exact boundary,
+   * after `subrole` and `window_action`'s wire schema.
+   */
+  placeholder?: string;
   /** False when the control is present but cannot currently be actuated. */
   enabled?: boolean;
   /**

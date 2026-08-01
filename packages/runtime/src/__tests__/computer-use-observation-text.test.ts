@@ -239,6 +239,34 @@ test('a subrole is written beside the role, so a secure field is not an ordinary
   assert.match(rows[2] ?? '', /1 AXTextField "用户名"/);
 });
 
+test('an empty field shows what it is prompting for, marked as not a value', () => {
+  // Placeholder text reads like content while the field holds nothing, so it
+  // gets its own glyph: `~` one character away from `=` and meaning the
+  // opposite. Folding it into the value would have a model skip a field it
+  // still has to fill, or read the prompt back as data.
+  const text = renderObservationForModel(
+    observation([
+      { elementId: '0', role: 'AXTextField', label: '搜索', placeholder: 'Search your files' },
+      {
+        elementId: '1',
+        role: 'AXTextField',
+        label: '搜索',
+        value: 'report',
+        placeholder: 'Search your files',
+      },
+      { elementId: '2', role: 'AXTextField', label: '备注' },
+    ]),
+  );
+  const rows = lines(text);
+  assert.match(rows[1] ?? '', /~"Search your files"/);
+  assert.doesNotMatch(rows[1] ?? '', /="Search your files"/);
+  // A field holding something has content; the prompt is no longer what a
+  // model needs to know about it.
+  assert.match(rows[2] ?? '', /="report"/);
+  assert.doesNotMatch(rows[2] ?? '', /~/);
+  assert.doesNotMatch(rows[3] ?? '', /~/);
+});
+
 test('an element says what it accepts beyond a click, and where the keys go', () => {
   const text = renderObservationForModel(
     observation([

@@ -1260,6 +1260,8 @@ export function buildComputerUseTools(deps: {
       'Prefer click_element or set_value using an element_id from the immediately preceding observation. ' +
       'An observation is a header line of observation_id/app/pid/window_id followed by one line per element, ' +
       'indented to show containment: "<element_id> <role> \\"<label>\\" =\\"<value>\\" [<state>] @x,y wxh". ' +
+      'A field written ~"…" instead of ="…" is empty and that is its placeholder — prompt text, not content, ' +
+      'so it still needs filling and must not be read back as a value. ' +
       'Absent parts are omitted, and state is written only when it is not the default, so an element carrying ' +
       'no [disabled] is enabled. A value ending in "…(+N chars)" was shortened for length and is not the whole value. ' +
       // Capturing the picture is what made observe time out on a real machine:

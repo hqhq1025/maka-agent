@@ -1060,6 +1060,16 @@ export function createMakaCuBackend(opts: MakaCuBackendOptions): CuDispatchBacke
       // written for a person being read to.
       ...(element.label || element.title ? { label: element.label ?? element.title } : {}),
       ...(element.value !== undefined ? { value: element.value } : {}),
+      // Kept apart from `value`, because it is the opposite of one. Placeholder
+      // text reads like content while the control is in fact empty, so folding
+      // it into the value would have a model skip a field it still has to fill,
+      // or read the prompt back as if it were data.
+      //
+      // The executor has been sending this and the protocol has been checking
+      // it (§ "element.placeholder"); it stopped here. Same shape as `subrole`
+      // and as `window_action`'s missing wire schema — a field present at every
+      // layer except the one the model reads.
+      ...(element.placeholder !== undefined ? { placeholder: element.placeholder } : {}),
       enabled: element.enabled,
       // Only what changes a decision. `press` is what `click_element` already
       // does, and Chromium attaches `show_menu` and `scroll_to_visible` to
