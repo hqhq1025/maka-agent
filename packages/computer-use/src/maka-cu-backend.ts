@@ -1171,6 +1171,22 @@ export function createMakaCuBackend(opts: MakaCuBackendOptions): CuDispatchBacke
         }
         return { wire: { kind: 'secondary_action', action: action.action } };
       }
+      case 'window_action': {
+        // §6.1's window members. They address the window itself — the element
+        // at depth 0 — rather than a control inside it, and they act on no
+        // pixel, so nothing about what is stacked on top applies.
+        if (action.action === 'minimize') return { wire: { kind: 'minimize_window' } };
+        if (action.action === 'move') {
+          if (!action.position) {
+            return { refusal: failure('unsupported_action', 'move needs a position') };
+          }
+          return { wire: { kind: 'move_window', position: action.position } };
+        }
+        if (!action.size) {
+          return { refusal: failure('unsupported_action', 'resize needs a size') };
+        }
+        return { wire: { kind: 'resize_window', size: action.size } };
+      }
       case 'scroll_element': {
         // §6.1 takes pages directly, so nothing is converted on the way out —
         // the model declares pages, the runtime type declares pages, and the

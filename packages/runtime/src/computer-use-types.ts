@@ -214,6 +214,30 @@ export type CuSemanticAction =
       elementIdentity?: CuObservedElement['identity'];
     }
   | {
+      /**
+       * Move, resize or minimise the window an observation describes.
+       *
+       * A window's position and size are settable accessibility attributes —
+       * measured across 17 applications, `AXPosition` on all of them and
+       * `AXSize` on 14 — and writing them does not bring the application
+       * forward. So this was always reachable; what was missing was a way to
+       * say it. A model asked to move a window reached for a title-bar drag
+       * instead, which needs a coordinate, which needs the window not to be
+       * covered, which a background window always is.
+       *
+       * `position` is in screen points, the same space as the observation's
+       * `windowBounds` and `displays[].logicalBounds`.
+       */
+      type: 'window_action';
+      observationId: string;
+      /** The window itself, which is the observation's first element. */
+      elementId: string;
+      action: 'move' | 'resize' | 'minimize';
+      position?: { x: number; y: number };
+      size?: { width: number; height: number };
+      elementIdentity?: CuObservedElement['identity'];
+    }
+  | {
       type: 'press_key';
       observationId: string;
       key: string;

@@ -159,6 +159,38 @@ export const computerParams = z.discriminatedUnion('action', [
       ...redundantTargetHints,
     })
     .strict(),
+  /**
+   * A window's own geometry, which is not a control on the screen.
+   *
+   * `AXPosition` and `AXSize` are settable on nearly every window and writing
+   * them does not bring the application forward, so this costs none of the
+   * invariants a drag would. It is separate from the element actions because it
+   * addresses the window rather than something inside it.
+   */
+  z
+    .object({
+      action: z.literal('window_action'),
+      observation_id: z.string().min(1).max(256),
+      element_id: z.string().min(1).max(256),
+      window_action: z.enum(['move', 'resize', 'minimize']),
+      // Not `coordinate`: that one is non-negative because it addresses a pixel
+      // inside a window's own screenshot, where there is no such thing as a
+      // negative offset. A window's position is a place on the desktop, and a
+      // second display is a real place — measured on this machine, display 2
+      // sits at (-193, -1080) in the space the observation already reports its
+      // window bounds in. Refusing a negative here makes half the desktop
+      // unaddressable.
+      position: z.tuple([z.number().int(), z.number().int()]).optional(),
+      size: z.tuple([z.number().int().positive(), z.number().int().positive()]).optional(),
+      ...redundantTargetHints,
+    })
+    .strict()
+    .refine((input) => input.window_action !== 'move' || input.position !== undefined, {
+      message: 'window_action move requires position',
+    })
+    .refine((input) => input.window_action !== 'resize' || input.size !== undefined, {
+      message: 'window_action resize requires size',
+    }),
   z
     .object({
       action: z.literal('press_key'),

@@ -105,12 +105,13 @@ const computerWireParams = z
         'select_text',
         'secondary_action',
         'scroll_element',
+        'window_action',
         'element_sequence',
         'press_key',
         ...CU_ACTION_TYPES,
       ] as [string, ...string[]])
       .describe(
-        'Operation to perform. Required fields by action: list_apps takes an optional app to filter by — pass the name you were given ("TextEdit", "文本编辑") and it returns the matching app ids, which is far cheaper than listing everything; without it only apps that currently have a window are listed; launch_app requires app; observe/screenshot require app or window_id; click_element requires observation_id and element_id; set_value requires observation_id, element_id, and value; select_text/secondary_action require observation_id, element_id, and text; scroll_element requires observation_id, element_id, and scroll_direction, with optional scroll_amount; element_sequence requires observation_id and steps, where each step names a control by the label it shows and optionally its role — prefer it whenever several controls must be operated in order, since it costs one call instead of one per control; press_key requires observation_id and text, and takes an optional element_id — supply it and the control is focused before the key is posted, omit it and the key lands on whatever the observed window already has focused; coordinate actions require observation_id plus their coordinate fields.',
+        'Operation to perform. Required fields by action: list_apps takes an optional app to filter by — pass the name you were given ("TextEdit", "文本编辑") and it returns the matching app ids, which is far cheaper than listing everything; without it only apps that currently have a window are listed; launch_app requires app; observe/screenshot require app or window_id; click_element requires observation_id and element_id; set_value requires observation_id, element_id, and value; select_text/secondary_action require observation_id, element_id, and text; scroll_element requires observation_id, element_id, and scroll_direction, with optional scroll_amount; element_sequence requires observation_id and steps, where each step names a control by the label it shows and optionally its role — prefer it whenever several controls must be operated in order, since it costs one call instead of one per control; window_action requires observation_id, element_id and window_action (move, resize or minimize), with position for move and size for resize — element_id is the window itself, which is the first element of the observation, and position is in screen points, the same space the observation reports its window bounds and displays in, so moving a window to the left edge of a screen means that display x with y unchanged; press_key requires observation_id and text, and takes an optional element_id — supply it and the control is focused before the key is posted, omit it and the key lands on whatever the observed window already has focused; coordinate actions require observation_id plus their coordinate fields.',
       ),
     // "Exact" was already in this description and was not enough. On a real
     // desktop chain the model asked for "Calculator" and got nothing, because
@@ -655,6 +656,7 @@ export function buildComputerUseTools(deps: {
       action.type === 'select_text' ||
       action.type === 'press_key' ||
       action.type === 'scroll_element' ||
+      action.type === 'window_action' ||
       action.type === 'secondary_action';
     const semanticAction = semantic ? (action as CuSemanticAction) : undefined;
     const semanticValue =
@@ -668,7 +670,15 @@ export function buildComputerUseTools(deps: {
               ? semanticAction.key
               : semanticAction?.type === 'scroll_element'
                 ? `${semanticAction.direction}:${semanticAction.pages ?? 1}`
-                : undefined;
+                : semanticAction?.type === 'window_action'
+                  ? `${semanticAction.action}:${
+                      semanticAction.position
+                        ? `${semanticAction.position.x},${semanticAction.position.y}`
+                        : semanticAction.size
+                          ? `${semanticAction.size.width}x${semanticAction.size.height}`
+                          : ''
+                    }`
+                  : undefined;
     const elementId =
       semanticAction && 'elementId' in semanticAction ? semanticAction.elementId : undefined;
     const fingerprint = semanticAction
@@ -1098,6 +1108,7 @@ export function buildComputerUseTools(deps: {
             // the action needed, so the model never tried until that was fixed,
             // and then 24 of 26 calls in one run were this.
             input.action === 'scroll_element' ||
+            input.action === 'window_action' ||
             input.action === 'press_key' ||
             input.action === 'mouse_move' ||
             input.action === 'left_click' ||
@@ -1575,6 +1586,7 @@ export function buildComputerUseTools(deps: {
             input.action === 'select_text' ||
             input.action === 'secondary_action' ||
             input.action === 'scroll_element' ||
+            input.action === 'window_action' ||
             input.action === 'press_key'
           ) {
             if (!deps.backend.runSemantic) {
@@ -1632,18 +1644,32 @@ export function buildComputerUseTools(deps: {
                                   : { pages: input.scroll_amount / SCROLL_UNITS_PER_PAGE }),
                                 elementIdentity: record.elements?.get(input.element_id)?.identity,
                               }
-                            : {
-                                type: 'press_key' as const,
-                                observationId: input.observation_id,
-                                key: input.text,
-                                ...(input.element_id
-                                  ? {
-                                      elementId: input.element_id,
-                                      elementIdentity: record.elements?.get(input.element_id)
-                                        ?.identity,
-                                    }
-                                  : {}),
-                              }),
+                            : input.action === 'window_action'
+                              ? {
+                                  type: 'window_action' as const,
+                                  observationId: input.observation_id,
+                                  elementId: input.element_id,
+                                  action: input.window_action,
+                                  ...(input.position
+                                    ? { position: { x: input.position[0], y: input.position[1] } }
+                                    : {}),
+                                  ...(input.size
+                                    ? { size: { width: input.size[0], height: input.size[1] } }
+                                    : {}),
+                                  elementIdentity: record.elements?.get(input.element_id)?.identity,
+                                }
+                              : {
+                                  type: 'press_key' as const,
+                                  observationId: input.observation_id,
+                                  key: input.text,
+                                  ...(input.element_id
+                                    ? {
+                                        elementId: input.element_id,
+                                        elementIdentity: record.elements?.get(input.element_id)
+                                          ?.identity,
+                                      }
+                                    : {}),
+                                }),
                     };
             const binding = claimBoundAction(record, input.observation_id, modelAction);
             if ('rejection' in binding) return bindingFailure(binding.rejection);

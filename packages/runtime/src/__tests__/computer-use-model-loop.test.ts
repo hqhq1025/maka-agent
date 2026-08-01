@@ -77,7 +77,13 @@ describe('AiSdkBackend Computer Use model loop', () => {
       assert.match(serialized, /Prefer click_element or set_value/);
       assert.match(
         serialized,
-        /Coordinate click, pointer move, scroll, drag, press_key, type.*disabled by default/,
+        // Was asserting "disabled by default … fail closed with
+        // unsupported_action", which the desktop host has not done since
+        // cua-driver's compatibility backend went away — it passes
+        // `allowCompatibilityInputDispatch: true`. The test was holding a
+        // sentence that had become false. What is true, and what the model
+        // needs, is which surface to prefer and why.
+        /Coordinate click, pointer move, scroll and drag aim at a pixel.*Prefer an element action/s,
       );
     }
   });
@@ -179,7 +185,7 @@ describe('AiSdkBackend Computer Use model loop', () => {
     assert.match(JSON.stringify(modelPrompts[3]), /model-written/);
     assert.match(
       JSON.stringify(modelTools[0]),
-      /Coordinate click, pointer move, scroll, drag, press_key, type.*disabled by default/,
+      /Coordinate click, pointer move, scroll and drag aim at a pixel.*Prefer an element action/s,
     );
     assert.match(JSON.stringify(modelTools[0]), /Prefer click_element or set_value/);
     assert.equal(
