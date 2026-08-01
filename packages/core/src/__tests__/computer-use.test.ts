@@ -62,7 +62,13 @@ describe('Computer Use foundation contract', () => {
         include_screenshot: false,
       }).approvalClass,
     ).toBe('metadata_read');
-    expect(computerUseApprovalSummary({ action: 'observe' }).approvalClass).toBe('screenshot_read');
+    expect(computerUseApprovalSummary({ action: 'observe' }).approvalClass).toBe('metadata_read');
+    expect(
+      computerUseApprovalSummary({
+        action: 'observe',
+        include_screenshot: true,
+      }).approvalClass,
+    ).toBe('screenshot_read');
     expect(computerUseApprovalSummary({ action: 'left_click' }).approvalClass).toBe(
       'pointer_mutation',
     );
@@ -70,6 +76,19 @@ describe('Computer Use foundation contract', () => {
     expect(computerUseApprovalSummary({ action: 'set_value' }).approvalClass).toBe(
       'semantic_mutation',
     );
+  });
+
+  test('reads an omitted include_screenshot the way the tool does', () => {
+    // The tool's default and this classification live in different packages,
+    // and they disagreed: the tool stopped capturing by default because a
+    // window capture was running into its own timeout on nearly every
+    // observation, while this went on calling an omitted field a screenshot
+    // read — asking a person to approve something the call would not do.
+    //
+    // Only `true` captures. Absent and `false` are the same thing.
+    for (const args of [{ action: 'observe' }, { action: 'observe', include_screenshot: false }]) {
+      expect(computerUseApprovalSummary(args).approvalClass).toBe('metadata_read');
+    }
   });
 
   test('approval summaries never expose text or coordinates', () => {

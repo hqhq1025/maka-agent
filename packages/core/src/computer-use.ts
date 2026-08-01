@@ -472,7 +472,17 @@ export function computerUseApprovalSummary(args: unknown): ComputerUseApprovalSu
   const rawAction = ownDataProperty(record, 'action');
   const knownAction = typeof rawAction === 'string' && APPROVAL_ACTIONS.has(rawAction);
   const action = knownAction ? rawAction : 'unknown';
-  const includeScreenshot = ownDataProperty(record, 'include_screenshot') !== false;
+  // What an omitted `include_screenshot` means, which changed under this.
+  //
+  // `observe` used to capture unless told not to, so an absent field meant a
+  // picture and this read it as `screenshot_read`. The default is now the other
+  // way round — capturing a window ran into its own timeout often enough that
+  // every observation was paying for a picture it usually did not get — so an
+  // absent field means elements only, and calling that a screenshot read asks a
+  // person to approve something the call will not do.
+  //
+  // Read the value, not its absence. `true` is the only thing that captures.
+  const includeScreenshot = ownDataProperty(record, 'include_screenshot') === true;
   const approvalClass: ComputerUseApprovalClass =
     action === 'list_apps' || action === 'cursor_position' || action === 'wait'
       ? 'metadata_read'
