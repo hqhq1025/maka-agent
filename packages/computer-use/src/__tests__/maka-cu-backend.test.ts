@@ -55,6 +55,9 @@ const POST_WINDOW_GONE = process.env.MAKACU_MOCK_POST_WINDOW_GONE === '1';
 // A refusal that carries only 'error', the way the maka.cu/1 executor emitted it.
 const BARE_REFUSAL = process.env.MAKACU_MOCK_BARE_REFUSAL === '1';
 const REFUSAL_PATH = process.env.MAKACU_MOCK_REFUSAL_PATH || 'none';
+// §7.1 — the executor names a route it was not allowed to take. Its absence is
+// what separates a policy refusal from an application saying no.
+const NO_WOULD_REQUIRE = process.env.MAKACU_MOCK_NO_WOULD_REQUIRE === '1';
 const REFUSAL_OUTCOME = process.env.MAKACU_MOCK_REFUSAL_OUTCOME || 'refused';
 const OK_OUTCOME = process.env.MAKACU_MOCK_OK_OUTCOME || 'ok';
 const SESSION_ERROR = process.env.MAKACU_MOCK_SESSION_ERROR || '';
@@ -157,7 +160,7 @@ function snapshot(includeImage) {
 function dispatchReply(id, params) {
   if (DISPATCH_ERROR) {
     if (BARE_REFUSAL) { domainError(id, DISPATCH_ERROR, {}); return; }
-    domainError(id, DISPATCH_ERROR, { wouldRequirePath: 'cg_event_global' }, {
+    domainError(id, DISPATCH_ERROR, NO_WOULD_REQUIRE ? {} : { wouldRequirePath: 'cg_event_global' }, {
       toolCallId: params.toolCallId,
       outcome: REFUSAL_OUTCOME,
       tier: TIER,
@@ -320,6 +323,8 @@ function makeBackend(
     postWindowGone?: boolean;
     bareRefusal?: boolean;
     refusalPath?: string;
+    /** Omit `wouldRequirePath`, which is how an application's own refusal looks. */
+    noWouldRequirePath?: boolean;
     refusalOutcome?: string;
     okOutcome?: string;
     sessionError?: string;
@@ -349,6 +354,7 @@ function makeBackend(
   process.env.MAKACU_MOCK_POST_WINDOW_GONE = opts.postWindowGone ? '1' : '';
   process.env.MAKACU_MOCK_BARE_REFUSAL = opts.bareRefusal ? '1' : '';
   process.env.MAKACU_MOCK_REFUSAL_PATH = opts.refusalPath ?? 'none';
+  process.env.MAKACU_MOCK_NO_WOULD_REQUIRE = opts.noWouldRequirePath ? '1' : '';
   process.env.MAKACU_MOCK_REFUSAL_OUTCOME = opts.refusalOutcome ?? 'refused';
   process.env.MAKACU_MOCK_OK_OUTCOME = opts.okOutcome ?? 'ok';
   process.env.MAKACU_MOCK_SESSION_ERROR = opts.sessionError ?? '';
@@ -793,10 +799,14 @@ describe('maka-cu backend', () => {
     // call fourteen times. §6.5's `delivered == 0` is the executor's own test
     // for "not one of them landed", and an element that advertises an action
     // and then declines it is a property of that application.
+    // The executor reports `path: "none"` for this — a first-press failure
+    // reached nothing — and no `wouldRequirePath`, because it was allowed to
+    // try and did.
     const { backend } = makeBackend({
       dispatchError: 'dispatch_refused',
-      refusalPath: 'ax_action',
+      refusalPath: 'none',
       refusalOutcome: 'failed',
+      noWouldRequirePath: true,
     });
     const observation = await observeFixture(backend);
     const result = await backend.runSemantic!(
@@ -805,10 +815,35 @@ describe('maka-cu backend', () => {
       RUN_CONTEXT,
     );
     assert.equal(!result.outcome.ok && result.outcome.error, 'dispatch_refused');
-    assert.match(
-      (!result.outcome.ok && result.outcome.message) || '',
-      /will not start working|different control|different route/,
+    const message = (!result.outcome.ok && result.outcome.message) || '';
+    assert.match(message, /will not start working|different control|different route/);
+    // And it must not read as a permission problem. Telling a model nothing was
+    // *permitted* sends it looking for permission it already has — the
+    // application declined an action it advertises, and no route around this
+    // executor changes that.
+    assert.doesNotMatch(message, /permitted/);
+  });
+
+  it('separates an application saying no from a route this executor may not take', async () => {
+    // Both arrive as `path: "none"`, and they need opposite next moves. The
+    // executor names the route it was not allowed to take; that name is the
+    // whole difference, so it is what this reads rather than the path.
+    const { backend } = makeBackend({
+      dispatchError: 'dispatch_refused',
+      refusalPath: 'none',
+      refusalOutcome: 'refused',
+    });
+    const observation = await observeFixture(backend);
+    const result = await backend.runSemantic!(
+      { type: 'click_element', observationId: observation.observationId, elementId: 'el_2' },
+      signal(),
+      RUN_CONTEXT,
     );
+    const message = (!result.outcome.ok && result.outcome.message) || '';
+    assert.match(message, /permitted/);
+    assert.doesNotMatch(message, /advertises this action/);
+    // The route it would have needed still travels as evidence.
+    assert.equal(result.outcome.evidence?.reason, 'would_require:cg_event_global');
   });
 
   it('carries a cut tree through as cut, instead of only into the trace', async () => {

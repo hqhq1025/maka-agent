@@ -344,8 +344,23 @@ function nextMoveFor(
     return `${error.message}. Computer Use drives windows that are not in front, so a coordinate action on one is often refused this way. An element action names its control instead of a pixel and is not blocked by what is on top.`;
   }
   if (mapped !== 'dispatch_refused') return error.message;
-  if (refusal?.path === 'ax_action') {
-    return `${error.message}. The control advertises this action and the application declined it, so the same call will not start working — use a different control or a different route.`;
+  // Two refusals arrive as `path: "none"` and they need opposite next moves.
+  //
+  // `wouldRequirePath` is the executor naming a route it was not allowed to
+  // take — a policy answer, and the model may have somewhere else to go. Its
+  // absence means the executor tried what it was permitted to try and the
+  // application said no.
+  //
+  // That second case is the one measured: `secondary_action` was 36 of 217
+  // calls across 30 real runs and 29 failed, every one of them `raise`.
+  // Calculator advertises `AXRaise` on its window and rejects it when
+  // performed. Telling a model that nothing was *permitted* sends it looking
+  // for permission it already has.
+  const detail = error.detail;
+  const wouldRequirePath =
+    detail && typeof detail.wouldRequirePath === 'string' ? detail.wouldRequirePath : undefined;
+  if (refusal?.path === 'none' && wouldRequirePath === undefined) {
+    return `${error.message}. The control advertises this action and its application declined it, so the same call will not start working — an element can list an action it will not perform. Use a different control or a different route.`;
   }
   if (refusal?.path === 'none') {
     return `${error.message}. Nothing this executor is permitted to do could reach the target; retrying will not change that.`;
