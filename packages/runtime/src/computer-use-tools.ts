@@ -93,7 +93,20 @@ export type {
 // Function-tool JSON schemas require an object at the top level.
 // Keep the wire schema as one top-level object, then apply the strict
 // discriminated union above immediately at execution.
-const computerWireParams = z
+/**
+ * The schema the model is actually held to.
+ *
+ * Exported for one reason: `computerParams` — the strict union this narrows to
+ * — is not what the SDK validates against, and a test that only exercises the
+ * union proves nothing about what a model can send. `window_action` shipped
+ * that way. Its fields were added to the union, its tests passed against the
+ * union, and a real-machine probe called the backend directly and moved a
+ * window. This schema is `.strict()` and had no `window_action`, `position` or
+ * `size` in it, so every call a model made was rejected by the SDK before
+ * reaching the tool — invisible to the debug journal, which wraps `impl`. The
+ * action was unusable from the day it was added and nothing said so.
+ */
+export const computerWireParams = z
   .object({
     action: z
       .enum([
@@ -203,6 +216,28 @@ const computerWireParams = z
       .max(60)
       .optional()
       .describe('Duration in seconds for wait or hold_key.'),
+    window_action: z
+      .enum(['move', 'resize', 'minimize'])
+      .optional()
+      .describe(
+        'Required for window_action. Moving or resizing a window is its own verb because dragging its title bar ' +
+          'is a coordinate action, and a window Computer Use drives is behind something else, so the drag is refused. ' +
+          'This is not, and it does not bring the application forward.',
+      ),
+    position: z
+      // Signed, because a second display is a real place: one measured here sits
+      // at (-193, -1080) in the space the observation reports. Refusing a
+      // negative would make half the desktop unaddressable.
+      .tuple([z.number().int(), z.number().int()])
+      .optional()
+      .describe(
+        "Required for window_action=move: [x, y] of the window's top-left in screen points, the same space the " +
+          'observation reports window bounds and displays in.',
+      ),
+    size: z
+      .tuple([z.number().int().positive(), z.number().int().positive()])
+      .optional()
+      .describe('Required for window_action=resize: [width, height] in points.'),
     steps: z
       .array(
         z
