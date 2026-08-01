@@ -80,7 +80,10 @@ test('recovered Codex cursor constants keep their inspected-build values', () =>
   assert.equal(CODEX_CURSOR_MOTION.scootSquashYAmount, 0.18);
   assert.equal(CODEX_CURSOR_MOTION.scootRotationMax, 76 * Math.PI / 180);
   assert.equal(CODEX_CURSOR_MOTION.terminalTangentBlendStart, 0.99);
-  assert.equal(CODEX_CURSOR_GLYPH.size, 14);
+  // `cursorRadius = 9.0` drawn at `width: 2r`, which is also what the white
+  // rim's outer edge measures per pixel in a captured frame. The 14 this was
+  // measured only the black core, with the outline outside the ruler.
+  assert.equal(CODEX_CURSOR_GLYPH.size, 18);
   assert.deepEqual(CODEX_CURSOR_GLYPH.start, [0.00599, 0.15864]);
 });
 
@@ -390,6 +393,83 @@ test('paint uses exact three-curve AgentCursor shape centered on the hotspot', (
     + CODEX_CURSOR_GLYPH.start[1] * CODEX_CURSOR_GLYPH.size;
   assert.ok(Math.abs(moves[0][0] - expectedStartX) < 1e-9);
   assert.ok(Math.abs(moves[0][1] - expectedStartY) < 1e-9);
+});
+
+test('paints the arrow the way the native cursor is drawn', () => {
+  // What a user reported was "a blue dot, not a cursor". Every one of these
+  // values was a reason for that: a third-transparent fill let the control
+  // underneath show through, a 1.55pt round join took the point off the arrow,
+  // and both sat in a frame a third smaller than the native one.
+  const engine = new CursorEngine();
+  engine.moveTo(100, 100);
+
+  const stops: Array<[number, string]> = [];
+  const gradient = {
+    addColorStop(offset: number, colour: string) {
+      stops.push([offset, colour]);
+    },
+  };
+  const seen: Record<string, unknown> = {};
+  const ctx = {
+    createLinearGradient: () => gradient,
+    beginPath() {},
+    fill() {
+      seen.fillAt = stops.length;
+    },
+    stroke() {
+      seen.strokeAt = stops.length;
+    },
+    moveTo() {},
+    lineTo() {},
+    bezierCurveTo() {},
+    closePath() {},
+    save() {},
+    restore() {},
+    translate() {},
+    rotate() {},
+    scale() {},
+    set fillStyle(value: unknown) {
+      seen.fillStyle = value;
+    },
+    set strokeStyle(value: unknown) {
+      seen.strokeStyle = value;
+    },
+    set lineWidth(value: number) {
+      seen.lineWidth = value;
+    },
+    set lineJoin(value: CanvasLineJoin) {
+      seen.lineJoin = value;
+    },
+    set miterLimit(value: number) {
+      seen.miterLimit = value;
+    },
+    set lineCap(value: CanvasLineCap) {
+      seen.lineCap = value;
+    },
+    set shadowColor(_value: string) {},
+    set shadowBlur(_value: number) {},
+    set shadowOffsetX(_value: number) {},
+    set shadowOffsetY(_value: number) {},
+    set globalAlpha(_value: number) {},
+  } as unknown as CanvasRenderingContext2D;
+
+  engine.paint(ctx, 0, 0);
+
+  // `Color.white.opacity(0.8)` — the one colour literal in the native drawing
+  // code, and it is the outline, not the fill.
+  assert.equal(seen.strokeStyle, 'rgba(255,255,255,0.8)');
+  assert.equal(seen.lineWidth, 2);
+  assert.equal(seen.lineJoin, 'miter');
+  assert.equal(seen.miterLimit, 10);
+  assert.equal(seen.lineCap, 'butt');
+  // Opaque: the arrow has an interior of its own.
+  assert.equal(stops.length, 3);
+  for (const [offset, colour] of stops) {
+    const alpha = Number(colour.slice(colour.lastIndexOf(',') + 1, -1));
+    assert.ok(alpha > 0.9, `stop ${offset} is ${alpha}, which lets the screen through`);
+  }
+  // The outline goes on after the fill, or the fill covers it.
+  assert.ok((seen.strokeAt as number) >= (seen.fillAt as number));
 });
 
 test('native completion snaps the center hotspot and cancels the planned move', () => {

@@ -88,9 +88,30 @@ const ROTATION_SWAY_COEFFICIENT = 0.035;
 
 /** Neutral drop-shadow colour, kept out of the palette so no theme tints it. */
 const SHADOW_RGB = [0, 0, 0] as const;
+/**
+ * The outline colour, which is not a brand colour.
+ *
+ * The one colour literal in the whole of the native cursor's drawing code is
+ * `Color.white.opacity(0.8)`, and it is the outline. A white rim is what makes
+ * a small dark glyph readable over an arbitrary application, the same way the
+ * system pointer's is. The brand colour still owns the fill.
+ */
+const OUTLINE_RGB = [255, 255, 255] as const;
 
 export const CODEX_CURSOR_GLYPH = {
-  size: 14,
+  /**
+   * The arrow's frame, in points.
+   *
+   * This was 14, measured off the black core of a rendered cursor while the
+   * outline and its outward half sat outside the ruler. The native view binds
+   * `cursorRadius = 9.0` and draws at `width: 2r`, so the frame is 18 — which
+   * is also what the white rim's outer edge measures, per pixel, in a captured
+   * frame. Two independent readings, one number.
+   *
+   * At 14 with a one-third-transparent fill and a 1.55pt rounded outline, the
+   * glyph read as a blob rather than a pointer at 1x.
+   */
+  size: 18,
   shadowBlur: 9,
   // Normalized AgentCursor.path(in:) coordinates recovered from the native
   // function's read-only floating-point constants.
@@ -684,7 +705,10 @@ export class CursorEngine {
     const py = this.pos[1] - originY;
     const pressProgress = this.clickT === null ? 0 : Math.sin(PI * this.clickT);
     const pressedAmount = this.pressed ? 1 : pressProgress;
-    const scale = 1 - 0.1 * pressedAmount;
+    // The native cursor multiplies its scale by 0.7 while pressed. Maka's 0.9
+    // was a third of that, which at 14pt was a shrink of one and a half pixels
+    // — the press was happening and nothing on screen said so.
+    const scale = 1 - 0.3 * pressedAmount;
 
     ctx.save();
     ctx.globalAlpha = this.opacity;
@@ -742,25 +766,37 @@ export class CursorEngine {
 
     const palette = this.palette;
     const gradient = ctx.createLinearGradient(offset, offset, -offset, -offset);
-    gradient.addColorStop(0, rgba(palette.cursorStart, 0.34 + pressedAmount * 0.08));
-    gradient.addColorStop(0.55, rgba(palette.cursorMid, 0.3 + pressedAmount * 0.08));
-    gradient.addColorStop(1, rgba(palette.cursorEnd, 0.26 + pressedAmount * 0.08));
+    // Opaque. The fill was carrying a third of its own colour, which let every
+    // control underneath show through and left the arrow with no interior of
+    // its own — the single largest reason it read as a smudge. The native
+    // cursor's fill has no alpha at all; the gradient across the brand colours
+    // is Maka's and stays.
+    gradient.addColorStop(0, rgba(palette.cursorStart, 0.97));
+    gradient.addColorStop(0.55, rgba(palette.cursorMid, 0.95));
+    gradient.addColorStop(1, rgba(palette.cursorEnd, 0.93));
     // A drop shadow, not a bloom. The upstream engine shadowed with the
     // cursor's own brand colour, which reads as a glow: pleasant over light
     // surfaces, but on a dark control it blends into the background instead of
     // separating the cursor from it — exactly where separation matters most.
     // Neutral black is what the system cursor uses, and for the same reason.
-    // The brand colour still owns the fill and the stroke.
+    // The brand colour still owns the fill, and the white outline below is what
+    // the native cursor separates itself with.
     ctx.shadowColor = rgba(SHADOW_RGB, 0.3 + pressedAmount * 0.1);
     ctx.shadowBlur = glyph.shadowBlur + pressedAmount * 3;
     ctx.shadowOffsetX = 0;
     ctx.shadowOffsetY = 1;
     ctx.fillStyle = gradient;
     ctx.fill();
-    ctx.strokeStyle = rgba(palette.cursorStart, 0.94 + pressedAmount * 0.06);
-    ctx.lineWidth = 1.55;
-    ctx.lineJoin = 'round';
-    ctx.lineCap = 'round';
+    // `Color.white.opacity(0.8)`, `lineWidth: 2`, `lineJoin: .miter`,
+    // `miterLimit: 10`, `lineCap: .butt` — the native stroke, read off the only
+    // colour literal in its drawing code. The rounded join Maka had was
+    // rounding off the arrow's point, which is the part that says which way it
+    // is pointing.
+    ctx.strokeStyle = rgba(OUTLINE_RGB, 0.8);
+    ctx.lineWidth = 2;
+    ctx.lineJoin = 'miter';
+    ctx.miterLimit = 10;
+    ctx.lineCap = 'butt';
     ctx.stroke();
   }
 }
