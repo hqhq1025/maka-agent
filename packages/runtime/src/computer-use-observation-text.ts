@@ -51,14 +51,155 @@ const MAX_VALUE_CHARS = 256;
 const MAX_DEPTH = 24;
 
 export function renderObservationForModel(observation: CuObservation): string {
-  const lines: string[] = [header(observation)];
-  for (const [element, depth] of walk(observation.elements)) {
+  // The menu bar is separated out and captioned rather than left to appear as a
+  // second unexplained root. A model reading `AXMenuBar` under the window tree
+  // has no way to know that those names open, that opening one costs an
+  // observation, or why half their contents are unavailable — and most of what
+  // an application can do is only reachable through them.
+  const { window, menu } = splitMenu(observation.elements);
+  const lines: string[] = [header(observation, window.length)];
+  for (const [element, depth] of walk(window)) {
     lines.push(`${'\t'.repeat(depth)}${elementLine(element)}`);
+  }
+  if (menu.length > 0) {
+    lines.push(menuCaption(observation, menu));
+    for (const [element, depth] of walk(dropSeparators(collapseMenuContainers(menu)))) {
+      lines.push(`${'\t'.repeat(depth)}${elementLine(element)}`);
+    }
   }
   return lines.join('\n');
 }
 
-function header(observation: CuObservation): string {
+/**
+ * The menu bar's subtree, by reachability from `AXMenuBar` rather than by role
+ * name. `AXMenuButton` is an ordinary window control — TextEdit's 文稿操作 is
+ * one — and splitting on the `AXMenu` prefix would move it out of the window it
+ * belongs to.
+ */
+function splitMenu(elements: readonly CuObservedElement[]): {
+  window: CuObservedElement[];
+  menu: CuObservedElement[];
+} {
+  const bar = elements.find((element) => element.role === 'AXMenuBar');
+  if (!bar) return { window: [...elements], menu: [] };
+  const inMenu = new Set<string>([bar.elementId]);
+  // One pass in reported order is enough: the executor emits a parent before
+  // its children (§5.2 walk order), so a child's parent is already classified.
+  for (const element of elements) {
+    const parent = element.parentElementId;
+    if (parent !== undefined && inMenu.has(parent)) inMenu.add(element.elementId);
+  }
+  return {
+    window: elements.filter((element) => !inMenu.has(element.elementId)),
+    menu: elements.filter((element) => inMenu.has(element.elementId)),
+  };
+}
+
+/**
+ * `AXMenu` carries no name, no state and nothing to act on: it is the container
+ * AppKit puts between a menu title and its commands. Dropping it and reparenting
+ * its children onto the title is what makes an opened menu read the way a menu
+ * looks — 文件 with its commands under it, rather than 文件 > an unnamed box >
+ * its commands. On TextEdit's full menu bar it is 29 of 288 elements.
+ *
+ * The commands keep their own ids, so nothing addressable is lost.
+ */
+function collapseMenuContainers(elements: readonly CuObservedElement[]): CuObservedElement[] {
+  const containers = new Map<string, string | undefined>();
+  for (const element of elements) {
+    if (element.role === 'AXMenu') containers.set(element.elementId, element.parentElementId);
+  }
+  if (containers.size === 0) return [...elements];
+  const lift = (id: string | undefined): string | undefined => {
+    let current = id;
+    // A menu directly inside a menu happens on a submenu; walking up to the
+    // first non-container keeps the command under the title a person would name.
+    for (
+      let hops = 0;
+      current !== undefined && containers.has(current) && hops < MAX_DEPTH;
+      hops += 1
+    ) {
+      current = containers.get(current);
+    }
+    return current;
+  };
+  return elements
+    .filter((element) => !containers.has(element.elementId))
+    .map((element) => {
+      const parent = lift(element.parentElementId);
+      return parent === element.parentElementId ? element : { ...element, parentElementId: parent };
+    });
+}
+
+/**
+ * A menu separator is a line, and a line is not a command.
+ *
+ * AppKit models one as an `NSMenuItem` and Accessibility reports it as an
+ * `AXMenuItem` with no title, disabled, no actions and no submenu — the four
+ * together are not something a real command can be. TextEdit's 文件 menu is 8 of
+ * 42, its 格式 menu 11 of 72; across four menus measured, every unnamed item was
+ * one of these except a submenu title, which the submenu test keeps.
+ *
+ * This is a narrower rule than "drop what has no label", which was measured
+ * against window trees and rejected: 1,023 unnamed elements across ten
+ * applications were operable, and Maka has no pixel fallback to reach one it
+ * hid. Nothing here is operable by construction.
+ *
+ * Ids are untouched — the separator keeps the id it was minted with, it is
+ * simply not written down — so nothing downstream has to know this happened.
+ */
+function dropSeparators(elements: readonly CuObservedElement[]): CuObservedElement[] {
+  const hasChildren = new Set<string>();
+  for (const element of elements) {
+    if (element.parentElementId !== undefined) hasChildren.add(element.parentElementId);
+  }
+  return elements.filter(
+    (element) =>
+      !(
+        element.role === 'AXMenuItem' &&
+        !element.label &&
+        element.value === undefined &&
+        element.enabled === false &&
+        !(element.actions && element.actions.length > 0) &&
+        !hasChildren.has(element.elementId)
+      ),
+  );
+}
+
+/**
+ * The one sentence the menu bar cannot be shipped without.
+ *
+ * Two facts, both measured, both invisible from the listing itself: these names
+ * open and opening one is an `observe` away, and a command that is unavailable
+ * is unavailable because its application is not in front. TextEdit in the
+ * background has 52 of 250 items enabled; in front, 168 — and the 116 that
+ * change are 存储, 导出为PDF…, 页面设置…, the commands a task is usually about.
+ * `AXPress` on one of them returns success and does nothing, so a model that is
+ * not told this reads the refusal as its own mistake and tries again.
+ */
+function menuCaption(observation: CuObservation, menu: readonly CuObservedElement[]): string {
+  const titles = menu.filter((element) => element.role === 'AXMenuBarItem').length;
+  const opened = observation.menu?.opened;
+  const parts = [`menu_bar=${titles}`];
+  parts.push(
+    opened
+      ? `opened=${quote(opened)}`
+      : 'not_opened(only the titles are listed; observe again with menu="<title>" to list one menu\'s commands)',
+  );
+  if (menu.some((element) => element.enabled === false)) {
+    parts.push(
+      'note(a disabled command needs its application in front, which Computer Use does not do; it cannot be pressed from here)',
+    );
+  }
+  if (observation.menu?.truncated === true) {
+    parts.push(
+      'truncated=true(this menu was cut short; a command you expect may exist but not be listed)',
+    );
+  }
+  return parts.join(' ');
+}
+
+function header(observation: CuObservation, elementCount: number): string {
   const parts = [
     `observation_id=${observation.observationId}`,
     `app=${observation.appId}`,
@@ -66,7 +207,7 @@ function header(observation: CuObservation): string {
     `window_id=${observation.windowId}`,
   ];
   if (observation.windowTitle) parts.push(`window=${quote(observation.windowTitle)}`);
-  parts.push(`elements=${observation.elements.length}`);
+  parts.push(`elements=${elementCount}`);
   // Said in the header rather than at the end, because a model that stops
   // reading a long list early must still learn that the list was cut. The
   // wording is the instruction, not the fact: "there may be more" is what

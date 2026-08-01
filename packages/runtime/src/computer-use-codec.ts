@@ -69,6 +69,10 @@ export const computerParams = z.discriminatedUnion('action', [
       app: z.string().min(1).max(512).optional(),
       window_id: z.number().int().positive().optional(),
       include_screenshot: z.boolean().optional(),
+      // §5.8. Every observation lists the menu titles; this opens one of them.
+      // A title rather than a path, because only the top level can be opened —
+      // a submenu comes with the menu that contains it.
+      menu: z.string().min(1).max(256).optional(),
     })
     .strict()
     .refine((input) => input.app !== undefined || input.window_id !== undefined, {

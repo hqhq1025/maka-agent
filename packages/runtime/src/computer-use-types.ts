@@ -123,6 +123,16 @@ export interface CuObservedElement {
 
 export interface CuObservation {
   observationId: string;
+  /**
+   * §5.8 — how much of the menu bar this observation walked.
+   *
+   * Present whenever a menu was asked for. `opened` names the one menu whose
+   * commands are listed; without it the observation carries the bar's top level
+   * and nothing below, which is the affordable default and is also the state a
+   * model has to be told about — a list of menu names with no note that they
+   * open reads as a list of things that cannot be used.
+   */
+  menu?: { opened?: string; truncated?: boolean };
   appId: string;
   pid: number;
   windowId: number;
@@ -311,7 +321,7 @@ export interface CuDispatchBackend {
     context: CuRunContext,
   ): Promise<CuLaunchedApp>;
   observeApp?(
-    input: { app?: string; windowId?: number; includeScreenshot: boolean },
+    input: { app?: string; windowId?: number; includeScreenshot: boolean; menu?: string },
     signal: AbortSignal,
     context: CuRunContext,
   ): Promise<CuObservation>;
@@ -321,7 +331,7 @@ export interface CuDispatchBackend {
     context: CuRunContext,
   ): Promise<CuRunResult>;
   captureObservation?(
-    input: { app?: string; windowId?: number; includeScreenshot: true },
+    input: { app?: string; windowId?: number; includeScreenshot: true; menu?: string },
     signal: AbortSignal,
     context: CuRunContext,
   ): Promise<CuObservation>;

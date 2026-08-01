@@ -432,6 +432,12 @@ export interface MakaCuLaunchedApp {
 
 const LAUNCH_WAIT_REASONS = ['window_appeared', 'timeout', 'not_requested'] as const;
 
+/** §5.8. The same element shape, minted from the same snapshot. */
+export interface MakaCuMenu {
+  elements: MakaCuElement[];
+  truncated: { elements: boolean; depth: boolean };
+}
+
 export interface MakaCuSnapshot {
   snapshotId: string;
   capturedAt: number;
@@ -444,6 +450,16 @@ export interface MakaCuSnapshot {
   obscuringRects: ComputerUseRect[];
   elements: MakaCuElement[];
   truncated: { elements: boolean; depth: boolean };
+  /**
+   * §5.8. Present only when the observation asked for it.
+   *
+   * Its own budget, not a share of the window's: measured, TextEdit's menu is
+   * 287 elements against a 13-element window, and Finder's window alone exceeds
+   * the element ceiling — so a shared budget would drown one app's observation
+   * in menu and cut another's menu to nothing, in the app whose menu bar is the
+   * only route to half its commands.
+   */
+  menu?: MakaCuMenu;
 }
 
 // ---------------------------------------------------------------------------
@@ -765,6 +781,24 @@ export function readSnapshot(method: string, value: unknown): MakaCuSnapshot {
     truncated: {
       elements: requireBoolean(method, truncated.elements, 'snapshot.truncated.elements'),
       depth: requireBoolean(method, truncated.depth, 'snapshot.truncated.depth'),
+    },
+    // §5.8. Absent unless the observation asked for it, so absence is a
+    // question that was not put rather than a menu that does not exist.
+    ...(snapshot.menu === undefined || snapshot.menu === null
+      ? {}
+      : { menu: readMenu(method, snapshot.menu) }),
+  };
+}
+
+function readMenu(method: string, value: unknown): MakaCuMenu {
+  const menu = requireRecord(method, value, 'snapshot.menu');
+  const elements = requireArray(method, menu.elements, 'snapshot.menu.elements');
+  const truncated = requireRecord(method, menu.truncated, 'snapshot.menu.truncated');
+  return {
+    elements: elements.map((element) => readElement(method, element)),
+    truncated: {
+      elements: requireBoolean(method, truncated.elements, 'snapshot.menu.truncated.elements'),
+      depth: requireBoolean(method, truncated.depth, 'snapshot.menu.truncated.depth'),
     },
   };
 }

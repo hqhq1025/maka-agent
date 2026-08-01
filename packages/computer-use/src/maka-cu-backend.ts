@@ -274,8 +274,40 @@ type CaptureFailure = CuRunResult & { outcome: Extract<CuRunResult['outcome'], {
  */
 const AMBIENT_ACTIONS = new Set(['press', 'scroll_to_visible', 'show_menu']);
 
-function informativeActions(actions: readonly string[]): string[] {
-  return actions.filter((action) => !AMBIENT_ACTIONS.has(action));
+/**
+ * §5.8 — what every menu element offers, which is therefore not worth saying
+ * about any of them.
+ *
+ * `pick` is what `click_element` already does to a menu item, and `cancel`
+ * closes a menu that a background application never has open. Every menu
+ * element carries both, so printing them costs a line's worth of tokens per
+ * command to distinguish a command from nothing.
+ */
+const AMBIENT_MENU_ACTIONS = new Set(['pick', 'cancel']);
+
+/**
+ * Everything in a snapshot that the model may address, in one order.
+ *
+ * §5.8 delivers the menu bar as a second array, because the executor draws its
+ * tree from a different AX root and will not pretend otherwise. The host has no
+ * such division to offer: a model addresses a menu command exactly as it
+ * addresses a button, so both arrays collapse into one id space here.
+ *
+ * Every derivation of that space — the model ids, the digest table, the parent
+ * links — must walk this same sequence. Three call sites deriving it
+ * independently is how `parentElementId` ended up in the wire-token space while
+ * `elementId` was an index, and 64 of 65 parent links dangled without a single
+ * test noticing.
+ */
+function addressable(snapshot: MakaCuSnapshot): readonly MakaCuElement[] {
+  return snapshot.menu ? [...snapshot.elements, ...snapshot.menu.elements] : snapshot.elements;
+}
+
+function informativeActions(actions: readonly string[], role: string): string[] {
+  const ambient = role.startsWith('AXMenu')
+    ? (action: string) => AMBIENT_ACTIONS.has(action) || AMBIENT_MENU_ACTIONS.has(action)
+    : (action: string) => AMBIENT_ACTIONS.has(action);
+  return actions.filter((action) => !ambient(action));
 }
 
 /**
@@ -673,8 +705,10 @@ export function createMakaCuBackend(opts: MakaCuBackendOptions): CuDispatchBacke
       windowId: snapshot.target.windowId,
       windowDigest: snapshot.windowDigest,
       capturedAt: snapshot.capturedAt,
-      digests: new Map(snapshot.elements.map((element) => [element.token, element.digest])),
-      modelIds: new Map(snapshot.elements.map((element, index) => [String(index), element.token])),
+      digests: new Map(addressable(snapshot).map((element) => [element.token, element.digest])),
+      modelIds: new Map(
+        addressable(snapshot).map((element, index) => [String(index), element.token]),
+      ),
       ...(focusedToken && focusedDigest
         ? { focused: { token: focusedToken, digest: focusedDigest } }
         : {}),
@@ -818,8 +852,8 @@ export function createMakaCuBackend(opts: MakaCuBackendOptions): CuDispatchBacke
       //
       // What survives is what a model would act on differently for having read
       // it: a menu it can open, a control it can raise, a stepper it can nudge.
-      ...(informativeActions(element.actions).length > 0
-        ? { actions: informativeActions(element.actions) }
+      ...(informativeActions(element.actions, element.role).length > 0
+        ? { actions: informativeActions(element.actions, element.role) }
         : {}),
       ...(element.focused ? { focused: true } : {}),
       ...(element.selected === null ? {} : { selected: element.selected }),
@@ -860,6 +894,11 @@ export function createMakaCuBackend(opts: MakaCuBackendOptions): CuDispatchBacke
   async function toObservation(
     snapshot: MakaCuSnapshot,
     context: CuRunContext,
+    // The menu the host asked to have opened, so the observation can say which
+    // one it is showing. It is the request rather than anything read back: a
+    // title that names no menu comes back as the bar (§5.8), and the model has
+    // to be able to tell that from a menu that is genuinely empty.
+    menuScope?: string,
   ): Promise<CuObservation | CaptureFailure> {
     let screenshot: CuScreenshot | undefined;
     if (snapshot.image) {
@@ -887,8 +926,12 @@ export function createMakaCuBackend(opts: MakaCuBackendOptions): CuDispatchBacke
     // The reverse of `modelIds`: the executor names a parent by wire token, and
     // the model reads ids in the short space, so the join has to happen here or
     // not at all.
+    // §5.8 mints menu elements from the same snapshot and resolves them through
+    // the same dictionary, so they share one id space with the window's tree —
+    // `dispatch.element` addresses 文件 > 导出为 PDF… exactly as it addresses a
+    // button, and the model never learns there were two arrays.
     const modelIdByToken = new Map(
-      snapshot.elements.map((element, index) => [element.token, String(index)]),
+      addressable(snapshot).map((element, index) => [element.token, String(index)]),
     );
     return {
       // The protocol's snapshot id IS the observation id: a dispatch quotes it
@@ -923,7 +966,22 @@ export function createMakaCuBackend(opts: MakaCuBackendOptions): CuDispatchBacke
       // read a bounded tree as a complete one — and an open/save panel now
       // reaches the bound as a matter of course.
       ...(snapshot.truncated.elements || snapshot.truncated.depth ? { truncated: true } : {}),
-      elements: snapshot.elements.map((element, index) =>
+      // §5.8. `depth` is deliberately not read when the scope is `bar`: the walk
+      // did stop at a depth, and it stopped there because the host said so.
+      // Reporting the host's own request as a truncation would tell the model
+      // the machine had failed to show it something.
+      ...(snapshot.menu
+        ? {
+            menu: {
+              ...(menuScope ? { opened: menuScope } : {}),
+              ...(snapshot.menu.truncated.elements ||
+              (menuScope !== undefined && snapshot.menu.truncated.depth)
+                ? { truncated: true }
+                : {}),
+            },
+          }
+        : {}),
+      elements: addressable(snapshot).map((element, index) =>
         toObservedElement(
           element,
           snapshot.target.bounds,
@@ -1003,7 +1061,7 @@ export function createMakaCuBackend(opts: MakaCuBackendOptions): CuDispatchBacke
   }
 
   async function observe(
-    input: { app?: string; windowId?: number; includeScreenshot: boolean },
+    input: { app?: string; windowId?: number; includeScreenshot: boolean; menu?: string },
     signal: AbortSignal,
     context: CuRunContext,
   ): Promise<CuObservation> {
@@ -1016,6 +1074,16 @@ export function createMakaCuBackend(opts: MakaCuBackendOptions): CuDispatchBacke
           session: context.sessionId,
           target,
           includeImage: input.includeScreenshot,
+          // §5.8. Every observation carries the menu bar's top level, because a
+          // model that cannot see a menu bar does not know to ask about one —
+          // and most of what an application can do is only reachable through a
+          // menu command. `bar` is what makes that affordable: 9 elements and
+          // 5 ms, against 369 and 157 ms for the whole tree, which would be 94%
+          // of what the model reads on every single observation.
+          //
+          // Naming a menu opens that one and still lists the rest, the way a
+          // person opens 文件 rather than reading all seven.
+          menu: input.menu ? { scope: 'menu', title: input.menu } : { scope: 'bar' },
           // maxElements/maxDepth/maxTextChars are omitted so the executor applies
           // the bounds it declared at handshake (§5.2). A host-side copy of those
           // numbers is the drift this protocol removes.
@@ -1024,7 +1092,7 @@ export function createMakaCuBackend(opts: MakaCuBackendOptions): CuDispatchBacke
       );
       if (!envelope.ok) throw new MakaCuDomainRefusal('observe', envelope.error);
       const snapshot = readSnapshot('observe', envelope.snapshot);
-      const observation = await toObservation(snapshot, context);
+      const observation = await toObservation(snapshot, context, input.menu);
       if ('outcome' in observation) {
         throw new Error(`${observation.outcome.error}: ${observation.outcome.message}`);
       }
