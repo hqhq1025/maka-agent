@@ -872,7 +872,7 @@ export class ToolRuntime {
       // that got the shape wrong can fix it instead of re-sending it.
       const violation =
         tool.categoryHint === 'computer_use'
-          ? describeComputerUseArgsViolation(permissionArgsError)
+          ? describeComputerUseArgsViolation(permissionArgsError, executionArgs)
           : undefined;
       const msg =
         tool.categoryHint === 'computer_use'
@@ -893,7 +893,18 @@ export class ToolRuntime {
         errorClass: 'InvalidArguments',
         argsSummary:
           tool.categoryHint === 'computer_use'
-            ? summarizePersistedArgs(persistedArgs)
+            ? // The key names the model actually sent, which nothing else keeps.
+              // Persisted arguments are the host's approval projection and the
+              // model-facing record is the corrected one, so a call refused for
+              // its shape left no trace of the shape it had — and diagnosing a
+              // run where twenty of twenty-seven calls were refused had to
+              // infer it from the wording of the refusal. Names only: a value
+              // here can be typed text.
+              `${summarizePersistedArgs(persistedArgs)} sent=${Object.keys(
+                (executionArgs as Record<string, unknown> | null) ?? {},
+              )
+                .sort()
+                .join(',')}`
             : summarizeArgs(tool.name, executionArgs),
         bytesIn: byteLength(persistedArgs),
         bytesOut: byteLength(msg),

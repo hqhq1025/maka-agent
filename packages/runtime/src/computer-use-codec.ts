@@ -322,6 +322,26 @@ export const computerParams = z.discriminatedUnion('action', [
 export type ComputerParams = z.infer<typeof computerParams>;
 
 /**
+ * The argument names one action accepts, or undefined if the action is unknown.
+ *
+ * Naming what was rejected leaves the model to guess what to send instead, and
+ * guessing is what it does: a real run spent twenty of twenty-seven calls
+ * re-sending shapes that had already been refused, because every refusal said
+ * what was wrong and none said what was right. The schema already holds the
+ * answer.
+ */
+export function computerActionFields(action: unknown): string[] | undefined {
+  if (typeof action !== 'string') return undefined;
+  for (const option of computerParams.options) {
+    const shape = option.shape as Record<string, { value?: unknown }>;
+    const literal = shape.action;
+    const value = literal?.value ?? (literal as { _def?: { value?: unknown } })?._def?.value;
+    if (value === action) return Object.keys(shape).filter((key) => key !== 'action');
+  }
+  return undefined;
+}
+
+/**
  * What was wrong with the arguments, in terms of the argument names only.
  *
  * Computer Use replaced the generic formatter with a fixed string, because the
@@ -334,7 +354,10 @@ export type ComputerParams = z.infer<typeof computerParams>;
  * vocabulary, not screen content, so they are safe to name. Values never are,
  * and none are read here — only `issue.path` and the issue's kind.
  */
-export function describeComputerUseArgsViolation(error: unknown): string | undefined {
+export function describeComputerUseArgsViolation(
+  error: unknown,
+  args?: unknown,
+): string | undefined {
   const issues = (error as { issues?: unknown })?.issues;
   if (!Array.isArray(issues) || issues.length === 0) return undefined;
   const parts: string[] = [];
@@ -373,7 +396,20 @@ export function describeComputerUseArgsViolation(error: unknown): string | undef
     parts.push('the argument shape does not match this action');
   }
   const unique = [...new Set(parts)];
-  return unique.length > 0 ? unique.join('; ') : undefined;
+  if (unique.length === 0) return undefined;
+  // The correction, not just the complaint. A model told only that four keys
+  // are unrecognised has no way to know whether it got the whole dialect wrong
+  // — which on a real run it had, sending every key in camelCase — and it will
+  // keep sending the same shape. Listing the action's own field names ends
+  // that in one round trip.
+  const accepted = computerActionFields((args as { action?: unknown } | undefined)?.action);
+  const guidance =
+    accepted && accepted.length > 0
+      ? `. This action takes ${accepted.map((field) => `\`${field}\``).join(', ')}`
+      : accepted
+        ? '. This action takes no other arguments'
+        : '';
+  return `${unique.join('; ')}${guidance}`;
 }
 
 const point = (c?: [number, number]): CuPoint | undefined => (c ? { x: c[0], y: c[1] } : undefined);
