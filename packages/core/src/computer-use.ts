@@ -364,7 +364,20 @@ const SEMANTIC_ACTIONS = new Set([
   'launch_app',
 ]);
 
-const APPROVAL_ACTIONS = new Set([
+/**
+ * Every semantic action name, as the tool schema spells them.
+ *
+ * Hand-written beside a schema that already lists them, and it drifted:
+ * `window_action` was added to the schema and not here, so every window move,
+ * resize and minimise was summarised as `unknown` — in the approval a person
+ * reads before allowing it, and in the record the model reads back of its own
+ * call. A real run shows one such call succeeding while both projections of it
+ * said `unknown`.
+ *
+ * `computer-use-approval-actions.test.ts` in @maka/runtime holds the two lists
+ * against each other, because this package cannot import the schema.
+ */
+export const COMPUTER_USE_SEMANTIC_ACTIONS = [
   'list_apps',
   'launch_app',
   'observe',
@@ -374,9 +387,11 @@ const APPROVAL_ACTIONS = new Set([
   'secondary_action',
   'scroll_element',
   'element_sequence',
+  'window_action',
   'press_key',
-  ...CU_ACTION_TYPES,
-]);
+] as const;
+
+const APPROVAL_ACTIONS = new Set<string>([...COMPUTER_USE_SEMANTIC_ACTIONS, ...CU_ACTION_TYPES]);
 
 export function computerUseApprovalSummary(args: unknown): ComputerUseApprovalSummary {
   const record = asRecord(args);
