@@ -71,13 +71,14 @@ const BOUNDS = { x: 100, y: 50, width: 1440, height: 900 };
 function harness() {
   const created: FakeCursorOverlayWindow[] = [];
   let displayChanged: (() => void) | undefined;
+  let bounds = BOUNDS;
   const controller = createCursorOverlayController({
     createOverlayWindow: (options) => {
       const w = new FakeCursorOverlayWindow(options as Record<string, unknown>);
       created.push(w);
       return w as never;
     },
-    resolveOverlayBounds: () => BOUNDS,
+    resolveOverlayBounds: () => bounds,
     preloadPath: '/fake/preload.cjs',
     htmlPath: '/fake/overlay.html',
     subscribeDisplayChanges: (cb) => {
@@ -85,7 +86,14 @@ function harness() {
       return () => { displayChanged = undefined; };
     },
   });
-  return { controller, created, fireDisplayChanged: () => displayChanged?.() };
+  return {
+    controller,
+    created,
+    fireDisplayChanged: () => displayChanged?.(),
+    setBounds: (next: typeof BOUNDS) => {
+      bounds = next;
+    },
+  };
 }
 
 test('S14 window options: focusable:false + non-interactive flags + receive-only preload', () => {
@@ -306,7 +314,7 @@ test('a completion with no live presentation raises no level it cannot lower', a
   assert.deepEqual(levels.at(-1), [true, 'floating', 0], 'stays where the settle left it');
 });
 
-test('renderer loss and display changes teardown the live overlay', () => {
+test('renderer loss and a display change that moves the overlay teardown the live overlay', () => {
   const gone = harness();
   gone.controller.ensure('s');
   gone.created[0].fireGone();
@@ -315,9 +323,27 @@ test('renderer loss and display changes teardown the live overlay', () => {
 
   const display = harness();
   display.controller.ensure('s');
+  display.setBounds({ x: -1920, y: 0, width: 3360, height: 1080 });
   display.fireDisplayChanged();
   assert.equal(display.created[0].destroyed, true);
   assert.equal(display.controller.isActive(), false);
+});
+
+test('a display change that leaves the union of displays alone keeps the overlay', () => {
+  // `display-metrics-changed` fires for `workArea` too, and on a real machine
+  // that arrives every couple of seconds because the menu bar or the Dock
+  // changed shape — measured here with the primary display's work area
+  // alternating between 875 and 873 points high with no windows open at all.
+  // The overlay spans display *bounds*, so none of that moves it, and tearing
+  // down on the bare event destroyed it mid-load: the window never reached
+  // `onReady`, never showed, and a turn with a single dispatch produced no
+  // visible cursor at all.
+  const { controller, created, fireDisplayChanged } = harness();
+  controller.ensure('s');
+  fireDisplayChanged();
+  assert.equal(created[0].destroyed, false, 'a work-area twitch is not a reason to rebuild');
+  assert.equal(controller.isActive(), true);
+  assert.equal(created.length, 1, 'and it does not build a second one either');
 });
 
 test('persistence: move() does NOT recreate the window; sends window-local coords', () => {

@@ -326,8 +326,26 @@ export function createCursorOverlayController(
     sessionId = nextSessionId;
     ready = false;
     queue = [];
+    // Rebuild only when the screen area this window has to cover has actually
+    // moved. The overlay spans the union of every display's *bounds*, and the
+    // event this subscribes to reports any metrics change at all — including
+    // `workArea`, which twitches by a couple of points whenever the menu bar or
+    // the Dock changes shape and says nothing about where the displays are.
+    //
+    // Tearing down on the bare event destroyed the overlay for reasons that had
+    // nothing to do with it. Measured on this machine with a second display
+    // attached: `display-metrics-changed` arrives with `["workArea"]` and the
+    // primary display's work area alternating between 875 and 873 points high,
+    // roughly every two seconds, with no windows open at all. The overlay is
+    // created when an action begins and its HTML takes longer than that to
+    // load, so the window was routinely destroyed before `onReady` ever fired —
+    // never shown, never on screen, and reported by the scenario harness as
+    // "the agent cursor overlay — never appeared" on any turn short enough to
+    // dispatch only once.
     unsubscribeDisplayChanges = subscribeDisplayChanges(() => {
-      if (win === w) teardown();
+      if (win !== w) return;
+      if (sameRect(resolveOverlayBounds(), bounds)) return;
+      teardown();
     });
     w.onReady(() => {
       if (win !== w) return; // superseded during load
@@ -522,6 +540,10 @@ function defaultSubscribeDisplayChanges(cb: () => void): () => void {
     screen.removeListener('display-removed', removed);
     screen.removeListener('display-metrics-changed', changed);
   };
+}
+
+function sameRect(a: Rectangle, b: Rectangle): boolean {
+  return a.x === b.x && a.y === b.y && a.width === b.width && a.height === b.height;
 }
 
 function defaultResolveOverlayBounds(): Rectangle {
