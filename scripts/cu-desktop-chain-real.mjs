@@ -257,6 +257,14 @@ try {
 
   // Wait for the turn to start, then for it to finish. Sampling throughout,
   // because the mirror and the overlay come and go inside the turn.
+  //
+  // The interval is a real constraint, not a politeness. `window_action` is one
+  // Accessibility attribute write and the whole action is over in a couple of
+  // hundred milliseconds; at 400ms a sampler catches the overlay by luck. The
+  // same window-arrange run passed 12/12 alone and failed
+  // "the agent cursor overlay opened" inside a six-scenario sweep, with nothing
+  // different about the product. Sample faster than the shortest action.
+  const SAMPLE_MS = 120;
   let started = false;
   const startBy = Date.now() + 45_000;
   while (Date.now() < startBy) {
@@ -265,7 +273,7 @@ try {
       started = true;
       break;
     }
-    await sleep(400);
+    await sleep(SAMPLE_MS);
   }
   check(
     'the turn started',
@@ -277,7 +285,7 @@ try {
   while (started && Date.now() < endBy) {
     await sample();
     if ((await stopButton.count().catch(() => 0)) === 0) break;
-    await sleep(400);
+    await sleep(SAMPLE_MS);
   }
   await sample();
   if (sampleErrors) note(`${sampleErrors} window samples were refused mid-turn`);
