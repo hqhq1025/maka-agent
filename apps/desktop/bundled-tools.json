@@ -2,11 +2,11 @@
   "makaCu": {
     "repo": "hqhq1025/maka-cu",
     "branch": "maka/base",
-    "commit": "dcc7023226af44730c66298f571d51958488c5d3",
+    "commit": "ae4975bac47d835eec9030cdce0faabffa317cf6",
     "expectedProtocolVersion": "maka.cu/2",
     "binaryName": "maka-cu",
     "binarySizeBytes": 2861584,
-    "binarySha256": "7ba8aa5c8753c97e09624204e2dc1054440b0f8821de062a6b32c51c1d073a64",
+    "binarySha256": "80d2a7e60ebb6c27b4818d62605d49dc095d2bcaae361b23e9b3ed50c39fd3cb",
     "buildProvenance": "local-source-build",
     "signature": "adhoc",
     "hardenedRuntime": false,

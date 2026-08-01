@@ -96,6 +96,94 @@ test('a negative position is accepted, because a second display is a real place'
   assert.equal(ok.success, true);
 });
 
+test('a minimise names its own cost, because it cannot be taken back', async () => {
+  // Measured: the moment `minimize_window` succeeds, `list_apps` reports
+  // `windowCount: 0` for that application and `observe` answers
+  // `target_missing`. A minimized window is not in `CGWindowListCopyWindowInfo`
+  // under `.optionOnScreenOnly`, so there is no id left for an unminimize to
+  // address — and the fresh observation attached to this very result will not
+  // contain the window either. A model that is not told reads that as the
+  // window having been closed, or retries.
+  const { buildComputerUseTools } = await import('../computer-use-tools.js');
+  const observation = {
+    observationId: 'backend-1',
+    appId: 'com.apple.calculator',
+    pid: 1,
+    windowId: 2,
+    elements: [{ elementId: '0', role: 'AXWindow', label: '计算器' }],
+  };
+  // The fixture has to lose the window, or it cannot reproduce what happens.
+  // A backend that keeps answering with an observation makes this assertion
+  // pass no matter what the code does.
+  let gone = false;
+  const [tool] = buildComputerUseTools({
+    backend: {
+      async preflight() {
+        return { accessibility: true, screenRecording: true };
+      },
+      async observeApp() {
+        if (gone) throw new Error('target_missing: the target window no longer exists');
+        return observation as never;
+      },
+      async captureObservation() {
+        if (gone) throw new Error('target_missing: the target window no longer exists');
+        return observation as never;
+      },
+      async runSemantic(action: { type: string; action?: string }) {
+        if (action.type === 'window_action' && action.action === 'minimize') gone = true;
+        return {
+          outcome: {
+            ok: true as const,
+            tier: 'ax' as const,
+            verified: true,
+            evidence: { path: 'ax_attribute', effect: 'confirmed' as const },
+          },
+        };
+      },
+      async run() {
+        return { outcome: { ok: true as const, tier: 'ax' as const } };
+      },
+    } as never,
+  });
+  const context = {
+    abortSignal: new AbortController().signal,
+    sessionId: 'm',
+    turnId: 't',
+    toolCallId: 'c',
+  } as never;
+  const observed = (await tool!.impl(
+    { action: 'observe', app: 'com.apple.calculator', include_screenshot: false },
+    context,
+  )) as { modelText?: string; text: string };
+  const observationId = /observation_id=(\S+)/.exec(observed.modelText ?? observed.text)?.[1] ?? '';
+  const minimised = (await tool!.impl(
+    {
+      action: 'window_action',
+      observation_id: observationId,
+      element_id: '0',
+      window_action: 'minimize',
+    },
+    context,
+  )) as { modelText?: string; text: string };
+  assert.match(
+    minimised.modelText ?? minimised.text,
+    /only the person at the machine can bring it back/,
+  );
+
+  const moved = (await tool!.impl(
+    {
+      action: 'window_action',
+      observation_id: observationId,
+      element_id: '0',
+      window_action: 'move',
+      position: [10, 10],
+    },
+    context,
+  )) as { modelText?: string; text: string };
+  // Moving is reversible and says nothing of the sort.
+  assert.doesNotMatch(moved.modelText ?? moved.text, /bring it back/);
+});
+
 test('an action outside the three is not a window action', () => {
   assert.equal(
     parse({

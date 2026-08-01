@@ -222,7 +222,16 @@ export const computerWireParams = z
       .describe(
         'Required for window_action. Moving or resizing a window is its own verb because dragging its title bar ' +
           'is a coordinate action, and a window Computer Use drives is behind something else, so the drag is refused. ' +
-          'This is not, and it does not bring the application forward.',
+          'This is not, and it does not bring the application forward. ' +
+          // The one action here that cannot be taken back. Measured: the moment
+          // it succeeds, list_apps reports windowCount 0 for that application
+          // and observe answers target_missing — a minimized window is not in
+          // the window list, so there is nothing left to address. A model that
+          // does not know this minimises a window to get it out of the way and
+          // then cannot put it back or even see that it is still there.
+          'minimize is one-way: a minimized window leaves the window list, so nothing here can restore it and ' +
+          'observing it afterwards fails. Only the person at the machine can bring it back, from the Dock. ' +
+          'Do not minimize a window to get it out of the way — move it instead.',
       ),
     position: z
       // Signed, because a second display is a real place: one measured here sits
@@ -1844,6 +1853,25 @@ export function buildComputerUseTools(deps: {
               presentation?.finish();
               return bindingFailure('capture_failed');
             }
+            // One action removes its own target on purpose, and the machinery
+            // below reads a missing target as an uncertain outcome.
+            //
+            // A successful `minimize` puts the window in the Dock, and a
+            // minimized window is not in `CGWindowListCopyWindowInfo` under
+            // `.optionOnScreenOnly` — so the fresh observation every dispatch
+            // takes afterwards cannot find it. Measured on a real machine: the
+            // dispatch came back `effect=confirmed` and the model was handed
+            // `failed: outcome_unknown — the action may have changed the target.
+            // Call observe before deciding whether to retry.` The action had
+            // worked, the report said it might not have, and the observe it
+            // asked for would have failed too.
+            //
+            // For every other action a vanished target really is uncertainty.
+            // For this one it is the result.
+            const targetGoneByDesign =
+              result.outcome.ok &&
+              semanticAction.type === 'window_action' &&
+              semanticAction.action === 'minimize';
             let freshObservation: CuObservation | undefined;
             try {
               // A failure needs a fresh observation more than a success does.
@@ -1862,17 +1890,18 @@ export function buildComputerUseTools(deps: {
               //
               // The observation is what makes a failure recoverable in place.
               // Nothing about it is less true because the action was refused.
-              freshObservation = shouldReobserveAfter(result.outcome)
-                ? await freshFullObservation(state, record, result, abortSignal, {
-                    ...runCtx,
-                    boundAction: binding,
-                  })
-                : undefined;
+              freshObservation =
+                shouldReobserveAfter(result.outcome) && !targetGoneByDesign
+                  ? await freshFullObservation(state, record, result, abortSignal, {
+                      ...runCtx,
+                      boundAction: binding,
+                    })
+                  : undefined;
             } catch {
               presentation?.finish(result);
               return deliveredWithoutFreshObservation(semanticAction, result);
             }
-            if (result.outcome.ok && !freshObservation) {
+            if (result.outcome.ok && !freshObservation && !targetGoneByDesign) {
               presentation?.finish(result);
               return deliveredWithoutFreshObservation(semanticAction, result);
             }
@@ -1889,7 +1918,18 @@ export function buildComputerUseTools(deps: {
                 // third frame that came from nowhere.
                 ` Observation ${input.observation_id} is still current: nothing was dispatched, so the window is as it was. Use it to address a different element rather than observing again.`
               : '';
-            const text = `${summarize(semanticAction, result)}${stillCurrent}`;
+            // A minimise that worked has just removed its own target from the
+            // world, and the fresh observation attached below will not contain
+            // it. Said here rather than only in the tool description, because
+            // the description is read before the turn and this is the moment
+            // the model is looking for the window it just put away.
+            const minimised =
+              result.outcome.ok &&
+              semanticAction.type === 'window_action' &&
+              semanticAction.action === 'minimize'
+                ? ' The window is now in the Dock and is no longer in the window list, so it cannot be observed or restored from here — only the person at the machine can bring it back.'
+                : '';
+            const text = `${summarize(semanticAction, result)}${stillCurrent}${minimised}`;
             const failureClass =
               !result.outcome.ok && /ambiguous/i.test(result.outcome.message)
                 ? ('ambiguous_target' as const)

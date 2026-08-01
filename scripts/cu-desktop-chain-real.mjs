@@ -297,6 +297,11 @@ try {
     `frontmost ${duringFrontmost}, target ${targetPid}`,
   );
 
+  // Every window this turn ever showed, not just the one being asserted on.
+  // "the mirror never appeared" is the same output whether it was never opened
+  // or opened under a url this check does not recognise, and the two have very
+  // different fixes.
+  note(`windows seen this turn: ${[...seen.values()].map((w) => `${w.id}:${w.url}`).join(', ')}`);
   const pip = [...seen.values()].find((w) => w.url.startsWith('pip'));
   if (ACTS) {
     check(
