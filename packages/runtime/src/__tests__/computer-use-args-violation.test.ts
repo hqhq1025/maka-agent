@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { describe, test } from 'node:test';
 
 import {
+  COMPUTER_USE_REFINEMENT_MESSAGES,
   computerActionFields,
   computerParams,
   describeComputerUseArgsViolation,
@@ -63,5 +64,45 @@ describe('computer use argument refusals', () => {
     assert.deepEqual(computerActionFields('list_apps'), ['app']);
     assert.equal(computerActionFields('teleport'), undefined);
     assert.equal(computerActionFields(undefined), undefined);
+  });
+
+  test('carries a refinement sentence through instead of the generic complaint', () => {
+    // A `.refine()` failure has an empty `issue.path`, so every field-name
+    // branch misses it and the fallback used to answer "the argument shape does
+    // not match this action" — replacing the one sentence that said which of
+    // two arguments to add.
+    const args = { action: 'observe' };
+
+    const said = describeComputerUseArgsViolation(refusalFor(args), args);
+
+    assert.ok(said);
+    assert.match(said, /requires app or window_id/);
+    assert.doesNotMatch(said, /the argument shape does not match/);
+  });
+
+  test('says nothing about approval, which is not a thing the model can send', () => {
+    for (const action of ['observe', 'screenshot']) {
+      const args = { action };
+      const said = describeComputerUseArgsViolation(refusalFor(args), args);
+      assert.ok(said);
+      assert.doesNotMatch(said, /approval/i, `${action} leaked the approval pipeline`);
+    }
+    assert.doesNotMatch(
+      JSON.stringify(COMPUTER_USE_REFINEMENT_MESSAGES),
+      /approval/i,
+      'no schema refinement may mention approval',
+    );
+  });
+
+  test('passes through only the sentences this schema wrote', () => {
+    // `message` is free prose. One arriving from anywhere else could be quoting
+    // the arguments — which can hold a typed password — straight back.
+    const secret = 'hunter2-correct-horse';
+    const forged = { issues: [{ code: 'custom', path: [], message: `value was ${secret}` }] };
+
+    const said = describeComputerUseArgsViolation(forged, { action: 'observe' });
+
+    assert.ok(said);
+    assert.ok(!said.includes(secret), 'a foreign message must not reach the model verbatim');
   });
 });

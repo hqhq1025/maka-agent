@@ -4,6 +4,32 @@ import type { CuDispatchEvidence, CuRunResult, CuSemanticAction } from './comput
 
 export const coordinate = z.tuple([z.number().int().nonnegative(), z.number().int().nonnegative()]);
 export const text = z.string().max(8000);
+
+/**
+ * The sentences the schema's own refinements produce.
+ *
+ * A `.refine()` failure carries its message and an empty `issue.path`, so the
+ * violation describer had no field to name and fell through to the generic
+ * "the argument shape does not match this action" — throwing away the one
+ * sentence that said what was missing. They are listed here so the describer
+ * can pass a message through only when this file wrote it: a message is host
+ * prose, and anything that did not come from this table could be carrying
+ * whatever the model or the executor put in it.
+ */
+export const COMPUTER_USE_REFINEMENT_MESSAGES = {
+  observeTarget:
+    'observe requires app or window_id — name the application in `app`, or pass a `window_id` from an earlier observe',
+  screenshotTarget:
+    'screenshot requires app or window_id — name the application in `app`, or pass a `window_id` from an earlier observe',
+  windowMovePosition: 'window_action move requires position',
+  windowResizeSize: 'window_action resize requires size',
+  waitOneCondition: 'wait takes one condition, not both — send wait_for_text or wait_for_text_gone',
+} as const;
+
+const REFINEMENT_MESSAGE_SET: ReadonlySet<string> = new Set(
+  Object.values(COMPUTER_USE_REFINEMENT_MESSAGES),
+);
+
 /**
  * The target hints a model may repeat on an action that already names its
  * target through `observation_id`.
@@ -78,7 +104,10 @@ export const computerParams = z.discriminatedUnion('action', [
     })
     .strict()
     .refine((input) => input.app !== undefined || input.window_id !== undefined, {
-      message: 'observe requires app or window_id before approval',
+      // No mention of approval: whether a call is reviewed is a host pipeline
+      // the model cannot see, cannot influence, and cannot fix by re-sending.
+      // What it can fix is the missing argument.
+      message: COMPUTER_USE_REFINEMENT_MESSAGES.observeTarget,
     }),
   z
     .object({
@@ -192,10 +221,10 @@ export const computerParams = z.discriminatedUnion('action', [
     })
     .strict()
     .refine((input) => input.window_action !== 'move' || input.position !== undefined, {
-      message: 'window_action move requires position',
+      message: COMPUTER_USE_REFINEMENT_MESSAGES.windowMovePosition,
     })
     .refine((input) => input.window_action !== 'resize' || input.size !== undefined, {
-      message: 'window_action resize requires size',
+      message: COMPUTER_USE_REFINEMENT_MESSAGES.windowResizeSize,
     }),
   z
     .object({
@@ -223,7 +252,7 @@ export const computerParams = z.discriminatedUnion('action', [
     })
     .strict()
     .refine((input) => input.app !== undefined || input.window_id !== undefined, {
-      message: 'screenshot requires app or window_id before approval',
+      message: COMPUTER_USE_REFINEMENT_MESSAGES.screenshotTarget,
     }),
   z.object({ action: z.literal('cursor_position') }).strict(),
   z
@@ -304,7 +333,7 @@ export const computerParams = z.discriminatedUnion('action', [
     })
     .strict()
     .refine((input) => !(input.wait_for_text && input.wait_for_text_gone), {
-      message: 'wait takes one condition, not both',
+      message: COMPUTER_USE_REFINEMENT_MESSAGES.waitOneCondition,
     }),
   z
     .object({
@@ -320,6 +349,18 @@ export const computerParams = z.discriminatedUnion('action', [
     .strict(),
 ]);
 export type ComputerParams = z.infer<typeof computerParams>;
+
+/** Every action name this tool accepts, in schema order. */
+export function computerActionNames(): string[] {
+  const names: string[] = [];
+  for (const option of computerParams.options) {
+    const shape = option.shape as Record<string, { value?: unknown }>;
+    const literal = shape.action;
+    const value = literal?.value ?? (literal as { _def?: { value?: unknown } })?._def?.value;
+    if (typeof value === 'string') names.push(value);
+  }
+  return names;
+}
 
 /**
  * The argument names one action accepts, or undefined if the action is unknown.
@@ -362,9 +403,27 @@ export function describeComputerUseArgsViolation(
   if (!Array.isArray(issues) || issues.length === 0) return undefined;
   const parts: string[] = [];
   for (const raw of issues.slice(0, 6)) {
-    const issue = raw as { code?: string; keys?: unknown; path?: unknown; expected?: unknown };
+    const issue = raw as {
+      code?: string;
+      keys?: unknown;
+      path?: unknown;
+      expected?: unknown;
+      message?: unknown;
+    };
     const path = Array.isArray(issue.path) ? issue.path.filter((p) => typeof p === 'string') : [];
     const field = path.length > 0 ? path.join('.') : undefined;
+    // A refinement carries the whole answer in its message and nothing in its
+    // path, so the field-name branches below cannot see it and the generic
+    // fallback used to replace it with "the argument shape does not match this
+    // action" — a model told an `observe` needs one of two named arguments can
+    // fix the call; a model told the shape is wrong cannot.
+    //
+    // Only messages this file wrote are passed through. A message is free
+    // prose, and one from anywhere else could be quoting the arguments back.
+    if (typeof issue.message === 'string' && REFINEMENT_MESSAGE_SET.has(issue.message)) {
+      parts.push(issue.message);
+      continue;
+    }
     if (issue.code === 'unrecognized_keys' && Array.isArray(issue.keys)) {
       const keys = issue.keys.filter((k): k is string => typeof k === 'string');
       if (keys.length > 0) {
@@ -449,7 +508,12 @@ export function adaptToCuAction(args: ComputerParams): CuAction {
   };
   const needText = (value: string | undefined, action: string): string => {
     if (typeof value !== 'string' || value.length === 0) {
-      throw new Error(`invalid_coordinate: action '${action}' requires text`);
+      // Not `invalid_coordinate`: nothing here is about a point on the screen,
+      // and a model handed a coordinate code for a missing string goes and
+      // checks its coordinates. The field that is missing is the one named.
+      throw new Error(
+        `invalid_arguments: action '${action}' requires text — the characters to type, or the key name, go in \`text\``,
+      );
     }
     return value;
   };
@@ -517,30 +581,64 @@ export function adaptToCuAction(args: ComputerParams): CuAction {
       return { type: 'zoom', region: { x1, y1, x2, y2 } };
     }
     default:
-      throw new Error('invalid_coordinate: unknown action');
+      // The action name is the one field the model always chooses for itself,
+      // and the schema already holds the closed set it may choose from. Naming
+      // it "unknown action" under a coordinate code sent the model looking at
+      // its coordinates for a word it had misspelled.
+      throw new Error(
+        `invalid_arguments: unknown action — this tool takes one of: ${computerActionNames().join(', ')}`,
+      );
   }
 }
 
-/** Concise, model-facing summary of an outcome (S16-safe: no screen text here). */
-export function summarizeEvidence(evidence: CuDispatchEvidence | undefined): string {
+/**
+ * Who a summary line is written for.
+ *
+ * `host` is the stored/journalled line and keeps everything an operator reading
+ * a trace back needs. `model` is what goes into the conversation, and it drops
+ * the fields the model has no move to make about.
+ */
+export type CuSummaryAudience = 'model' | 'host';
+
+/** Concise summary of an outcome (S16-safe: no screen text here). */
+export function summarizeEvidence(
+  evidence: CuDispatchEvidence | undefined,
+  audience: CuSummaryAudience = 'model',
+): string {
   if (!evidence) return '';
   const safeToken = (value: string): string | undefined =>
     /^[A-Za-z0-9][A-Za-z0-9._:-]{0,63}$/.test(value) ? value : undefined;
   const fields: string[] = [];
-  const path = evidence.path ? safeToken(evidence.path) : undefined;
-  if (path) fields.push(`path=${path}`);
+  // `cg_event_pid`, `ax_action`, `skylight_pid`: which macOS mechanism carried
+  // the action. The model does not choose the route and cannot ask for another
+  // one, so on the model face this is a token it can only copy back. On a real
+  // run it was on every line — 23 of them in one scenario — and no call ever
+  // changed because of it. It stays on the host face, where the question "which
+  // route did this go out on" is the whole reason the field exists.
+  if (audience === 'host') {
+    const path = evidence.path ? safeToken(evidence.path) : undefined;
+    if (path) fields.push(`path=${path}`);
+  }
+  // `effect` stays on both faces. It is the one field here the model acts on:
+  // `suspected_noop` means a retry of the same thing is a retry of nothing.
   if (evidence.effect) fields.push(`effect=${evidence.effect}`);
   // Which of several conditions produced the error code, when the host
   // authored one. `target_changed` alone covers seven different situations —
   // the window moved, the tree changed under the observation, the element left
-  // the window — and they call for different next moves. Told only the code,
-  // the model re-sent the same scroll four times on a real run.
+  // the window — and they call for different next moves.
+  //
+  // Host face only: what actually reached the model was `dispatch.key:none`
+  // and its siblings — the executor's own RPC method names, which are neither
+  // a condition nor a next move. The model-facing sentence for a refusal is
+  // the executor's `message`, which `summarize` already carries.
   //
   // Passed through `safeToken`, which is what keeps this from becoming the
   // driver's free text: only a bounded identifier survives, never an AX label,
   // a window title, or anything else that was on screen.
-  const reason = evidence.reason ? safeToken(evidence.reason) : undefined;
-  if (reason) fields.push(`reason=${reason}`);
+  if (audience === 'host') {
+    const reason = evidence.reason ? safeToken(evidence.reason) : undefined;
+    if (reason) fields.push(`reason=${reason}`);
+  }
   return fields.length > 0 ? `; dispatch ${fields.join(', ')}` : '';
 }
 
@@ -548,9 +646,13 @@ export type ComputerSummaryAction = {
   type: CuAction['type'] | CuSemanticAction['type'];
 };
 
-export function summarize(action: ComputerSummaryAction, result: CuRunResult): string {
+export function summarize(
+  action: ComputerSummaryAction,
+  result: CuRunResult,
+  audience: CuSummaryAudience = 'model',
+): string {
   const { outcome } = result;
-  const evidence = summarizeEvidence(outcome.evidence);
+  const evidence = summarizeEvidence(outcome.evidence, audience);
   if (!outcome.ok) {
     // The code alone is not a recovery instruction. `unsupported_action` covers
     // a key name the host could not parse, an element that does not offer the
@@ -592,8 +694,13 @@ export function summarize(action: ComputerSummaryAction, result: CuRunResult): s
   // model.
   const noop = outcome.evidence?.effect === 'suspected_noop';
   const verdict = noop ? 'delivered but nothing changed' : 'ok';
+  // `coordinate-background`, `semantic-background`, `ax`: which tier of the
+  // executor took the action. There is no argument that asks for a tier, so a
+  // model reading this can only carry it around. `verified` is the part of the
+  // same clause it can act on, and that stays on both faces.
+  const via = audience === 'host' ? ` via ${outcome.tier}` : '';
   return (
-    `computer.${action.type} ${verdict} via ${outcome.tier} (verified=${verified})${evidence}${pointStr}${shot}` +
+    `computer.${action.type} ${verdict}${via} (verified=${verified})${evidence}${pointStr}${shot}` +
     (outcome.verified === false
       ? ' — dispatch could not be confirmed; re-screenshot before retrying'
       : outcome.verified === true && outcome.evidence?.effect === 'confirmed'
