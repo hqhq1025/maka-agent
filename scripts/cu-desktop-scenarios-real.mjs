@@ -34,6 +34,7 @@ import {
 } from '../packages/storage/dist/index.js';
 import { promisify } from 'node:util';
 import { mkdtemp, mkdir, writeFile, readFile, copyFile, rm, stat } from 'node:fs/promises';
+import { rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -293,7 +294,14 @@ if (scenarios.length === 0) {
 await mkdir(OUT, { recursive: true });
 
 function run(scenario, userDataDir, model) {
+  const tracePath = join(OUT, `${scenario.key}__${model}.trace.jsonl`);
   return new Promise((resolve) => {
+    // Truncated, not appended to. The journal is opened in append mode, so a
+    // second run of the same scenario lands behind the first and the analyser
+    // reads both as one trajectory — which is how a three-call run and a
+    // seven-call run were read as one ten-call run, and the conclusion drawn
+    // from it was wrong in both directions.
+    rmSync(tracePath, { force: true });
     const child = spawn(process.execPath, [join(ROOT, 'scripts', 'cu-desktop-chain-real.mjs')], {
       cwd: ROOT,
       env: {
@@ -302,13 +310,19 @@ function run(scenario, userDataDir, model) {
         CU_TARGET_BUNDLE: scenario.bundle,
         CU_PROMPT: scenario.prompt,
         CU_USER_DATA_DIR: userDataDir,
-        CU_EXPECT_ACTION: scenario.readOnly ? '0' : '1',
+        // The presentation checks — the mirror, the cursor — are evidence of a
+        // dispatch, so they can only be asserted where one is expected. A task
+        // the model is expected to refuse may reach that conclusion without
+        // dispatching anything: measured on save-pdf, one run read the menu and
+        // reported in three calls with nothing dispatched, the next tried
+        // `cmd+p` first. `maybe` records what happened without grading it.
+        CU_EXPECT_ACTION: scenario.readOnly ? '0' : scenario.expectRefusal ? 'maybe' : '1',
         ...(scenario.expectRefusal ? { CU_EXPECT_REFUSAL: '1' } : {}),
         // Every call the model made, arguments verbatim, results untruncated,
         // interleaved with the executor's dispatch trace. This is the record
         // the analyser reads: what the model asked for, what it got back, and
         // what it did next.
-        MAKA_CU_DEBUG_LOG: join(OUT, `${scenario.key}__${model}.trace.jsonl`),
+        MAKA_CU_DEBUG_LOG: tracePath,
       },
     });
     let out = '';

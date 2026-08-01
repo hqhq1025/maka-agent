@@ -731,6 +731,30 @@ export function buildComputerUseTools(deps: {
     return confirmation.ok ? undefined : bindingFailure(confirmation.reason);
   }
 
+  /**
+   * A refusal the executor states it never dispatched.
+   *
+   * `path` is what the executor did, not what it was asked to do, and `"none"`
+   * is its word for "nothing reached the target" — `maka.cu/2` §6.5. It is
+   * absent rather than defaulted when a backend does not say, so a backend that
+   * forgets falls back to the cautious behaviour instead of claiming this one.
+   *
+   * Nothing about the window changed, so the frame the action was quoted
+   * against is still a description of what is there.
+   */
+  function dispatchedNothing(result: CuRunResult | undefined): boolean {
+    return result?.outcome.ok === false && result.outcome.evidence?.path === 'none';
+  }
+
+  /** Retire the action but keep the frame, for a refusal that never ran. */
+  function retireBoundAction(
+    record: SessionObservationRecord,
+    action: CuaBoundAction,
+  ): ComputerToolResult | undefined {
+    const retirement = record.state.retireAction(action);
+    return retirement.ok ? undefined : bindingFailure(retirement.reason);
+  }
+
   async function freshFullObservation(
     state: CuaSessionState,
     record: SessionObservationRecord,
@@ -1742,9 +1766,20 @@ export function buildComputerUseTools(deps: {
                 }
               }
             } finally {
-              consumeFailure = consumeBoundAction(record, binding);
-              if (actionLease && state.validateLease(actionLease).ok) {
-                state.reobserveRequired();
+              // A refusal that never reached the window leaves the frame it was
+              // quoted against exactly as it was, so it keeps its frame and its
+              // lease. Consuming both is what turned one refusal into three
+              // calls: the action failed, the frame was thrown away, and the
+              // code was not one that hands back a fresh one — so the model's
+              // next call was `reobserve_required` and the one after it was the
+              // `observe` it should never have had to spend.
+              if (dispatchedNothing(result)) {
+                consumeFailure = retireBoundAction(record, binding);
+              } else {
+                consumeFailure = consumeBoundAction(record, binding);
+                if (actionLease && state.validateLease(actionLease).ok) {
+                  state.reobserveRequired();
+                }
               }
             }
             if (consumeFailure && !hasUncertainDeliveredOutcome(result)) {
@@ -1788,7 +1823,14 @@ export function buildComputerUseTools(deps: {
               return deliveredWithoutFreshObservation(semanticAction, result);
             }
             presentation?.finish(result);
-            const text = summarize(semanticAction, result);
+            // Say the frame survived, because every other refusal has spent it.
+            // A model that has learned "a failure means observe again" will
+            // spend that call whatever the state machine allows, and the round
+            // trip is the whole cost this is removing.
+            const stillCurrent = dispatchedNothing(result)
+              ? ` Observation ${semanticAction.observationId} is still current: nothing was dispatched, so the window is as it was. Use it to address a different element rather than observing again.`
+              : '';
+            const text = `${summarize(semanticAction, result)}${stillCurrent}`;
             const failureClass =
               !result.outcome.ok && /ambiguous/i.test(result.outcome.message)
                 ? ('ambiguous_target' as const)

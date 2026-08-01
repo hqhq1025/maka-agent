@@ -31,7 +31,17 @@ const OUT = '/tmp/cu-desktop-chain';
 // Whether this prompt asks for an action at all. A turn that was told to look
 // and report has no action to mirror and no cursor to move, so asserting the
 // presentation surfaces for it is asserting the product does something wrong.
-const ACTS = process.env.CU_EXPECT_ACTION !== '0';
+// Whether this turn is expected to dispatch anything, which is what the mirror
+// and the cursor are evidence of.
+//
+// Three states, because two were not enough. A task the model is expected to
+// refuse may or may not try something before it concludes it cannot: measured
+// on save-pdf, one run read the menu and reported in three calls with no
+// dispatch at all, and the next tried `cmd+p` first. Asserting either way turns
+// a coin toss into a red check, and asserting "no mirror" would fail the run
+// for the model doing more of its homework.
+const ACTS = process.env.CU_EXPECT_ACTION === undefined || process.env.CU_EXPECT_ACTION === '1';
+const MAY_ACT = process.env.CU_EXPECT_ACTION === 'maybe';
 const TARGET_APP = process.env.CU_TARGET_APP ?? 'Calculator';
 const TARGET_BUNDLE = process.env.CU_TARGET_BUNDLE ?? 'com.apple.calculator';
 const PROMPT =
@@ -286,6 +296,8 @@ try {
       sawPip,
       pip ? JSON.stringify(pip.bounds) : 'never appeared',
     );
+  } else if (MAY_ACT) {
+    note(`mirror ${sawPip ? 'opened' : 'never appeared'} on a turn that might not act`);
   } else {
     // The mirror shows the frame an action produced. A read-only turn produces
     // none, so its absence is correct and its presence would be the bug.
@@ -308,6 +320,8 @@ try {
   }
   if (ACTS) {
     check('the agent cursor overlay opened', sawOverlay, sawOverlay ? '' : 'never appeared');
+  } else if (MAY_ACT) {
+    note(`cursor overlay ${sawOverlay ? 'opened' : 'never appeared'}`);
   }
 
   // What the conversation actually says, so a green run cannot mean "nothing
