@@ -138,3 +138,88 @@ test('an observation with no menu bar renders as it did before menus existed', (
   assert.doesNotMatch(text, /menu_bar=/);
   assert.match(text, /elements=3$/m);
 });
+
+test('a wrapper around exactly one thing is collapsed, and its child keeps its id', () => {
+  // `mergeSingleItemGroups`, which is one of the thirteen transforms Codex's own
+  // renderer runs. Measured here: VS Code 172 of 985 elements, Calculator 4 of
+  // 42, TextEdit 1 of 20 — and Finder 1 of 1,198, because Finder's containers
+  // mostly hold several children and holding several is a statement that they
+  // belong together.
+  const text = renderObservationForModel({
+    observationId: 'obs_1',
+    appId: 'a',
+    pid: 1,
+    windowId: 2,
+    elements: [
+      element('0', 'AXWindow', { label: 'w' }),
+      element('1', 'AXGroup', { parentElementId: '0' }),
+      element('2', 'AXGroup', { parentElementId: '1' }),
+      element('3', 'AXButton', { parentElementId: '2', label: 'Save' }),
+    ],
+  } as CuObservation);
+  const rows = text.split('\n');
+  assert.equal(rows.length, 3, 'header, window, button');
+  // Collapsing is not pruning: the button keeps the id it was minted with, so
+  // anything the model was already holding still addresses it.
+  assert.match(rows[2] ?? '', /^\t3 AXButton "Save"$/);
+});
+
+test('a container holding several children is left alone', () => {
+  // Holding several is a grouping, and a grouping is information. Only a
+  // single-child wrapper is a layer with nothing in it.
+  const text = renderObservationForModel({
+    observationId: 'obs_1',
+    appId: 'a',
+    pid: 1,
+    windowId: 2,
+    elements: [
+      element('0', 'AXWindow', { label: 'w' }),
+      element('1', 'AXGroup', { parentElementId: '0' }),
+      element('2', 'AXButton', { parentElementId: '1', label: 'A' }),
+      element('3', 'AXButton', { parentElementId: '1', label: 'B' }),
+    ],
+  } as CuObservation);
+  assert.match(text, /1 AXGroup/);
+});
+
+test('a single-child wrapper that is a control, or named, or focused, stays', () => {
+  // Every clause of the test is load-bearing, and each of these would have been
+  // collapsed by a rule that only asked "does it have a label".
+  for (const extra of [
+    { label: 'Sidebar' },
+    { actions: ['raise'] },
+    { focused: true },
+    { value: '3' },
+  ] as Array<Partial<CuObservedElement>>) {
+    const text = renderObservationForModel({
+      observationId: 'obs_1',
+      appId: 'a',
+      pid: 1,
+      windowId: 2,
+      elements: [
+        element('0', 'AXWindow', { label: 'w' }),
+        element('1', 'AXGroup', { parentElementId: '0', ...extra }),
+        element('2', 'AXButton', { parentElementId: '1', label: 'Save' }),
+      ],
+    } as CuObservation);
+    assert.match(text, /1 AXGroup/, `collapsed a group carrying ${JSON.stringify(extra)}`);
+  }
+});
+
+test('a button with no label is not a wrapper, whatever it contains', () => {
+  // TextEdit's full-screen button holds one anonymous group and carries no
+  // label of its own. A rule written as "unnamed and holds one thing" collapses
+  // the button; this one keeps it, because a button is not a container role.
+  const text = renderObservationForModel({
+    observationId: 'obs_1',
+    appId: 'a',
+    pid: 1,
+    windowId: 2,
+    elements: [
+      element('0', 'AXWindow', { label: 'w' }),
+      element('1', 'AXButton', { parentElementId: '0', subrole: 'AXFullScreenButton' }),
+      element('2', 'AXGroup', { parentElementId: '1' }),
+    ],
+  } as CuObservation);
+  assert.match(text, /1 AXButton/);
+});

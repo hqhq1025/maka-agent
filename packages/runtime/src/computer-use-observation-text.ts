@@ -58,7 +58,7 @@ export function renderObservationForModel(observation: CuObservation): string {
   // an application can do is only reachable through them.
   const { window, menu } = splitMenu(observation.elements);
   const lines: string[] = [header(observation, window.length)];
-  for (const [element, depth] of walk(window)) {
+  for (const [element, depth] of walk(collapseStructuralWrappers(window))) {
     lines.push(`${'\t'.repeat(depth)}${elementLine(element)}`);
   }
   if (menu.length > 0) {
@@ -104,31 +104,118 @@ function splitMenu(elements: readonly CuObservedElement[]): {
  *
  * The commands keep their own ids, so nothing addressable is lost.
  */
-function collapseMenuContainers(elements: readonly CuObservedElement[]): CuObservedElement[] {
-  const containers = new Map<string, string | undefined>();
+/**
+ * Remove a node and hand its children to its parent.
+ *
+ * Not the same thing as dropping an element. A collapsed node's children keep
+ * their own ids and stay addressable; what goes is one line and one level of
+ * indentation. That is why it is safe where pruning is not — the research that
+ * rejected "drop what has no label" counted 1,023 unnamed but operable elements
+ * across ten applications, and none of them would be lost here.
+ */
+function collapse(
+  elements: readonly CuObservedElement[],
+  shouldCollapse: (element: CuObservedElement) => boolean,
+): CuObservedElement[] {
+  const collapsed = new Map<string, string | undefined>();
   for (const element of elements) {
-    if (element.role === 'AXMenu') containers.set(element.elementId, element.parentElementId);
+    if (shouldCollapse(element)) collapsed.set(element.elementId, element.parentElementId);
   }
-  if (containers.size === 0) return [...elements];
+  if (collapsed.size === 0) return [...elements];
   const lift = (id: string | undefined): string | undefined => {
     let current = id;
-    // A menu directly inside a menu happens on a submenu; walking up to the
-    // first non-container keeps the command under the title a person would name.
+    // Collapsed nodes nest — a menu inside a menu, a group inside a group — so
+    // this walks to the first survivor rather than up one level.
     for (
       let hops = 0;
-      current !== undefined && containers.has(current) && hops < MAX_DEPTH;
+      current !== undefined && collapsed.has(current) && hops < MAX_DEPTH;
       hops += 1
     ) {
-      current = containers.get(current);
+      current = collapsed.get(current);
     }
     return current;
   };
+  // A node whose ancestry never reaches a survivor is not collapsed at all.
+  //
+  // Two mutually-parented `AXGroup`s each hold exactly one child — each other —
+  // and so each meets every test above. Collapsing both removes both from the
+  // output: their children survive as roots, but the pair itself is gone. A
+  // renderer tidying a tree must not be able to lose an element from a
+  // malformed one, so anything whose ancestry does not settle keeps its line.
+  //
+  // Judged against the original set and applied afterwards. Deleting as it goes
+  // makes the answer depend on iteration order: remove the first of a cycle and
+  // the second one's walk now lands on a survivor, so one of the pair collapses
+  // and the other does not.
+  const settles = (id: string): boolean => {
+    let current = collapsed.get(id);
+    for (let hops = 0; hops < MAX_DEPTH; hops += 1) {
+      if (current === undefined || !collapsed.has(current)) return true;
+      if (current === id) return false;
+      current = collapsed.get(current);
+    }
+    return false;
+  };
+  for (const id of [...collapsed.keys()].filter((id) => !settles(id))) collapsed.delete(id);
+  if (collapsed.size === 0) return [...elements];
   return elements
-    .filter((element) => !containers.has(element.elementId))
+    .filter((element) => !collapsed.has(element.elementId))
     .map((element) => {
       const parent = lift(element.parentElementId);
       return parent === element.parentElementId ? element : { ...element, parentElementId: parent };
     });
+}
+
+/** `AXMenu` sits between a menu title and its commands and says nothing. */
+function collapseMenuContainers(elements: readonly CuObservedElement[]): CuObservedElement[] {
+  return collapse(elements, (element) => element.role === 'AXMenu');
+}
+
+/**
+ * Roles that exist to hold other elements and nothing else.
+ *
+ * Deliberately a list rather than a test for "has no name": an `AXButton` with
+ * no label is still a button, and Finder's `AXRow` and `AXCell` carry selection
+ * even when they carry no text. Those are the elements a model acts on. These
+ * are not — no application ships a bare `AXGroup` as something to click.
+ */
+const STRUCTURAL_ROLES = new Set([
+  'AXGroup',
+  'AXSplitGroup',
+  'AXLayoutArea',
+  'AXLayoutItem',
+  'AXUnknown',
+]);
+
+/**
+ * A wrapper around exactly one thing, carrying nothing of its own.
+ *
+ * Measured across four applications: VS Code 172 of 985 elements, Calculator 4
+ * of 42, TextEdit 1 of 20, Finder 1 of 1,198 — Finder's containers mostly hold
+ * several children, and holding several is a statement that they belong
+ * together. One child is not a grouping, it is a layer.
+ *
+ * Every clause is load-bearing. A container with a `label` names its section; a
+ * `value` or an action makes it a control; `focused` is where the keys go; and
+ * more than one child is the grouping this is careful not to erase.
+ */
+function collapseStructuralWrappers(elements: readonly CuObservedElement[]): CuObservedElement[] {
+  const childCount = new Map<string, number>();
+  for (const element of elements) {
+    const parent = element.parentElementId;
+    if (parent !== undefined) childCount.set(parent, (childCount.get(parent) ?? 0) + 1);
+  }
+  return collapse(
+    elements,
+    (element) =>
+      STRUCTURAL_ROLES.has(element.role) &&
+      !element.label &&
+      element.value === undefined &&
+      !(element.actions && element.actions.length > 0) &&
+      element.focused !== true &&
+      element.selected !== true &&
+      childCount.get(element.elementId) === 1,
+  );
 }
 
 /**
