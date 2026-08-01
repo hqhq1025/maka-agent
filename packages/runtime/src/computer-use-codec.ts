@@ -297,8 +297,15 @@ export const computerParams = z.discriminatedUnion('action', [
     .object({
       action: z.literal('wait'),
       duration: z.number().min(0).max(60).optional(),
+      // A condition, so the wait can end when the thing happens rather than
+      // when a guessed number of seconds runs out.
+      wait_for_text: z.string().min(1).max(256).optional(),
+      wait_for_text_gone: z.string().min(1).max(256).optional(),
     })
-    .strict(),
+    .strict()
+    .refine((input) => !(input.wait_for_text && input.wait_for_text_gone), {
+      message: 'wait takes one condition, not both',
+    }),
   z
     .object({
       action: z.literal('zoom'),

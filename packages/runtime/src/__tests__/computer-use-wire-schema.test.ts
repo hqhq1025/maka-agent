@@ -72,6 +72,8 @@ const CALLS: Array<Record<string, unknown>> = [
   { action: 'screenshot', app: 'com.apple.TextEdit' },
   { action: 'left_click', observation_id: 'o', coordinate: [10, 20] },
   { action: 'wait', duration: 1 },
+  { action: 'wait', wait_for_text: 'Saved', duration: 5 },
+  { action: 'wait', wait_for_text_gone: 'Loading' },
 ];
 
 for (const call of CALLS) {

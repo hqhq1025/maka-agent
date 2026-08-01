@@ -165,6 +165,28 @@ export const computerWireParams = z
           'menu bar is several times the size of the window. A command shown as disabled cannot be pressed: it ' +
           'needs its application in front, which Computer Use does not do.',
       ),
+    wait_for_text: z
+      .string()
+      .min(1)
+      .max(256)
+      .optional()
+      .describe(
+        'For wait: return as soon as this text appears in the window you last observed, instead of after a fixed ' +
+          'delay. Use it after an action that opens something — a sheet, a panel, a dialog — and name text you expect ' +
+          'it to contain. `duration` becomes the deadline (default 5s). Far better than guessing how long to sleep. ' +
+          "It matches a control's name as well as its value, and returns immediately if the text is already there, " +
+          'so name something that is not on screen yet — the title of the sheet you are opening, not the button you ' +
+          'just pressed.',
+      ),
+    wait_for_text_gone: z
+      .string()
+      .min(1)
+      .max(256)
+      .optional()
+      .describe(
+        'For wait: the mirror of wait_for_text — return as soon as this text is no longer in the window you last ' +
+          'observed. Use it after dismissing something, or while a progress indicator is up.',
+      ),
     query: z
       .string()
       .min(1)
@@ -1542,6 +1564,94 @@ export function buildComputerUseTools(deps: {
                 })),
               }),
             };
+          }
+          // A wait that names a condition ends when the condition holds.
+          //
+          // The only wait there was slept for a number the model had to guess.
+          // After an action that opens something — a sheet, a save panel, a
+          // progress bar — the right length is not knowable in advance, so the
+          // guess is either too short (and the next observe finds nothing) or
+          // too long (and every one of them costs that much). Playwright's
+          // `browser_wait_for` takes `text` / `textGone` for exactly this, and
+          // it is the only condition a model can state: it has just read the
+          // window and knows what should appear in it.
+          //
+          // The window is the one last observed. There is no "current window"
+          // in this protocol, and asking for an app here would be a second way
+          // to name a target that could disagree with the first.
+          if (
+            input.action === 'wait' &&
+            (input.wait_for_text !== undefined || input.wait_for_text_gone !== undefined)
+          ) {
+            const record = observations.get(sessionId);
+            if (!deps.backend.observeApp || !record?.appId) {
+              return {
+                text: 'maka_computer.wait failed: no_active_frame — a condition is checked against the window you last observed, and there is none yet. Observe first, or wait with only a duration.',
+              };
+            }
+            const needle = (input.wait_for_text ?? input.wait_for_text_gone ?? '').toLowerCase();
+            const wantPresent = input.wait_for_text !== undefined;
+            const deadline = Date.now() + Math.round((input.duration ?? 5) * 1000);
+            let last: CuObservation | undefined;
+            let polls = 0;
+            for (;;) {
+              try {
+                last = await deps.backend.observeApp(
+                  {
+                    app: record.appId,
+                    ...(record.windowId ? { windowId: record.windowId } : {}),
+                    includeScreenshot: false,
+                  },
+                  abortSignal,
+                  runCtx,
+                );
+              } catch {
+                // The window going away is an answer to `text_gone` and a
+                // failure for `text`, rather than an error either way.
+                if (!wantPresent) {
+                  return {
+                    text: 'computer.wait ok — the window is gone, so the text is too',
+                  };
+                }
+                return {
+                  text: 'maka_computer.wait failed: target_missing — the window being waited on is no longer there',
+                };
+              }
+              polls += 1;
+              const found = last.elements.some((element) =>
+                [element.label, element.value]
+                  .filter((part): part is string => typeof part === 'string')
+                  .some((part) => part.toLowerCase().includes(needle)),
+              );
+              if (found === wantPresent) {
+                const observation = registerObservation(record, last);
+                state.freshObservationSucceeded();
+                const waited = (
+                  (Date.now() - (deadline - Math.round((input.duration ?? 5) * 1000))) /
+                  1000
+                ).toFixed(1);
+                const text = `computer.wait ok — ${wantPresent ? 'appeared' : 'gone'} after ${waited}s`;
+                return {
+                  text: `${text}\n${persistedObservationText(observation)}`,
+                  modelText: `${text}\n${observationText(observation)}`,
+                };
+              }
+              if (Date.now() >= deadline) {
+                // The observation goes back with the timeout. What the window
+                // holds instead is the whole question a model asks next, and
+                // making it spend another call on that is the round trip this
+                // action exists to remove.
+                const observation = registerObservation(record, last);
+                state.freshObservationSucceeded();
+                const text = `maka_computer.wait failed: timeout — ${JSON.stringify(input.wait_for_text ?? input.wait_for_text_gone)} was still ${wantPresent ? 'absent' : 'present'} after ${(input.duration ?? 5).toFixed(1)}s and ${polls} looks. This is the window as it stands.`;
+                return {
+                  text: `${text}\n${persistedObservationText(observation)}`,
+                  modelText: `${text}\n${observationText(observation)}`,
+                  error: 'timeout',
+                };
+              }
+              await new Promise((resolve) => setTimeout(resolve, 250));
+            }
           }
           if (input.action === 'observe') {
             if (!deps.backend.observeApp) {
