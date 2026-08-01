@@ -801,7 +801,13 @@ export function createMakaCuBackend(opts: MakaCuBackendOptions): CuDispatchBacke
       elementId: modelId,
       role: element.role,
       ...(element.subrole ? { subrole: element.subrole } : {}),
-      ...(element.label ? { label: element.label } : {}),
+      // One name, from whichever attribute the application used. AppKit sets
+      // `AXDescription` on controls and `AXTitle` on menu items, and a model
+      // asking "what is this called" has no reason to care which — measured on
+      // Calculator, 23 of 35 window elements carry a description and 2 of 126
+      // menu items do. When both exist the description wins: it is the one
+      // written for a person being read to.
+      ...(element.label || element.title ? { label: element.label ?? element.title } : {}),
       ...(element.value !== undefined ? { value: element.value } : {}),
       enabled: element.enabled,
       // Only what changes a decision. `press` is what `click_element` already

@@ -322,6 +322,8 @@ export interface MakaCuElement {
   parentToken: string | null;
   depth: number;
   role: string;
+  /** `AXTitle`. A control usually carries one of this and `label`, not both. */
+  title?: string;
   subrole?: string;
   axIdentifier?: string;
   label?: string;
@@ -587,6 +589,12 @@ export function readElement(method: string, value: unknown): MakaCuElement {
   // §5.2: these five are absent, `null`, or a string. A number where a string
   // was declared is version skew; dropping it would report an element with no
   // label as an element that has none.
+  // §4.3 digests it and §6.2 reports `changed: ["title"]` for it, and it was
+  // never on the wire. Invisible while only windows were observed — AppKit
+  // controls set `AXDescription`, which arrives as `label` — and load-bearing
+  // the moment menus are: a menu item sets `AXTitle` and no description, so
+  // without this a menu reads as a list of anonymous nodes.
+  const title = optionalText(method, element.title, 'element.title');
   const subrole = optionalText(method, element.subrole, 'element.subrole');
   const axIdentifier = optionalText(method, element.axIdentifier, 'element.axIdentifier');
   const label = optionalText(method, element.label, 'element.label');
@@ -597,6 +605,7 @@ export function readElement(method: string, value: unknown): MakaCuElement {
     parentToken: requireNullableString(method, element.parentToken, 'element.parentToken'),
     depth: requireNumber(method, element.depth, 'element.depth'),
     role: requireString(method, element.role, 'element.role'),
+    ...(title === undefined ? {} : { title }),
     ...(subrole === undefined ? {} : { subrole }),
     ...(axIdentifier === undefined ? {} : { axIdentifier }),
     ...(label === undefined ? {} : { label }),
