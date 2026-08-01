@@ -1964,7 +1964,7 @@ describe('ShellRunProcessManager', () => {
               pty: true,
             }),
           ),
-        /Live PTY capacity is full \(1\)/,
+        /No free interactive \(PTY\) background task slot: 1 .*StopBackgroundTask/s,
       );
 
       const pipeRun = await manager.runBackgroundBash(
@@ -1985,7 +1985,7 @@ describe('ShellRunProcessManager', () => {
               command: waitForeverCommand(),
             }),
           ),
-        /Live background task capacity is full \(2\)/,
+        /No free background task slot: 2 .*StopBackgroundTask/s,
       );
 
       await manager.stopBackgroundTask('session-1', ptyRun.ref, NO_ABORT);
