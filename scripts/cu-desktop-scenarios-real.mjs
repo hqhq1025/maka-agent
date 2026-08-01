@@ -349,6 +349,196 @@ const SCENARIOS = [
       return { ok: /\b579\b/.test(display), detail: `display ${JSON.stringify(display)}` };
     },
   },
+  // Everything above asks for one thing inside one application. That is not
+  // what people ask for. "Take what is in A and put it in B" is the ordinary
+  // shape of desktop work, and until now the matrix had not tested it once —
+  // so nothing here is known to work, and the point of these three is to find
+  // out where the surface stops rather than to confirm that it does not.
+  {
+    key: 'cross-app-carry',
+    ask: '把计算器算出来的结果记到文本编辑里',
+    app: 'Calculator',
+    bundle: 'com.apple.calculator',
+    expect:
+      'Two applications, one turn: read a value out of one window and write it into another. Every action here exists — observe, element_sequence, set_value — but nothing has ever asked the model to hold a value across a target change. Watch whether the observation of the second app invalidates its memory of the first.',
+    prompt:
+      '用 computer use 在计算器里算 88 乘以 7，然后把算出来的结果数字写到「文本编辑」已经打开的那个空文档里。写完读一遍确认，然后停。',
+    async before() {
+      await mkdir(SCRATCH, { recursive: true });
+      const file = join(SCRATCH, 'carry.txt');
+      await writeFile(file, '', 'utf8');
+      await quit('TextEdit');
+      await quit('Calculator');
+      await launch('TextEdit', file);
+      await launch('Calculator');
+      return { file };
+    },
+    async verify() {
+      // 88 × 7 = 616. An independent reader looks at the document, not at
+      // anything Computer Use says about it.
+      const written = (await textAreas('com.apple.TextEdit')).join(' ');
+      return { ok: /616/.test(written), detail: `document ${JSON.stringify(written.slice(0, 80))}` };
+    },
+  },
+  {
+    key: 'cross-app-read',
+    ask: '把访达里选中那个文件的名字记下来',
+    app: 'Finder',
+    bundle: 'com.apple.finder',
+    expect:
+      'The value to carry is a label in one window rather than a number the model computed, so it cannot reconstruct it — it has to have read it. Tests whether a label survives the round trip through a second application.',
+    prompt:
+      '用 computer use 看一下访达（Finder）窗口里列出的文件，找到名字里带 needle 的那个文件，把它的完整文件名写到「文本编辑」已经打开的那个空文档里。写完读一遍确认，然后停。',
+    async before() {
+      const dir = join(SCRATCH, 'haystack');
+      await mkdir(dir, { recursive: true });
+      for (const name of ['alpha.txt', 'needle-7f3a.txt', 'omega.txt']) {
+        await writeFile(join(dir, name), 'x', 'utf8');
+      }
+      const doc = join(SCRATCH, 'found.txt');
+      await writeFile(doc, '', 'utf8');
+      await quit('TextEdit');
+      await launch('TextEdit', doc);
+      await exec('open', ['-g', '-a', 'Finder', dir]).catch(() => {});
+      await new Promise((r) => setTimeout(r, 2500));
+      return { dir };
+    },
+    async verify() {
+      const written = (await textAreas('com.apple.TextEdit')).join(' ');
+      return {
+        ok: /needle-7f3a/.test(written),
+        detail: `document ${JSON.stringify(written.slice(0, 80))}`,
+      };
+    },
+  },
+  {
+    key: 'two-window-arrange',
+    ask: '把这两个窗口并排放，一左一右',
+    app: 'Calculator',
+    bundle: 'com.apple.calculator',
+    expect:
+      'window_action against two targets in one turn. Single-window arrange already works; this asks whether the model can hold two frames, or whether observing the second retires the first and it has to re-observe between every move.',
+    prompt:
+      '用 computer use 把计算器和「文本编辑」这两个窗口并排放好：计算器放屏幕左半边，文本编辑放右半边，两个都不要重叠。摆完就停。',
+    async before() {
+      await mkdir(SCRATCH, { recursive: true });
+      const file = join(SCRATCH, 'side-by-side.txt');
+      await writeFile(file, 'side by side\n', 'utf8');
+      await quit('TextEdit');
+      await quit('Calculator');
+      await launch('TextEdit', file);
+      await launch('Calculator');
+      const [calc, text] = await Promise.all([
+        oracle('com.apple.calculator', 'AXWindow'),
+        oracle('com.apple.TextEdit', 'AXWindow'),
+      ]);
+      return {
+        calc: JSON.stringify((calc.elements ?? [])[0]?.frame ?? null),
+        text: JSON.stringify((text.elements ?? [])[0]?.frame ?? null),
+      };
+    },
+    async verify() {
+      const [calc, text] = await Promise.all([
+        oracle('com.apple.calculator', 'AXWindow'),
+        oracle('com.apple.TextEdit', 'AXWindow'),
+      ]);
+      const a = (calc.elements ?? [])[0]?.frame;
+      const b = (text.elements ?? [])[0]?.frame;
+      if (!a || !b) return { ok: false, detail: 'one of the two windows is gone' };
+      // Side by side means one ends before the other begins. Which one is on
+      // the left is the model's call; the ask only said not overlapping.
+      const apart = a.x + a.w <= b.x + 1 || b.x + b.w <= a.x + 1;
+      return {
+        ok: apart,
+        detail: `calc @${a.x} w${a.w}, text @${b.x} w${b.w} — ${apart ? 'apart' : 'overlapping'}`,
+      };
+    },
+  },
+  // The three above are two applications and one hop. These are the long ones:
+  // a value has to survive being read, judged and acted on, across enough turns
+  // that a surface which spends a frame per call runs out of room. Every task
+  // here is one sentence a person would actually say.
+  {
+    key: 'conditional-branch',
+    ask: '看看文档里的数字，大于 100 就减 50，否则加 50',
+    app: 'TextEdit',
+    bundle: 'com.apple.TextEdit',
+    expect:
+      'The model cannot plan this before it looks: which arithmetic to do depends on a number it has not read yet. Tests read → judge → act, where the judgement is the model\'s and the evidence is on screen.',
+    prompt:
+      '用 computer use 看一下「文本编辑」里打开的那个文档，里面有一个数字。如果这个数字大于 100，就在计算器里用它减去 50；如果不大于 100，就在计算器里用它加上 50。算完把结果读给我，然后停。',
+    async before() {
+      await mkdir(SCRATCH, { recursive: true });
+      const file = join(SCRATCH, 'branch.txt');
+      // 137 > 100, so the answer is 87. A model that guesses without reading
+      // has one chance in two of picking the wrong branch, and 187 is the tell.
+      await writeFile(file, '137\n', 'utf8');
+      await quit('TextEdit');
+      await quit('Calculator');
+      await launch('TextEdit', file);
+      await launch('Calculator');
+      return { document: '137' };
+    },
+    async verify() {
+      const seen = await oracle('com.apple.calculator', 'AXStaticText');
+      const display = (seen.elements ?? []).map((e) => strip(e.value)).join(' | ');
+      const wrongBranch = /\b187\b/.test(display);
+      return {
+        ok: /\b87\b/.test(display) && !wrongBranch,
+        detail: wrongBranch
+          ? `display ${JSON.stringify(display)} — took the wrong branch, so it did not read the document`
+          : `display ${JSON.stringify(display)}`,
+      };
+    },
+  },
+  {
+    key: 'multi-step-tally',
+    ask: '算三笔账，每笔都记下来',
+    app: 'Calculator',
+    bundle: 'com.apple.calculator',
+    expect:
+      'Six alternations between two applications in one turn. Nothing here is hard on its own; the question is whether the surface still has room after the fifth target change, or whether re-observing between every hop eats the turn.',
+    prompt:
+      '用 computer use 帮我算三笔账，每算完一笔就把结果写进「文本编辑」那个文档里，一行一个：第一笔 25 乘 4，第二笔 90 减 33，第三笔 144 除以 12。三笔都记完就停。',
+    async before() {
+      await mkdir(SCRATCH, { recursive: true });
+      const file = join(SCRATCH, 'tally.txt');
+      await writeFile(file, '', 'utf8');
+      await quit('TextEdit');
+      await quit('Calculator');
+      await launch('TextEdit', file);
+      await launch('Calculator');
+      return { expects: '100, 57, 12' };
+    },
+    async verify() {
+      const written = (await textAreas('com.apple.TextEdit')).join(' ');
+      const found = ['100', '57', '12'].filter((n) => new RegExp(`\\b${n}\\b`).test(written));
+      return {
+        ok: found.length === 3,
+        detail: `document has ${found.length}/3 — ${JSON.stringify(written.slice(0, 80))}`,
+      };
+    },
+  },
+  {
+    key: 'long-sequence',
+    ask: '算一个多步的式子，每步结果都告诉我',
+    app: 'Calculator',
+    bundle: 'com.apple.calculator',
+    expect:
+      'One application, but the model must read the display between steps rather than computing ahead and typing the answer. Tests whether an observation after each step is affordable, and whether the model reaches for element_sequence or spends a call per keypress.',
+    prompt:
+      '用 computer use 在计算器里一步一步算 (12 加 8) 乘 5 再除以 2，每算完一步就把计算器上显示的数字读给我，不要自己心算。算完就停。',
+    async before() {
+      await quit('Calculator');
+      await launch('Calculator');
+      return {};
+    },
+    async verify() {
+      const seen = await oracle('com.apple.calculator', 'AXStaticText');
+      const display = (seen.elements ?? []).map((e) => strip(e.value)).join(' | ');
+      return { ok: /\b50\b/.test(display), detail: `display ${JSON.stringify(display)}` };
+    },
+  },
 ];
 
 const args = process.argv.slice(2).filter((a) => !a.startsWith('-'));
