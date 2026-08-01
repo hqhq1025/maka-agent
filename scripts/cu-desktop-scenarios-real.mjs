@@ -301,6 +301,29 @@ const SCENARIOS = [
     },
   },
   {
+    key: 'find-in-big-window',
+    ask: '在访达里找到「下载」这一项',
+    app: 'Finder',
+    bundle: 'com.apple.finder',
+    expect:
+      'A Finder window is about 1,200 elements and 14,700 tokens, and almost none of it is structural noise — 481 cells and 363 static texts are the file list. Tests whether observe(query:) is reachable and whether the model reaches for it instead of reading the whole tree.',
+    prompt:
+      '用 computer use 在访达（Finder）窗口里找到边栏中的「下载」，告诉我它的 element_id。只查看，不要点击、不要打开任何东西。',
+    readOnly: true,
+    async before() {
+      await exec('open', ['-g', '-a', 'Finder', '/Applications']).catch(() => {});
+      await new Promise((r) => setTimeout(r, 2500));
+      return {};
+    },
+    async verify() {
+      // Read-only by construction: what is checked is that the window is still
+      // the one that was opened, not that anything changed.
+      const seen = await oracle('com.apple.finder');
+      const has = (seen.elements ?? []).some((e) => /下载|Downloads/.test(strip(e.value)));
+      return { ok: has, detail: has ? 'the sidebar still lists 下载' : 'the sidebar item is gone' };
+    },
+  },
+  {
     key: 'calc-arith',
     ask: '帮我算一下 123 加 456',
     app: 'Calculator',
