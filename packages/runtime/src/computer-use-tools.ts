@@ -124,7 +124,7 @@ export const computerWireParams = z
         ...CU_ACTION_TYPES,
       ] as [string, ...string[]])
       .describe(
-        'Operation to perform. Required fields by action: list_apps takes an optional app to filter by — pass the name you were given ("TextEdit", "文本编辑") and it returns the matching app ids, which is far cheaper than listing everything; without it only apps that currently have a window are listed; launch_app requires app; observe/screenshot require app or window_id, and observe takes an optional menu to open one menu bar menu; click_element requires observation_id and element_id; set_value requires observation_id, element_id, and value; select_text/secondary_action require observation_id, element_id, and text; scroll_element requires observation_id, element_id, and scroll_direction, with optional scroll_amount; element_sequence requires observation_id and steps, where each step names a control by the label it shows and optionally its role — prefer it whenever several controls must be operated in order, since it costs one call instead of one per control; window_action requires observation_id, element_id and window_action (move, resize or minimize), with position for move and size for resize — element_id is the window itself, which is the first element of the observation, and position is in screen points, the same space the observation reports its window bounds and displays in, so moving a window to the left edge of a screen means that display x with y unchanged; press_key requires observation_id and text, and takes an optional element_id — supply it and the control is focused before the key is posted, omit it and the key lands on whatever the observed window already has focused; coordinate actions require observation_id plus their coordinate fields.',
+        'Operation to perform. Required fields by action: list_apps takes an optional app to filter by — pass the name you were given ("TextEdit", "文本编辑") and it returns the matching app ids, which is far cheaper than listing everything; without it only apps that currently have a window are listed; launch_app requires app; observe/screenshot require app or window_id, and observe takes an optional menu to open one menu bar menu and an optional query to show only the matching part of a large window; click_element requires observation_id and element_id; set_value requires observation_id, element_id, and value; select_text/secondary_action require observation_id, element_id, and text; scroll_element requires observation_id, element_id, and scroll_direction, with optional scroll_amount; element_sequence requires observation_id and steps, where each step names a control by the label it shows and optionally its role — prefer it whenever several controls must be operated in order, since it costs one call instead of one per control; window_action requires observation_id, element_id and window_action (move, resize or minimize), with position for move and size for resize — element_id is the window itself, which is the first element of the observation, and position is in screen points, the same space the observation reports its window bounds and displays in, so moving a window to the left edge of a screen means that display x with y unchanged; press_key requires observation_id and text, and takes an optional element_id — supply it and the control is focused before the key is posted, omit it and the key lands on whatever the observed window already has focused; coordinate actions require observation_id plus their coordinate fields.',
       ),
     // "Exact" was already in this description and was not enough. On a real
     // desktop chain the model asked for "Calculator" and got nothing, because
@@ -164,6 +164,17 @@ export const computerWireParams = z
           'can do is a menu command and nothing in the window reaches it. Open the one menu you need — the whole ' +
           'menu bar is several times the size of the window. A command shown as disabled cannot be pressed: it ' +
           'needs its application in front, which Computer Use does not do.',
+      ),
+    query: z
+      .string()
+      .min(1)
+      .max(256)
+      .optional()
+      .describe(
+        'For observe: show only elements whose label, value or role contains this text, plus the elements containing them. ' +
+          'Element ids are unchanged, so anything found can be acted on directly. Use it on a large window — a Finder ' +
+          'window is about 1,200 elements and a VS Code window about 1,000, and most of that is a file list or page text ' +
+          'you did not ask for. Observe without a query first if you do not know what the window holds.',
       ),
     observation_id: z
       .string()
@@ -1559,6 +1570,7 @@ export function buildComputerUseTools(deps: {
                   windowId: input.window_id,
                   includeScreenshot,
                   ...(input.menu ? { menu: input.menu } : {}),
+                  ...(input.query ? { query: input.query } : {}),
                 },
                 abortSignal,
                 runCtx,

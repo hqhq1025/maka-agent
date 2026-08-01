@@ -73,6 +73,8 @@ export const computerParams = z.discriminatedUnion('action', [
       // A title rather than a path, because only the top level can be opened —
       // a submenu comes with the menu that contains it.
       menu: z.string().min(1).max(256).optional(),
+      // Narrows what is written, never what can be addressed.
+      query: z.string().min(1).max(256).optional(),
     })
     .strict()
     .refine((input) => input.app !== undefined || input.window_id !== undefined, {

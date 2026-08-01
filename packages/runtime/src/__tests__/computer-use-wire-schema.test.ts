@@ -34,6 +34,7 @@ const CALLS: Array<Record<string, unknown>> = [
   { action: 'launch_app', app: 'TextEdit' },
   { action: 'observe', app: 'com.apple.TextEdit' },
   { action: 'observe', app: 'com.apple.TextEdit', menu: '文件' },
+  { action: 'observe', app: 'com.apple.finder', query: '下载' },
   { action: 'observe', window_id: 7, include_screenshot: false },
   { action: 'click_element', observation_id: 'o', element_id: '3' },
   { action: 'set_value', observation_id: 'o', element_id: '3', value: 'hello' },

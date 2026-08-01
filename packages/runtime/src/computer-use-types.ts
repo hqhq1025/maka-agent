@@ -133,6 +133,11 @@ export interface CuObservation {
    * open reads as a list of things that cannot be used.
    */
   menu?: { opened?: string; truncated?: boolean };
+  /**
+   * The filter this observation was asked for, echoed so the rendering can say
+   * it is showing a part rather than the whole.
+   */
+  query?: string;
   appId: string;
   pid: number;
   windowId: number;
@@ -321,7 +326,13 @@ export interface CuDispatchBackend {
     context: CuRunContext,
   ): Promise<CuLaunchedApp>;
   observeApp?(
-    input: { app?: string; windowId?: number; includeScreenshot: boolean; menu?: string },
+    input: {
+      app?: string;
+      windowId?: number;
+      includeScreenshot: boolean;
+      menu?: string;
+      query?: string;
+    },
     signal: AbortSignal,
     context: CuRunContext,
   ): Promise<CuObservation>;
@@ -331,7 +342,13 @@ export interface CuDispatchBackend {
     context: CuRunContext,
   ): Promise<CuRunResult>;
   captureObservation?(
-    input: { app?: string; windowId?: number; includeScreenshot: true; menu?: string },
+    input: {
+      app?: string;
+      windowId?: number;
+      includeScreenshot: true;
+      menu?: string;
+      query?: string;
+    },
     signal: AbortSignal,
     context: CuRunContext,
   ): Promise<CuObservation>;

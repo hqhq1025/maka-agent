@@ -899,6 +899,7 @@ export function createMakaCuBackend(opts: MakaCuBackendOptions): CuDispatchBacke
     // title that names no menu comes back as the bar (§5.8), and the model has
     // to be able to tell that from a menu that is genuinely empty.
     menuScope?: string,
+    query?: string,
   ): Promise<CuObservation | CaptureFailure> {
     let screenshot: CuScreenshot | undefined;
     if (snapshot.image) {
@@ -970,6 +971,7 @@ export function createMakaCuBackend(opts: MakaCuBackendOptions): CuDispatchBacke
       // did stop at a depth, and it stopped there because the host said so.
       // Reporting the host's own request as a truncation would tell the model
       // the machine had failed to show it something.
+      ...(query ? { query } : {}),
       ...(snapshot.menu
         ? {
             menu: {
@@ -1061,7 +1063,18 @@ export function createMakaCuBackend(opts: MakaCuBackendOptions): CuDispatchBacke
   }
 
   async function observe(
-    input: { app?: string; windowId?: number; includeScreenshot: boolean; menu?: string },
+    input: {
+      app?: string;
+      windowId?: number;
+      includeScreenshot: boolean;
+      menu?: string;
+      // Not sent to the executor. A filter that narrowed the walk would narrow
+      // the snapshot the ids are minted from, and an id would then mean
+      // something different depending on what was searched for. It is applied
+      // where the tree is written instead, so the whole window is still
+      // addressable and only the rendering is smaller.
+      query?: string;
+    },
     signal: AbortSignal,
     context: CuRunContext,
   ): Promise<CuObservation> {
@@ -1092,7 +1105,7 @@ export function createMakaCuBackend(opts: MakaCuBackendOptions): CuDispatchBacke
       );
       if (!envelope.ok) throw new MakaCuDomainRefusal('observe', envelope.error);
       const snapshot = readSnapshot('observe', envelope.snapshot);
-      const observation = await toObservation(snapshot, context, input.menu);
+      const observation = await toObservation(snapshot, context, input.menu, input.query);
       if ('outcome' in observation) {
         throw new Error(`${observation.outcome.error}: ${observation.outcome.message}`);
       }

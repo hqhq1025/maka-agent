@@ -50,6 +50,45 @@ const MAX_VALUE_CHARS = 256;
 /** Depth cap, so a malformed parent chain cannot indent without bound. */
 const MAX_DEPTH = 24;
 
+/**
+ * Keep the elements a query matches, and every ancestor that leads to one.
+ *
+ * The ancestors are the point: a match on its own is a line with no context,
+ * and the indentation that says where it sits is the reason this rendering is a
+ * tree at all. Everything else goes.
+ *
+ * Ids are untouched. That is the whole reason this is safe — it narrows what is
+ * *written*, never what can be addressed, so a model can filter, act on what it
+ * found, and never learn that the rest of the tree was there all along.
+ *
+ * Measured need: Finder observes at 1,226 elements and about 14,700 tokens, VS
+ * Code at 986 and 14,100. Neither is structural noise that could be collapsed
+ * away — Finder's bulk is 481 cells and 363 static texts, which are the file
+ * list, and that is real content. The only way past a tree that large is to
+ * stop asking for all of it.
+ */
+function matching(elements: readonly CuObservedElement[], query: string): CuObservedElement[] {
+  const needle = query.trim().toLowerCase();
+  if (needle === '') return [...elements];
+  const byId = new Map(elements.map((element) => [element.elementId, element]));
+  const keep = new Set<string>();
+  for (const element of elements) {
+    const haystack = [element.label, element.value, element.role, element.subrole]
+      .filter((part): part is string => typeof part === 'string')
+      .join(' ')
+      .toLowerCase();
+    if (!haystack.includes(needle)) continue;
+    keep.add(element.elementId);
+    let parent = element.parentElementId;
+    for (let hops = 0; parent !== undefined && hops < MAX_DEPTH; hops += 1) {
+      if (keep.has(parent)) break;
+      keep.add(parent);
+      parent = byId.get(parent)?.parentElementId;
+    }
+  }
+  return elements.filter((element) => keep.has(element.elementId));
+}
+
 export function renderObservationForModel(observation: CuObservation): string {
   // The menu bar is separated out and captioned rather than left to appear as a
   // second unexplained root. A model reading `AXMenuBar` under the window tree
@@ -57,8 +96,10 @@ export function renderObservationForModel(observation: CuObservation): string {
   // observation, or why half their contents are unavailable — and most of what
   // an application can do is only reachable through them.
   const { window, menu } = splitMenu(observation.elements);
-  const lines: string[] = [header(observation, window.length)];
-  for (const [element, depth] of walk(collapseStructuralWrappers(window))) {
+  const query = observation.query ?? '';
+  const shown = query ? matching(window, query) : window;
+  const lines: string[] = [header(observation, window.length, query, shown.length)];
+  for (const [element, depth] of walk(collapseStructuralWrappers(shown))) {
     lines.push(`${'\t'.repeat(depth)}${elementLine(element)}`);
   }
   if (menu.length > 0) {
@@ -286,7 +327,12 @@ function menuCaption(observation: CuObservation, menu: readonly CuObservedElemen
   return parts.join(' ');
 }
 
-function header(observation: CuObservation, elementCount: number): string {
+function header(
+  observation: CuObservation,
+  elementCount: number,
+  query: string,
+  shownCount: number,
+): string {
   const parts = [
     `observation_id=${observation.observationId}`,
     `app=${observation.appId}`,
@@ -295,6 +341,14 @@ function header(observation: CuObservation, elementCount: number): string {
   ];
   if (observation.windowTitle) parts.push(`window=${quote(observation.windowTitle)}`);
   parts.push(`elements=${elementCount}`);
+  // Said in the header, beside the count it contradicts. A filtered tree that
+  // does not announce itself is a tree the model reads as the whole window, and
+  // "the control is not there" is the conclusion it draws.
+  if (query) {
+    parts.push(
+      `query=${quote(query)}(showing ${shownCount} of ${elementCount}: matches and the elements containing them. Observe without a query for the rest)`,
+    );
+  }
   // Said in the header rather than at the end, because a model that stops
   // reading a long list early must still learn that the list was cut. The
   // wording is the instruction, not the fact: "there may be more" is what
