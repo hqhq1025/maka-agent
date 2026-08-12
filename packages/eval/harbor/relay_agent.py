@@ -7,6 +7,7 @@ import contextlib
 import json
 import os
 import shlex
+import shutil
 import tempfile
 from pathlib import Path
 from typing import Any
@@ -43,11 +44,20 @@ class RelayAgent(BaseAgent):
         control: asyncio.Task[bytes] | None = None
         request: dict[str, Any] | None = None
         scope_path = f"/tmp/maka-eval-{self._token}.pid"
+        output_path = "/logs/artifacts/maka-subject.stdout.txt"
+        stderr_path = "/logs/artifacts/maka-subject.stderr.txt"
         try:
             await _send(writer, {"token": self._token, "kind": "ready", "instruction": instruction})
             request = json.loads(await reader.readline())
             _require_message(request, self._token, "execute")
-            command = await _prepare_command(environment, request, self._token, scope_path)
+            command = await _prepare_command(
+                environment,
+                request,
+                self._token,
+                scope_path,
+                output_path,
+                stderr_path,
+            )
             execution = asyncio.create_task(environment.exec(command, cwd=request["cwd"]))
             control = asyncio.create_task(reader.readline())
             done, _ = await asyncio.wait({execution, control}, return_when=asyncio.FIRST_COMPLETED)
@@ -55,6 +65,12 @@ class RelayAgent(BaseAgent):
             if cancelled:
                 _require_message(json.loads(control.result()), self._token, "cancel")
             result = await _settle(environment, request, scope_path, execution)
+            stdout = await _read_subject_output(environment, output_path)
+            stderr = await _read_subject_output(environment, stderr_path, limit_bytes=64 * 1024)
+            if not stdout:
+                stdout = str(getattr(result, "stdout", "") or "")
+            if not stderr:
+                stderr = str(getattr(result, "stderr", "") or "")[-64 * 1024 :]
             await _send(
                 writer,
                 {
@@ -62,7 +78,8 @@ class RelayAgent(BaseAgent):
                     "kind": "executed",
                     "termination": "cancelled" if cancelled else "exited",
                     "exitCode": 130 if cancelled else result.return_code,
-                    "stdout": result.stdout or "",
+                    "stdout": stdout,
+                    "stderr": stderr,
                 },
             )
             decision = json.loads(await (reader.readline() if cancelled else control))
@@ -71,6 +88,14 @@ class RelayAgent(BaseAgent):
         except asyncio.CancelledError:
             if request is not None and execution is not None:
                 result = await _settle(environment, request, scope_path, execution)
+                stdout = await _read_subject_output(environment, output_path)
+                stderr = await _read_subject_output(
+                    environment, stderr_path, limit_bytes=64 * 1024
+                )
+                if not stdout:
+                    stdout = str(getattr(result, "stdout", "") or "")
+                if not stderr:
+                    stderr = str(getattr(result, "stderr", "") or "")[-64 * 1024 :]
                 with contextlib.suppress(BaseException):
                     await _send(
                         writer,
@@ -79,7 +104,8 @@ class RelayAgent(BaseAgent):
                             "kind": "executed",
                             "termination": "framework_timeout",
                             "exitCode": 124,
-                            "stdout": result.stdout or "",
+                            "stdout": stdout,
+                            "stderr": stderr,
                         },
                     )
             raise
@@ -97,8 +123,15 @@ class RelayAgent(BaseAgent):
 
 
 async def _prepare_command(
-    environment: Any, request: dict[str, Any], token: str, scope_path: str
+    environment: Any,
+    request: dict[str, Any],
+    token: str,
+    scope_path: str,
+    output_path: str | None = None,
+    stderr_path: str | None = None,
 ) -> str:
+    output_path = output_path or f"/tmp/maka-eval-{token}.stdout"
+    stderr_path = stderr_path or f"/tmp/maka-eval-{token}.stderr"
     credentials = request.get("credentials")
     if not isinstance(credentials, dict) or not all(
         isinstance(key, str) and isinstance(value, str) for key, value in credentials.items()
@@ -117,8 +150,33 @@ async def _prepare_command(
     finally:
         secret_path.unlink(missing_ok=True)
     subject = shlex.join([request["command"], *request["args"]])
-    inner = f"echo $$ > {shlex.quote(scope_path)}; . {shlex.quote(container_path)}; rm -f {shlex.quote(container_path)}; exec {subject}"
+    inner = (
+        f"umask 077; mkdir -p {shlex.quote(str(Path(output_path).parent))}; "
+        f": > {shlex.quote(output_path)}; : > {shlex.quote(stderr_path)}; "
+        f"echo $$ > {shlex.quote(scope_path)}; "
+        f". {shlex.quote(container_path)}; rm -f {shlex.quote(container_path)}; "
+        f"exec {subject} >{shlex.quote(output_path)} 2>{shlex.quote(stderr_path)}"
+    )
     return f"setsid sh -c {shlex.quote(inner)}"
+
+
+async def _read_subject_output(
+    environment: Any, output_path: str, limit_bytes: int | None = None
+) -> str:
+    with tempfile.TemporaryDirectory() as directory:
+        target = Path(directory) / "subject-output"
+        try:
+            await environment.download_file(output_path, target)
+            contents = target.read_bytes()
+            if limit_bytes is not None:
+                contents = contents[-limit_bytes:]
+            return contents.decode("utf-8", errors="replace")
+        except (FileNotFoundError, OSError, shutil.Error):
+            return ""
+        except RuntimeError as error:
+            if "Could not find the file" in str(error):
+                return ""
+            raise
 
 
 async def _settle(environment: Any, request: dict[str, Any], scope_path: str, execution: Any) -> Any:
