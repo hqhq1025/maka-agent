@@ -1,7 +1,7 @@
 import { spawn, spawnSync, type ChildProcess } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { readFileSync, rmSync, statSync } from 'node:fs';
-import { chmod, mkdir, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, rename, writeFile } from 'node:fs/promises';
 import { createServer, type IncomingMessage, type Server } from 'node:http';
 import { basename, dirname, join } from 'node:path';
 import type { Readable } from 'node:stream';
@@ -19,6 +19,7 @@ const resultToken = takeRelayResultToken();
 
 type SubjectStatus = 'completed' | 'failed' | 'infra_failed' | 'indeterminate';
 const CLASSIFIABLE_RECORD_LIMIT_BYTES = 16 * 1024 * 1024;
+let atomicWriteSequence = 0;
 
 interface Usage {
   inputTokens: number;
@@ -51,6 +52,7 @@ process.once('SIGINT', interrupt);
 
 const logsRoot = rooted(systemRoot, '/logs/agent');
 const statePath = join(logsRoot, `${profile}.wrapper-state.json`);
+const usagePath = join(logsRoot, `${profile}.provider-usage.json`);
 const artifacts: Record<string, unknown>[] = [];
 let usage: Usage | null = null;
 let costUsd: number | null = null;
@@ -70,7 +72,13 @@ try {
   delete process.env.ANTHROPIC_API_KEY;
   delete process.env.DEEPSEEK_API_KEY;
   if (!key) throw new Error('external subject credential is missing');
-  const proxy = await startMeteringProxy(baseUrl, key, profile === 'claude-code');
+  const proxy = await startMeteringProxy(
+    baseUrl,
+    key,
+    profile === 'claude-code',
+    profile,
+    usagePath,
+  );
   try {
     await writeState('proxy_started');
     const prepared = await prepareProfile(profile, proxy.baseUrl, systemRoot, command, args);
@@ -78,6 +86,7 @@ try {
     if (profile === 'claude-code') prepareClaudeWorkspace(systemRoot, prepared.home);
     const result = await runChild(prepared.command, prepared.args, prepared.env, profile);
     child = undefined;
+    await proxy.settle();
     await writeState('child_exited', { exitCode: result.exitCode });
     usage = proxy.usage();
     costUsd = usage && proxy.usageComplete() ? estimateCost(usage) : null;
@@ -112,6 +121,7 @@ try {
         toolNames: proxy.observedToolNames(),
       },
       fileArtifact('wrapper-state', statePath, profile),
+      fileArtifact('provider-metering-snapshot', usagePath, profile),
     );
   } finally {
     await proxy.close();
@@ -612,6 +622,8 @@ async function startMeteringProxy(
   upstreamBaseUrl: string,
   upstreamKey: string,
   anthropic: boolean,
+  selected: Profile,
+  checkpointPath: string,
 ): Promise<{
   baseUrl: string;
   usage(): Usage | null;
@@ -622,11 +634,14 @@ async function startMeteringProxy(
   removedWebToolCount(): number;
   requestModels(): readonly string[];
   observedToolNames(): readonly string[];
+  settle(): Promise<void>;
   close(): Promise<void>;
 }> {
   const total = zeroUsage();
   let measured = false;
   let requests = 0;
+  let settledRequests = 0;
+  let inFlightRequests = 0;
   let admittedRequests = 0;
   let usageRequests = 0;
   let removedWebTools = 0;
@@ -634,62 +649,99 @@ async function startMeteringProxy(
   const observedToolNames = new Set<string>();
   const dispatcher = process.env.HTTPS_PROXY ? new ProxyAgent(process.env.HTTPS_PROXY) : undefined;
   const active = new Set<Promise<void>>();
+  let checkpointWrites = Promise.resolve();
+  const persistCheckpoint = () => {
+    const usage = measured
+      ? { ...total, totalTokens: total.inputTokens + total.outputTokens }
+      : null;
+    const usageComplete =
+      inFlightRequests === 0 && admittedRequests > 0 && usageRequests === admittedRequests;
+    const value = {
+      schemaVersion: 'maka.external_provider_usage.v1',
+      profile: selected,
+      usage,
+      costUsd: usage ? estimateCost(usage) : null,
+      requests,
+      settledRequests,
+      inFlightRequests,
+      admittedRequests,
+      usageRequests,
+      missingUsageRequests: Math.max(0, admittedRequests - usageRequests),
+      usageComplete,
+      removedWebTools,
+      models: [...requestModels].sort(),
+      toolNames: [...observedToolNames].sort(),
+    };
+    checkpointWrites = checkpointWrites.then(() => writeJsonAtomic(checkpointPath, value));
+    return checkpointWrites;
+  };
+  await persistCheckpoint();
   const server = createServer((request, response) => {
     const operation = (async () => {
       requests += 1;
-      const projected = removeEvalWebTools(await readRequest(request));
-      removedWebTools += projected.removed;
-      if (projected.model) requestModels.add(projected.model);
-      for (const name of projected.toolNames) observedToolNames.add(name);
-      const target = joinUpstream(upstreamBaseUrl, request.url ?? '/');
-      const headers: Record<string, string> = {};
-      for (const [name, value] of Object.entries(request.headers)) {
-        if (
-          value === undefined ||
-          ['host', 'content-length', 'connection', 'authorization', 'x-api-key'].includes(
-            name.toLowerCase(),
-          )
-        )
-          continue;
-        headers[name] = Array.isArray(value) ? value.join(', ') : value;
-      }
-      if (anthropic) headers['x-api-key'] = upstreamKey;
-      else headers.authorization = `Bearer ${upstreamKey}`;
-      const upstream = await undiciFetch(target, {
-        method: request.method,
-        headers,
-        body: projected.body.length === 0 ? undefined : new Uint8Array(projected.body),
-        ...(dispatcher ? { dispatcher } : {}),
-      });
-      response.statusCode = upstream.status;
-      upstream.headers.forEach((value, name) => {
-        if (
-          !['content-length', 'content-encoding', 'transfer-encoding', 'connection'].includes(name)
-        )
-          response.setHeader(name, value);
-      });
-      const parser = usageParser(anthropic);
+      inFlightRequests += 1;
       try {
-        if (upstream.body) {
-          const reader = upstream.body.getReader();
-          for (;;) {
-            const next = await reader.read();
-            if (next.done) break;
-            response.write(Buffer.from(next.value));
-            parser.push(Buffer.from(next.value).toString('utf8'));
+        await persistCheckpoint();
+        const projected = removeEvalWebTools(await readRequest(request));
+        removedWebTools += projected.removed;
+        if (projected.model) requestModels.add(projected.model);
+        for (const name of projected.toolNames) observedToolNames.add(name);
+        const target = joinUpstream(upstreamBaseUrl, request.url ?? '/');
+        const headers: Record<string, string> = {};
+        for (const [name, value] of Object.entries(request.headers)) {
+          if (
+            value === undefined ||
+            ['host', 'content-length', 'connection', 'authorization', 'x-api-key'].includes(
+              name.toLowerCase(),
+            )
+          )
+            continue;
+          headers[name] = Array.isArray(value) ? value.join(', ') : value;
+        }
+        if (anthropic) headers['x-api-key'] = upstreamKey;
+        else headers.authorization = `Bearer ${upstreamKey}`;
+        const upstream = await undiciFetch(target, {
+          method: request.method,
+          headers,
+          body: projected.body.length === 0 ? undefined : new Uint8Array(projected.body),
+          ...(dispatcher ? { dispatcher } : {}),
+        });
+        response.statusCode = upstream.status;
+        upstream.headers.forEach((value, name) => {
+          if (
+            !['content-length', 'content-encoding', 'transfer-encoding', 'connection'].includes(
+              name,
+            )
+          )
+            response.setHeader(name, value);
+        });
+        const parser = usageParser(anthropic);
+        try {
+          if (upstream.body) {
+            const reader = upstream.body.getReader();
+            for (;;) {
+              const next = await reader.read();
+              if (next.done) break;
+              response.write(Buffer.from(next.value));
+              parser.push(Buffer.from(next.value).toString('utf8'));
+            }
+          }
+          response.end();
+        } finally {
+          const parsed = parser.finish();
+          if (upstream.ok && parsed.admitted) {
+            admittedRequests += 1;
+            if (parsed.usage) {
+              usageRequests += 1;
+              measured = true;
+              addUsage(total, parsed.usage);
+            }
           }
         }
-        response.end();
       } finally {
-        const parsed = parser.finish();
-        if (upstream.ok && parsed.admitted) {
-          admittedRequests += 1;
-          if (parsed.usage) {
-            usageRequests += 1;
-            measured = true;
-            addUsage(total, parsed.usage);
-          }
-        }
+        settledRequests += 1;
+        inFlightRequests -= 1;
+        await persistCheckpoint();
       }
     })().catch((error: unknown) => {
       response.statusCode = 502;
@@ -712,12 +764,24 @@ async function startMeteringProxy(
     removedWebToolCount: () => removedWebTools,
     requestModels: () => [...requestModels].sort(),
     observedToolNames: () => [...observedToolNames].sort(),
+    settle: async () => {
+      await Promise.allSettled([...active]);
+      await checkpointWrites;
+    },
     close: async () => {
       await Promise.allSettled([...active]);
+      await checkpointWrites;
       await closeServer(server);
       await dispatcher?.close();
     },
   };
+}
+
+async function writeJsonAtomic(path: string, value: unknown): Promise<void> {
+  const temporary = `${path}.tmp-${process.pid}-${atomicWriteSequence++}`;
+  await writeFile(temporary, `${JSON.stringify(value)}\n`, { mode: 0o644 });
+  await rename(temporary, path);
+  await chmod(path, 0o644);
 }
 
 function usageParser(anthropic: boolean): {
