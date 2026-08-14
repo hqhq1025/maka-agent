@@ -383,6 +383,9 @@ async function prepareProfile(
     }
     env.DEEPSEEK_API_KEY = 'maka-eval-local';
     env.DEEPSEEK_BASE_URL = proxyBaseUrl;
+    env.DSH_PRESERVE_BACKGROUND_PROCESSES = '1';
+    env.DEBIAN_FRONTEND = 'noninteractive';
+    env.TZ = 'Etc/UTC';
   } else {
     const zcodeHome = join(home, '.zcode');
     const configRoot = join(zcodeHome, 'cli');
