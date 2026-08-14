@@ -1,7 +1,7 @@
 import { spawn, spawnSync, type ChildProcess } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { readFileSync, rmSync, statSync } from 'node:fs';
-import { chmod, mkdir, open, writeFile } from 'node:fs/promises';
+import { chmod, copyFile, mkdir, open, writeFile } from 'node:fs/promises';
 import { createServer, type IncomingMessage, type Server } from 'node:http';
 import { basename, dirname, join } from 'node:path';
 import type { Readable } from 'node:stream';
@@ -16,6 +16,7 @@ import { removeEvalWebTools } from './provider-web-tool-surface.js';
 import { takeRelayResultToken, writeRelayResult } from './relay-result-frame.js';
 
 const resultToken = takeRelayResultToken();
+const DEEPSEEK_HARNESS_PROFILE = 'maka-eval';
 
 type SubjectStatus = 'completed' | 'failed' | 'infra_failed' | 'indeterminate';
 const CLASSIFIABLE_RECORD_LIMIT_BYTES = 16 * 1024 * 1024;
@@ -366,6 +367,21 @@ async function prepareProfile(
       })}\n`,
       { mode: 0o600 },
     );
+  } else if (selected === 'deepseek-harness') {
+    const separator = executableArgs.lastIndexOf('--');
+    const taskIndex = separator + 1;
+    const task = executableArgs[taskIndex];
+    if (separator < 0 || !task) throw new Error('DeepSeek Harness task argument is missing');
+    if (task.startsWith('-')) executableArgs[taskIndex] = `Task instruction:\n${task}`;
+    env.DSH_HOME = join(home, 'dsh');
+    const profileRoot = join(env.DSH_HOME, 'profiles', DEEPSEEK_HARNESS_PROFILE);
+    await mkdir(profileRoot, { recursive: true, mode: 0o700 });
+    const source = rooted(root, '/opt/maka-agent/packages/eval/harbor/deepseek-harness-profile');
+    for (const file of ['package.json', 'cordis.yml', 'cordis.patch.yml']) {
+      await copyFile(join(source, file), join(profileRoot, file));
+    }
+    env.DEEPSEEK_API_KEY = 'maka-eval-local';
+    env.DEEPSEEK_BASE_URL = proxyBaseUrl;
   } else {
     const zcodeHome = join(home, '.zcode');
     const configRoot = join(zcodeHome, 'cli');
@@ -632,7 +648,11 @@ function classifyExecution(
       failureReason: `${selected} output record exceeded the classification limit`,
     };
   }
-  const completed = output.completed || (selected === 'zcode' && exitCode === 0 && output.nonempty);
+  const completed =
+    output.completed ||
+    ((selected === 'zcode' || selected === 'deepseek-harness') &&
+      exitCode === 0 &&
+      output.nonempty);
   const reportedError = output.reportedError;
   if (admittedRequests === 0) {
     return { status: 'infra_failed', failureReason: `${selected} failed before model admission` };
@@ -1071,7 +1091,8 @@ function isProfile(value: string | undefined): value is Profile {
     value === 'opencode' ||
     value === 'kimi-code' ||
     value === 'zcode' ||
-    value === 'pi'
+    value === 'pi' ||
+    value === 'deepseek-harness'
   );
 }
 

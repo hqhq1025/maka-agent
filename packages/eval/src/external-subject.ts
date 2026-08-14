@@ -318,7 +318,8 @@ function bundledProfile(args: readonly string[]): ExternalProfile | undefined {
     profile !== 'opencode' &&
     profile !== 'kimi-code' &&
     profile !== 'zcode' &&
-    profile !== 'pi'
+    profile !== 'pi' &&
+    profile !== 'deepseek-harness'
   ) {
     return undefined;
   }

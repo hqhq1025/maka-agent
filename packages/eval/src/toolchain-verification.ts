@@ -10,7 +10,8 @@ export type ExternalProfile =
   | 'opencode'
   | 'kimi-code'
   | 'zcode'
-  | 'pi';
+  | 'pi'
+  | 'deepseek-harness';
 
 export interface ToolchainIdentity {
   readonly root: string;
@@ -56,6 +57,11 @@ export const TOOLCHAIN_IDENTITIES: Readonly<Record<ExternalProfile, ToolchainIde
     version: '0.84.1',
     fingerprint: 'sha256:995a47ce9e2a5cd38865d22c932775b86484396d61889968310246cf7e82e3ec',
   },
+  'deepseek-harness': {
+    root: '/opt/maka-deepseek-harness-toolchain',
+    version: '0.1.0-rc.6',
+    fingerprint: 'sha256:bb4b2c0b02c8ba360dea93d2aa07e6dbb81e12e7e4796cfe8af27bfe6f44a5cd',
+  },
 };
 
 export async function verifyToolchainDirectory(
@@ -71,6 +77,12 @@ export async function verifyToolchainDirectory(
     throw new Error(`${profile} toolchain fingerprint mismatch`);
   }
   const checksums = await readFile(join(resolvedRoot, 'checksums.sha256'), 'utf8');
+  if (
+    profile === 'deepseek-harness' &&
+    `sha256:${createHash('sha256').update(checksums).digest('hex')}` !== expected.fingerprint
+  ) {
+    throw new Error(`${profile} toolchain checksum manifest fingerprint mismatch`);
+  }
   for (const line of checksums.split('\n')) {
     if (!line.trim()) continue;
     const match = /^([a-f0-9]{64})\s+(.+)$/u.exec(line);
