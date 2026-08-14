@@ -198,8 +198,8 @@ export async function recoverExternalMetering(
   profile: ExternalProfile | undefined,
 ): Promise<
   | {
-      readonly usage: NormalizedUsage;
-      readonly costUsd: number;
+      readonly usage: NormalizedUsage | null;
+      readonly costUsd: number | null;
       readonly artifact: JsonObject;
     }
   | undefined
@@ -216,25 +216,53 @@ export async function recoverExternalMetering(
   }
   if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
   const record = value as Record<string, unknown>;
-  if (
-    record.schemaVersion !== 1 ||
-    record.profile !== profile ||
-    record.usageComplete !== true ||
-    record.usage === null ||
-    record.costUsd === null
-  ) {
+  if (record.schemaVersion !== 1 || record.profile !== profile) {
     return undefined;
   }
   try {
+    const usage = record.usage === null ? null : decodeUsage(record.usage);
+    const costUsd =
+      record.costUsd === null ? null : nonnegative(record.costUsd, 'external metering cost');
+    if ((usage === null) !== (costUsd === null)) return undefined;
+    const requests = count(record.requests, 'external metering requests');
+    const settledRequests = count(record.settledRequests, 'external metering settled requests');
+    const inFlightRequests = count(record.inFlightRequests, 'external metering in-flight requests');
+    const admittedRequests = count(record.admittedRequests, 'external metering admitted requests');
+    const usageRequests = count(record.usageRequests, 'external metering usage requests');
+    const missingUsageRequests = count(
+      record.missingUsageRequests,
+      'external metering missing usage requests',
+    );
+    const usageComplete = record.usageComplete === true;
+    if (
+      settledRequests + inFlightRequests !== requests ||
+      admittedRequests > settledRequests ||
+      usageRequests > admittedRequests ||
+      missingUsageRequests !== admittedRequests - usageRequests ||
+      (usageRequests > 0 && usage === null) ||
+      usageComplete !==
+        (inFlightRequests === 0 && admittedRequests > 0 && usageRequests === admittedRequests)
+    ) {
+      return undefined;
+    }
     return {
-      usage: decodeUsage(record.usage),
-      costUsd: nonnegative(record.costUsd, 'external metering cost'),
+      usage,
+      costUsd,
       artifact: {
-        kind: 'provider-metering-snapshot',
+        kind: 'provider-metering-recovery',
         profile,
         path: `agent/${profile}.metering.json`,
         bytes: bytes.byteLength,
         sha256: createHash('sha256').update(bytes).digest('hex'),
+        requests,
+        settledRequests,
+        inFlightRequests,
+        admittedRequests,
+        usageRequests,
+        missingUsageRequests,
+        usageComplete,
+        tokenBasis: usageComplete ? 'complete' : 'lower-bound',
+        costBasis: usageComplete ? 'complete' : 'lower-bound',
       },
     };
   } catch {
@@ -466,4 +494,10 @@ function nonnegative(value: unknown, where: string): number {
   if (typeof value !== 'number' || !Number.isFinite(value) || value < 0)
     throw new Error(`${where} is invalid`);
   return value;
+}
+
+function count(value: unknown, where: string): number {
+  const decoded = nonnegative(value, where);
+  if (!Number.isSafeInteger(decoded)) throw new Error(`${where} is invalid`);
+  return decoded;
 }

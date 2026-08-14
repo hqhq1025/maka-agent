@@ -1,7 +1,7 @@
 import { spawn, spawnSync, type ChildProcess } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { readFileSync, rmSync, statSync } from 'node:fs';
-import { chmod, copyFile, mkdir, open, writeFile } from 'node:fs/promises';
+import { chmod, copyFile, mkdir, open, rename, writeFile } from 'node:fs/promises';
 import { createServer, type IncomingMessage, type Server } from 'node:http';
 import { basename, dirname, join } from 'node:path';
 import type { Readable } from 'node:stream';
@@ -17,6 +17,7 @@ import { takeRelayResultToken, writeRelayResult } from './relay-result-frame.js'
 
 const resultToken = takeRelayResultToken();
 const DEEPSEEK_HARNESS_PROFILE = 'maka-eval';
+let atomicWriteSequence = 0;
 
 type SubjectStatus = 'completed' | 'failed' | 'infra_failed' | 'indeterminate';
 const CLASSIFIABLE_RECORD_LIMIT_BYTES = 16 * 1024 * 1024;
@@ -724,6 +725,8 @@ async function startMeteringProxy(
   const total = zeroUsage();
   let measured = false;
   let requests = 0;
+  let settledRequests = 0;
+  let inFlightRequests = 0;
   let admittedRequests = 0;
   let usageRequests = 0;
   let removedWebTools = 0;
@@ -738,14 +741,18 @@ async function startMeteringProxy(
       usage: measured ? { ...total, totalTokens: total.inputTokens + total.outputTokens } : null,
       costUsd: measured ? estimateCost(total) : null,
       requests,
+      settledRequests,
+      inFlightRequests,
       admittedRequests,
       usageRequests,
-      usageComplete: admittedRequests > 0 && usageRequests === admittedRequests,
+      missingUsageRequests: admittedRequests - usageRequests,
+      usageComplete:
+        inFlightRequests === 0 && admittedRequests > 0 && usageRequests === admittedRequests,
       removedWebTools,
       models: [...requestModels].sort(),
       toolNames: [...observedToolNames].sort(),
     })}\n`;
-    snapshotWrite = snapshotWrite.then(() => writeFile(meteringPath, snapshot, { mode: 0o600 }));
+    snapshotWrite = snapshotWrite.then(() => writeJsonAtomic(meteringPath, snapshot));
     return snapshotWrite;
   };
   await persistSnapshot();
@@ -755,84 +762,93 @@ async function startMeteringProxy(
     const requestId = requests + 1;
     const operation = (async () => {
       requests += 1;
-      const projected = removeEvalWebTools(await readRequest(request));
-      removedWebTools += projected.removed;
-      if (projected.model) requestModels.add(projected.model);
-      for (const name of projected.toolNames) observedToolNames.add(name);
-      await events.write({
-        type: 'provider_request',
-        requestId,
-        method: request.method ?? 'GET',
-        path: request.url ?? '/',
-        bodyBase64: projected.body.toString('base64'),
-      });
-      const target = joinUpstream(upstreamBaseUrl, request.url ?? '/');
-      const headers: Record<string, string> = {};
-      for (const [name, value] of Object.entries(request.headers)) {
-        if (
-          value === undefined ||
-          ['host', 'content-length', 'connection', 'authorization', 'x-api-key'].includes(
-            name.toLowerCase(),
-          )
-        )
-          continue;
-        headers[name] = Array.isArray(value) ? value.join(', ') : value;
-      }
-      if (anthropic) headers['x-api-key'] = upstreamKey;
-      else headers.authorization = `Bearer ${upstreamKey}`;
-      const upstream = await undiciFetch(target, {
-        method: request.method,
-        headers,
-        body: projected.body.length === 0 ? undefined : new Uint8Array(projected.body),
-        dispatcher: providerTransport.dispatcher,
-      });
-      await events.write({
-        type: 'provider_response_start',
-        requestId,
-        status: upstream.status,
-        contentType: upstream.headers.get('content-type'),
-      });
-      response.statusCode = upstream.status;
-      upstream.headers.forEach((value, name) => {
-        if (
-          !['content-length', 'content-encoding', 'transfer-encoding', 'connection'].includes(name)
-        )
-          response.setHeader(name, value);
-      });
-      const parser = usageParser(anthropic);
+      inFlightRequests += 1;
       try {
-        if (upstream.body) {
-          const reader = upstream.body.getReader();
-          for (;;) {
-            const next = await reader.read();
-            if (next.done) break;
-            const bytes = Buffer.from(next.value);
-            await events.write({
-              type: 'provider_response_chunk',
-              requestId,
-              bodyBase64: bytes.toString('base64'),
-            });
-            response.write(bytes);
-            parser.push(bytes.toString('utf8'));
-          }
-        }
-        response.end();
-      } finally {
-        const parsed = parser.finish();
-        if (upstream.ok && parsed.admitted) {
-          admittedRequests += 1;
-          if (parsed.usage) {
-            usageRequests += 1;
-            measured = true;
-            addUsage(total, parsed.usage);
-          }
-        }
+        await persistSnapshot();
+        const projected = removeEvalWebTools(await readRequest(request));
+        removedWebTools += projected.removed;
+        if (projected.model) requestModels.add(projected.model);
+        for (const name of projected.toolNames) observedToolNames.add(name);
         await events.write({
-          type: 'provider_response_end',
+          type: 'provider_request',
           requestId,
-          admitted: parsed.admitted,
-          usage: parsed.usage,
+          method: request.method ?? 'GET',
+          path: request.url ?? '/',
+          bodyBase64: projected.body.toString('base64'),
         });
+        const target = joinUpstream(upstreamBaseUrl, request.url ?? '/');
+        const headers: Record<string, string> = {};
+        for (const [name, value] of Object.entries(request.headers)) {
+          if (
+            value === undefined ||
+            ['host', 'content-length', 'connection', 'authorization', 'x-api-key'].includes(
+              name.toLowerCase(),
+            )
+          )
+            continue;
+          headers[name] = Array.isArray(value) ? value.join(', ') : value;
+        }
+        if (anthropic) headers['x-api-key'] = upstreamKey;
+        else headers.authorization = `Bearer ${upstreamKey}`;
+        const upstream = await undiciFetch(target, {
+          method: request.method,
+          headers,
+          body: projected.body.length === 0 ? undefined : new Uint8Array(projected.body),
+          dispatcher: providerTransport.dispatcher,
+        });
+        await events.write({
+          type: 'provider_response_start',
+          requestId,
+          status: upstream.status,
+          contentType: upstream.headers.get('content-type'),
+        });
+        response.statusCode = upstream.status;
+        upstream.headers.forEach((value, name) => {
+          if (
+            !['content-length', 'content-encoding', 'transfer-encoding', 'connection'].includes(
+              name,
+            )
+          )
+            response.setHeader(name, value);
+        });
+        const parser = usageParser(anthropic);
+        try {
+          if (upstream.body) {
+            const reader = upstream.body.getReader();
+            for (;;) {
+              const next = await reader.read();
+              if (next.done) break;
+              const bytes = Buffer.from(next.value);
+              await events.write({
+                type: 'provider_response_chunk',
+                requestId,
+                bodyBase64: bytes.toString('base64'),
+              });
+              response.write(bytes);
+              parser.push(bytes.toString('utf8'));
+            }
+          }
+          response.end();
+        } finally {
+          const parsed = parser.finish();
+          if (upstream.ok && parsed.admitted) {
+            admittedRequests += 1;
+            if (parsed.usage) {
+              usageRequests += 1;
+              measured = true;
+              addUsage(total, parsed.usage);
+            }
+          }
+          await events.write({
+            type: 'provider_response_end',
+            requestId,
+            admitted: parsed.admitted,
+            usage: parsed.usage,
+          });
+        }
+      } finally {
+        settledRequests += 1;
+        inFlightRequests -= 1;
         await persistSnapshot();
       }
     })().catch((error: unknown) => {
@@ -875,6 +891,13 @@ async function startMeteringProxy(
       await events.close();
     },
   };
+}
+
+async function writeJsonAtomic(path: string, value: string): Promise<void> {
+  const temporary = `${path}.tmp-${process.pid}-${atomicWriteSequence++}`;
+  await writeFile(temporary, value, { mode: 0o644 });
+  await rename(temporary, path);
+  await chmod(path, 0o644);
 }
 
 async function createBoundedJsonlWriter(

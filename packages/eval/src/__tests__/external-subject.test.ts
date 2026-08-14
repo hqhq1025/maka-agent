@@ -28,8 +28,11 @@ test('recovers complete external metering from a timed-out trial', async () => {
         },
         costUsd: 0.001,
         requests: 2,
+        settledRequests: 2,
+        inFlightRequests: 0,
         admittedRequests: 2,
         usageRequests: 2,
+        missingUsageRequests: 0,
         usageComplete: true,
       })}\n`,
     );
@@ -44,7 +47,8 @@ test('recovers complete external metering from a timed-out trial', async () => {
       totalTokens: 120,
     });
     assert.equal(recovered?.costUsd, 0.001);
-    assert.equal(recovered?.artifact.kind, 'provider-metering-snapshot');
+    assert.equal(recovered?.artifact.kind, 'provider-metering-recovery');
+    assert.equal(recovered?.artifact.tokenBasis, 'complete');
   } finally {
     await rm(trialPath, { recursive: true, force: true });
   }
