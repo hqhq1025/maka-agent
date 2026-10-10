@@ -90,7 +90,7 @@ async function fixture(t, configuration = configurations[0]) {
     bin,
     join(root, 'scripts'),
     join(root, 'packages/computer-use'),
-    join(root, 'patches/cua-driver'),
+    join(root, 'native/cua-driver'),
   ]) {
     await mkdir(path, { recursive: true });
   }
@@ -148,7 +148,7 @@ const { join } = require('node:path');
   assert.equal(tar.code, 0, tar.stderr);
   const patch =
     '--- a/libs/cua-driver/rust/fixture.txt\n+++ b/libs/cua-driver/rust/fixture.txt\n@@ -1 +1 @@\n-before\n+after\n';
-  await writeFile(join(root, 'patches/cua-driver/fixture.patch'), patch);
+  await writeFile(join(root, 'native/cua-driver/fixture.patch'), patch);
   const manifest = {
     version: '0.34.0',
     sourceCommit: 'a'.repeat(40),
@@ -162,7 +162,7 @@ const { join } = require('node:path');
       },
     },
   };
-  await writeFile(join(root, 'patches/cua-driver/manifest.json'), JSON.stringify(manifest));
+  await writeFile(join(root, 'native/cua-driver/manifest.json'), JSON.stringify(manifest));
   const identity = sha256(
     JSON.stringify({
       manifest,

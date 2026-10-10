@@ -4613,7 +4613,7 @@ Exhibit B - "Incompatible With Secondary Licenses" Notice
   defined by the Mozilla Public License, v. 2.0.
 
 Corresponding source: https://github.com/trycua/cua/tree/b0968e1b12834e485dda68789541a3cc57664a9f/libs/cua-driver/rust
-Maka modifies the MIT-licensed macOS and Windows platform crates. Patch source and build instructions: patches/cua-driver/ in the Maka source tree. The MPL-2.0 bridge/runtime components remain unchanged.
+Maka modifies the MIT-licensed macOS and Windows platform crates. Patch source and build instructions: native/cua-driver/ in the Maka source tree. The MPL-2.0 bridge/runtime components remain unchanged.
 Node runtime: https://github.com/jhugman/uniffi-bindgen-react-native (0.31.0-3); Cua modifications: scripts/build-node-runtime.mjs at the Cua release tag.
 
 
@@ -6140,7 +6140,7 @@ Exhibit B - "Incompatible With Secondary Licenses" Notice
   defined by the Mozilla Public License, v. 2.0.
 
 Corresponding source: https://github.com/trycua/cua/tree/b0968e1b12834e485dda68789541a3cc57664a9f/libs/cua-driver/rust
-Maka modifies the MIT-licensed macOS and Windows platform crates. Patch source and build instructions: patches/cua-driver/ in the Maka source tree. The MPL-2.0 bridge/runtime components remain unchanged.
+Maka modifies the MIT-licensed macOS and Windows platform crates. Patch source and build instructions: native/cua-driver/ in the Maka source tree. The MPL-2.0 bridge/runtime components remain unchanged.
 Node runtime: https://github.com/jhugman/uniffi-bindgen-react-native (0.31.0-3); Cua modifications: scripts/build-node-runtime.mjs at the Cua release tag.
 
 
@@ -6527,7 +6527,7 @@ Exhibit B - "Incompatible With Secondary Licenses" Notice
   defined by the Mozilla Public License, v. 2.0.
 
 Corresponding source: https://github.com/trycua/cua/tree/b0968e1b12834e485dda68789541a3cc57664a9f/libs/cua-driver/rust
-Maka modifies the MIT-licensed macOS and Windows platform crates. Patch source and build instructions: patches/cua-driver/ in the Maka source tree. The MPL-2.0 bridge/runtime components remain unchanged.
+Maka modifies the MIT-licensed macOS and Windows platform crates. Patch source and build instructions: native/cua-driver/ in the Maka source tree. The MPL-2.0 bridge/runtime components remain unchanged.
 Node runtime: https://github.com/jhugman/uniffi-bindgen-react-native (0.31.0-3); Cua modifications: scripts/build-node-runtime.mjs at the Cua release tag.
 
 
@@ -6914,7 +6914,7 @@ Exhibit B - "Incompatible With Secondary Licenses" Notice
   defined by the Mozilla Public License, v. 2.0.
 
 Corresponding source: https://github.com/trycua/cua/tree/b0968e1b12834e485dda68789541a3cc57664a9f/libs/cua-driver/rust
-Maka modifies the MIT-licensed macOS and Windows platform crates. Patch source and build instructions: patches/cua-driver/ in the Maka source tree. The MPL-2.0 bridge/runtime components remain unchanged.
+Maka modifies the MIT-licensed macOS and Windows platform crates. Patch source and build instructions: native/cua-driver/ in the Maka source tree. The MPL-2.0 bridge/runtime components remain unchanged.
 Node runtime: https://github.com/jhugman/uniffi-bindgen-react-native (0.31.0-3); Cua modifications: scripts/build-node-runtime.mjs at the Cua release tag.
 
 

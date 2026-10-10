@@ -73,7 +73,7 @@ async function installedPackage(name, from) {
 
 /** Restore the verified native patches after npm ci without changing SDK resolution. */
 export async function buildCuaDriver({ rebuild = false } = {}) {
-  const manifestDirectory = join(root, 'patches/cua-driver');
+  const manifestDirectory = join(root, 'native/cua-driver');
   const manifest = await readJson(join(manifestDirectory, 'manifest.json'));
   const platform = manifest.platforms[process.platform];
   if (!platform) return { status: 'official-native', platform: process.platform };

@@ -27,7 +27,7 @@ on:
       - 'packages/runtime/src/computer-use*'
       - 'scripts/cua-driver-spike/**'
       - 'scripts/build-cua-driver*'
-      - 'patches/cua-driver/**'
+      - 'native/cua-driver/**'
       - 'package.json'
       - 'package-lock.json'
       - '.github/workflows/cua-driver-platform.yml'

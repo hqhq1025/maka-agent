@@ -22,6 +22,7 @@
 These patches preserve the native fixes used by Maka after a fresh clone or
 `npm ci`. The builder downloads the fixed upstream source, verifies its hash,
 applies the platform's patches, and builds `cua-driver-sdk` with Rust 1.97.1.
+The native patches live outside `patches/`, which belongs to `patch-package`.
 The manifest pins Cua Driver 0.34.0 to upstream commit
 `b0968e1b12834e485dda68789541a3cc57664a9f`.
 

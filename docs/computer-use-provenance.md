@@ -75,7 +75,7 @@ the generated npm notices. See `packages/computer-use/README.md` for lifecycle
 and acceptance boundaries.
 
 On macOS and Windows, Maka rebuilds the MIT-licensed native SDK with the platform
-fixes in `patches/cua-driver/`. The manifest records the source commit, archive
+fixes in `native/cua-driver/`. The manifest records the source commit, archive
 checksum, patch checksums, and Rust toolchain. The separate MPL-2.0 Node bridge
 and runtime remain unchanged. The patch README describes each modification and
 links to the build procedure. Linux uses the official native library.

@@ -33,7 +33,7 @@ integrity. No daemon, global installation, or postinstall binary download is nee
 
 On macOS and Windows, `npm run dev` and Desktop resource builds then run
 `scripts/build-cua-driver.mjs`. This script builds the pinned native source with
-the fixes in `patches/cua-driver/` and installs the library into the resolved
+the fixes in `native/cua-driver/` and installs the library into the resolved
 native package. It verifies the source, patches, version, and cached library.
 `npm ci` restores the official library; the next build restores the patches.
 See [development setup](../../docs/computer-use-development.md) for prerequisites,

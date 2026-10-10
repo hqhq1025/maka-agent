@@ -219,6 +219,7 @@ export const exclusionRules = [
         'packages/ui/src/astryx-chat-reasoning.tsx',
       )(path) ||
       isUnder('apps/desktop/src/renderer/assets/provider-brands', '.svg')(path) ||
+      isUnder('native/cua-driver', '.patch')(path) ||
       isUnder('patches', '.patch')(path),
   },
   {

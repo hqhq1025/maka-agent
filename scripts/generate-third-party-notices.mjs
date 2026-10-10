@@ -288,7 +288,7 @@ function overrideLicenseText(packageKey, selectedLicense) {
     const root = join(repoRoot, 'apps/desktop/resources/licenses/cua-driver');
     const mpl = readFileSync(join(root, 'LICENSE-MPL-2.0.txt'), 'utf8');
     const source =
-      '\nCorresponding source: https://github.com/trycua/cua/tree/b0968e1b12834e485dda68789541a3cc57664a9f/libs/cua-driver/rust\nMaka modifies the MIT-licensed macOS and Windows platform crates. Patch source and build instructions: patches/cua-driver/ in the Maka source tree. The MPL-2.0 bridge/runtime components remain unchanged.\nNode runtime: https://github.com/jhugman/uniffi-bindgen-react-native (0.31.0-3); Cua modifications: scripts/build-node-runtime.mjs at the Cua release tag.\n';
+      '\nCorresponding source: https://github.com/trycua/cua/tree/b0968e1b12834e485dda68789541a3cc57664a9f/libs/cua-driver/rust\nMaka modifies the MIT-licensed macOS and Windows platform crates. Patch source and build instructions: native/cua-driver/ in the Maka source tree. The MPL-2.0 bridge/runtime components remain unchanged.\nNode runtime: https://github.com/jhugman/uniffi-bindgen-react-native (0.31.0-3); Cua modifications: scripts/build-node-runtime.mjs at the Cua release tag.\n';
     return (
       (selectedLicense === 'MIT AND MPL-2.0'
         ? readFileSync(join(root, 'LICENSE-MIT.txt'), 'utf8') + '\n'
