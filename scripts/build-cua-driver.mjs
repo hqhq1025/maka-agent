@@ -153,7 +153,7 @@ export async function buildCuaDriver({ rebuild = false } = {}) {
         bytes = Buffer.from(await response.arrayBuffer());
       }
       if (sha256(bytes) !== manifest.sourceSha256)
-        throw new Error('Cua Driver source checksum mismatch');
+        throw new Error(`Cua Driver source checksum mismatch: ${archive}`);
       await writeFile(archive, bytes);
       await rm(source, { recursive: true, force: true });
       await mkdir(source);
