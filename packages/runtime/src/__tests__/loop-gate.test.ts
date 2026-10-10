@@ -225,7 +225,7 @@ function makeShellRunTool(name: string, impl: string[], status: ObservedShellRun
 
 function makeComputerFailureTool(impl: string[], failureClass?: 'ambiguous_target'): MakaTool {
   return {
-    name: 'maka_computer',
+    name: 'computer',
     description: 'computer',
     parameters: z.object({}).passthrough(),
     categoryHint: 'computer_use',
@@ -250,7 +250,7 @@ function makeComputerFailureTool(impl: string[], failureClass?: 'ambiguous_targe
         return { text: 'observed' };
       }
       return {
-        text: 'maka_computer failed: stale_frame',
+        text: 'computer failed: stale_frame',
         error: 'stale_frame',
         ...(failureClass ? { failureClass } : {}),
       };
@@ -544,7 +544,7 @@ describe('loop-gate for repeated identical FAILING tool calls', () => {
       element_id: 'duplicate',
     });
     assert.deepEqual(result, {
-      text: 'maka_computer failed: stale_frame',
+      text: 'computer failed: stale_frame',
       error: 'stale_frame',
     });
     const event = h.pushed.find((candidate) => candidate.type === 'tool_result');
@@ -576,6 +576,36 @@ describe('loop-gate for repeated identical FAILING tool calls', () => {
       h.impl.length,
       2,
       'observe runs but the repeated mutation never reaches the backend',
+    );
+  });
+
+  test('ambiguous double clicks stay gated across observations and separate from single clicks', async () => {
+    const h = makeHarness();
+    const tool = makeComputerFailureTool(h.impl, 'ambiguous_target');
+    const first = await call(h, tool, {
+      action: 'double_click_element',
+      observation_id: 'obs-1',
+      element_id: 'duplicate',
+    });
+    assert.equal((first as { error?: string }).error, 'stale_frame');
+    await call(h, tool, { action: 'observe', app: 'Fixture' });
+    const repeated = await call(h, tool, {
+      action: 'double_click_element',
+      observation_id: 'obs-2',
+      element_id: 'renumbered-duplicate',
+    });
+    assert.deepEqual(repeated, { error: formatAmbiguousComputerLoopGateText() });
+    await call(h, tool, { action: 'observe', app: 'Fixture' });
+    const single = await call(h, tool, {
+      action: 'click_element',
+      observation_id: 'obs-3',
+      element_id: 'again-renumbered-duplicate',
+    });
+    assert.equal((single as { error?: string }).error, 'stale_frame');
+    assert.equal(
+      h.impl.length,
+      4,
+      'single click and observations run, repeated double click is blocked',
     );
   });
 

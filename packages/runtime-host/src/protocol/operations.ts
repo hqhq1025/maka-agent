@@ -300,6 +300,7 @@ export const REMOTE_OWNER_OPERATION_GRANTS = Object.freeze([
   'host.status',
   'interaction.answer',
   'interaction.query',
+  'interaction.respondByText',
   'memory.mutate',
   'memory.query',
   'network-proxy.test',

@@ -829,6 +829,20 @@ describe('Interaction decoding and validity', () => {
     );
   });
 
+  test('canonical Client Capability decisions preserve bounded direct-user authorization text', () => {
+    const outcome = {
+      kind: 'client_capability_decision',
+      decision: 'allow',
+      committedAt: 2,
+      responseText: '允許這個任務使用前台',
+    } as const;
+    assert.deepEqual(decodeInteractionCanonicalOutcome(outcome), outcome);
+    assert.throws(() =>
+      decodeInteractionCanonicalOutcome({ ...outcome, responseText: '批'.repeat(342) }),
+    );
+    assert.throws(() => decodeInteractionCanonicalOutcome({ ...outcome, responseText: '' }));
+  });
+
   const permission = projectInteractionPermissionRequest(toolPermission);
   const question = projectInteractionQuestionRequest({
     toolUseId: 'q1',

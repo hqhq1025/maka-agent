@@ -22,6 +22,7 @@ import {
   decodeInteractionCanonicalOutcome as decodeCoreInteractionCanonicalOutcome,
   decodeInteractionRequest as decodeCoreInteractionRequest,
   isInteractionCanonicalOutcomeValidForRequest,
+  INTERACTION_AUTHORIZATION_TEXT_MAX_BYTES,
   type InteractionAnswer,
   type InteractionCanonicalOutcome,
   type InteractionClosureReason,
@@ -39,7 +40,7 @@ import {
   type InteractionSandboxBoundaryAnswer,
   type InteractionSandboxBoundaryRequest,
 } from '@maka/core/interaction';
-import { assertExactKeys, requireEntityId, requireRecord } from './codec.js';
+import { assertExactKeys, requireEntityId, requireRecord, requireString } from './codec.js';
 import { invalidProtocolFrame } from './errors.js';
 import { defineOperation } from './operation-spec.js';
 
@@ -116,6 +117,17 @@ export interface InteractionAnswerInput {
   readonly answer: InteractionAnswer;
 }
 
+export interface InteractionRespondByTextInput {
+  readonly sessionId: string;
+  readonly interactionId: string;
+  readonly text: string;
+}
+
+export type InteractionRespondByTextResult =
+  | { readonly kind: 'answered'; readonly snapshot: InteractionAnsweredSnapshot }
+  | { readonly kind: 'unrecognized' }
+  | { readonly kind: 'unavailable' };
+
 const COMMON_ERRORS = ['host_not_ready', 'host_draining', 'operation_unavailable'] as const;
 
 export const INTERACTION_OPERATION_SPECS = {
@@ -138,6 +150,28 @@ export const INTERACTION_OPERATION_SPECS = {
       'already_resolved',
       'internal_failure',
     ] as const,
+  }),
+  'interaction.respondByText': defineOperation({
+    mode: 'command',
+    availability: 'ready',
+    decodeInput: decodeInteractionRespondByTextInput,
+    decodeOutput: decodeInteractionRespondByTextResult,
+    assertOutputForInput(input, output) {
+      if (
+        output.kind === 'answered' &&
+        (output.snapshot.sessionId !== input.sessionId ||
+          output.snapshot.interactionId !== input.interactionId ||
+          output.snapshot.request.kind !== 'client_capability' ||
+          output.snapshot.request.target.capability !== 'computer_use' ||
+          (output.snapshot.request.target.scope.kind !== 'capability' &&
+            output.snapshot.request.target.scope.kind !== 'computer_use_foreground') ||
+          output.snapshot.outcome.kind !== 'client_capability_decision' ||
+          output.snapshot.outcome.responseText !== input.text)
+      ) {
+        throw invalidProtocolFrame('Text authorization output does not match its request');
+      }
+    },
+    errors: [...COMMON_ERRORS, 'internal_failure'] as const,
   }),
 } as const;
 
@@ -270,6 +304,41 @@ function decodeInteractionAnswerInput(value: unknown): InteractionAnswerInput {
     interactionId: requireEntityId(record.interactionId, 'interactionId'),
     answer: decodeInteractionAnswer(record.answer),
   };
+}
+
+function decodeInteractionRespondByTextInput(value: unknown): InteractionRespondByTextInput {
+  const record = requireRecord(value, 'interaction.respondByText input');
+  assertExactKeys(record, 'interaction.respondByText input', [
+    'sessionId',
+    'interactionId',
+    'text',
+  ]);
+  const text = requireString(
+    record.text,
+    'authorization text',
+    INTERACTION_AUTHORIZATION_TEXT_MAX_BYTES,
+  );
+  if (new TextEncoder().encode(text).byteLength > INTERACTION_AUTHORIZATION_TEXT_MAX_BYTES) {
+    throw invalidProtocolFrame('Authorization text exceeds its byte limit');
+  }
+  return {
+    sessionId: requireEntityId(record.sessionId, 'sessionId'),
+    interactionId: requireEntityId(record.interactionId, 'interactionId'),
+    text,
+  };
+}
+
+function decodeInteractionRespondByTextResult(value: unknown): InteractionRespondByTextResult {
+  const record = requireRecord(value, 'interaction.respondByText output');
+  if (record.kind === 'answered') {
+    assertExactKeys(record, 'interaction.respondByText output', ['kind', 'snapshot']);
+    return { kind: 'answered', snapshot: decodeInteractionAnsweredSnapshot(record.snapshot) };
+  }
+  assertExactKeys(record, 'interaction.respondByText output', ['kind']);
+  if (record.kind !== 'unrecognized' && record.kind !== 'unavailable') {
+    throw invalidProtocolFrame('Invalid text authorization result');
+  }
+  return { kind: record.kind };
 }
 
 function decodeCoreValue<T>(value: unknown, label: string, decode: (candidate: unknown) => T): T {

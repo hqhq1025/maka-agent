@@ -30,6 +30,7 @@ export interface WorkbarToolDefinition {
     | 'file-diff'
     | 'folder'
     | 'globe'
+    | 'monitor'
     | 'list-todo'
     | 'message-circle-question'
     | 'terminal';
@@ -106,6 +107,14 @@ const WORKBAR_TOOL_DEFINITION_BY_KIND = {
     labelKey: 'inspector',
     icon: 'activity',
     persisted: true,
+    singleton: true,
+    defaultPlacement: 'right',
+  },
+  computer: {
+    kind: 'computer',
+    labelKey: 'computer',
+    icon: 'monitor',
+    persisted: false,
     singleton: true,
     defaultPlacement: 'right',
   },

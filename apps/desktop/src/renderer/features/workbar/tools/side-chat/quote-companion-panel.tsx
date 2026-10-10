@@ -24,6 +24,7 @@ import {
   ChatSurfaceLayout,
   Composer,
   ClientCapabilityPrompt,
+  getConversationCopy,
   FormInteractionPrompt,
   SandboxBoundaryPrompt,
   UserQuestionPrompt,
@@ -269,6 +270,7 @@ export function QuoteCompanionPanel(props: {
                   <ClientCapabilityPrompt
                     request={companion.activeClientCapability}
                     onRespond={companion.respondToClientCapability}
+                    textResponseAvailable={companion.activeClientCapability.capability === 'computer_use'}
                   />
                 )}
                 {companion.activeQuestion && (
@@ -289,8 +291,20 @@ export function QuoteCompanionPanel(props: {
             )}
             <Composer
               ref={composerRef}
-              onSend={(text, metadata) =>
-                dispatchQuoteCompanionInput({
+              onSend={async (text, metadata) => {
+                const request = companion.activeClientCapability;
+                if (request?.capability === 'computer_use' && !pendingAttachments.length
+                  && !props.quotes.length && !metadata?.workspaceFileReferences?.length
+                  && !text.trimStart().startsWith('/') && !text.includes('/skill:')) {
+                  const result = await companion.respondToInteractionByText(request.requestId, text);
+                  if (result.kind === 'answered') {
+                    const permissionCopy = getConversationCopy(locale).clientCapability;
+                    toast.info(result.decision === 'allow' ? permissionCopy.textAllowed : permissionCopy.textDenied);
+                    return true;
+                  }
+                  if (result.kind === 'unavailable') return false;
+                }
+                return dispatchQuoteCompanionInput({
                   text,
                   streaming: companion.streaming,
                   followUpMode: metadata?.followUpMode,
@@ -345,10 +359,10 @@ export function QuoteCompanionPanel(props: {
                     }
                     return accepted;
                   },
-                })
-              }
+                });
+              }}
               onStop={() => void companion.stop()}
-              hidden={Boolean(activeInteraction)}
+              hidden={Boolean(activeInteraction && companion.activeClientCapability?.capability !== 'computer_use')}
               streaming={companion.streaming}
               processing={companion.processing}
               queuedMessages={companion.queuedMessages}
@@ -359,7 +373,7 @@ export function QuoteCompanionPanel(props: {
               onDeleteQueuedEntry={companion.deleteQueuedEntry}
               onReorderQueuedEntries={companion.reorderQueuedEntries}
               draftKey={draftKey}
-              disabled={!companion.modelReady}
+              disabled={!companion.modelReady && companion.activeClientCapability?.capability !== 'computer_use'}
               onPickAttachments={pickAttachments}
               onAttachFilePaths={attachFilePaths}
               // The side chat submits staged context without a prompt (#4804).

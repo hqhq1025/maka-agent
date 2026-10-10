@@ -30,6 +30,7 @@ import {
   Globe,
   Loader2,
   MessageCircleQuestion,
+  Monitor,
   Plus,
   Terminal,
 } from '@maka/ui/icons';
@@ -79,6 +80,9 @@ const ArtifactPane = lazy(() =>
 );
 const BrowserPanel = lazy(() =>
   import('../tools/browser/browser-panel').then((module) => ({ default: module.BrowserPanel })),
+);
+const ComputerUsePanel = lazy(() =>
+  import('../tools/computer/computer-use-panel.js').then((module) => ({ default: module.ComputerUsePanel })),
 );
 const SessionInspectorPanel = lazy(() =>
   import('../../../application/contracts/session-inspector/session-inspector-panel.js').then((module) => ({
@@ -148,6 +152,7 @@ const FACE_ICON = {
   globe: Globe,
   'list-todo': Clipboard,
   'message-circle-question': MessageCircleQuestion,
+  monitor: Monitor,
   terminal: Terminal,
 } as const satisfies Record<WorkbarToolDefinition['icon'], typeof Activity>;
 
@@ -168,6 +173,8 @@ function faceLabel(kind: SessionWorkbarTabKind, copy: WorkbarCopy): string {
       return copy.workBoard;
     case 'browser':
       return copy.browser;
+    case 'computer':
+      return copy.computer;
     case 'files':
       return copy.files;
     case 'inspector':
@@ -568,6 +575,12 @@ export function WorkbarSurface(props: {
                 onToggleFocus={placement === 'right' && props.onTogglePreviewFocus ? () => props.onTogglePreviewFocus?.('browser') : undefined}
                 onPreviewExit={placement === 'right' ? props.onPreviewExit : undefined}
               />
+            </Suspense>
+          );
+        } else if (tab.kind === 'computer') {
+          content = (
+            <Suspense fallback={<WorkbarPanelLoading label={copy.computer} />}>
+              <ComputerUsePanel key={props.sessionId} sessionId={props.sessionId!} active={!props.hidden && active} />
             </Suspense>
           );
         } else if (tab.kind === 'files') {

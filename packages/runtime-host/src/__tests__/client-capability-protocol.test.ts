@@ -32,6 +32,94 @@ import {
 } from '../protocol/index.js';
 
 describe('Client Capability protocol', () => {
+  test('validates typed Computer Use result metadata without accepting diagnostic or field-value payloads', () => {
+    const computerUse = {
+      toolCallId: 'call-1',
+      action: 'double_click_element',
+      target: {
+        observationId: 'frame-1',
+        appId: 'Fixture',
+        elementId: 'button',
+        role: 'button',
+        label: 'Open',
+      },
+      outcome: {
+        execution: 'attempted',
+        ok: false,
+        error: 'outcome_unknown',
+        effect: 'unverifiable',
+      },
+    };
+    const result = { content: [], computerUse };
+    assert.deepEqual(decodeClientCapabilityResult(JSON.parse(JSON.stringify(result))), result);
+    for (const invalid of [
+      { ...computerUse, target: { ...computerUse.target, value: 'private' } },
+      { ...computerUse, target: { ...computerUse.target, label: 'x'.repeat(257) } },
+      { ...computerUse, target: { ...computerUse.target, observationId: '' } },
+      { ...computerUse, outcome: { ...computerUse.outcome, ok: true } },
+      {
+        ...computerUse,
+        outcome: { ...computerUse.outcome, reason: 'foreground_authorized_reobserve' },
+      },
+      { ...computerUse, outcome: { ...computerUse.outcome, execution: 'confirmed' } },
+      { ...computerUse, diagnostic: 'a log is not metadata' },
+    ])
+      assert.throws(
+        () => decodeClientCapabilityResult({ content: [], computerUse: invalid }),
+        RuntimeHostProtocolError,
+      );
+  });
+
+  test('roundtrips Computer Use delivery, policy, and authority evidence', () => {
+    for (const delivery of ['background', 'foreground']) {
+      for (const foregroundPolicy of ['never', 'ask', 'allow']) {
+        const frame = {
+          kind: 'client.capability.accepted',
+          invocationId: 'invocation',
+          admissionEvidence: {
+            kind: 'computer_use',
+            delivery,
+            foregroundPolicy,
+            authorityEpoch: 'desktop_epoch-1',
+          },
+        };
+        assert.deepEqual(decodeClientFrame(JSON.parse(JSON.stringify(frame))), frame);
+      }
+    }
+  });
+
+  test('rejects malformed Computer Use evidence and extra self-authorization fields', () => {
+    const evidence = {
+      kind: 'computer_use',
+      delivery: 'foreground',
+      foregroundPolicy: 'ask',
+      authorityEpoch: 'desktop_epoch-1',
+    };
+    const { authorityEpoch: _authorityEpoch, ...missingEpoch } = evidence;
+    for (const admissionEvidence of [
+      { ...evidence, delivery: 'automatic' },
+      { ...evidence, delivery: null },
+      { ...evidence, foregroundPolicy: 'approved' },
+      { ...evidence, foregroundPolicy: true },
+      { ...evidence, foregroundAuthorized: true },
+      missingEpoch,
+      { ...evidence, authorityEpoch: '' },
+      { ...evidence, authorityEpoch: 'x'.repeat(129) },
+      { ...evidence, authorityEpoch: 'desktop/epoch' },
+      { ...evidence, authorityEpoch: 'desktop\0epoch' },
+    ]) {
+      assert.throws(
+        () =>
+          decodeClientFrame({
+            kind: 'client.capability.accepted',
+            invocationId: 'invocation',
+            admissionEvidence,
+          }),
+        RuntimeHostProtocolError,
+      );
+    }
+  });
+
   test('validates complete Session configuration identities', () => {
     const input = {
       registrationId: 'registration',
@@ -667,6 +755,29 @@ describe('Client Capability protocol', () => {
         ),
       (error: unknown) => error instanceof RuntimeHostProtocolError,
     );
+  });
+
+  test('preserves bounded executor metadata and rejects malformed result metadata', () => {
+    const result = {
+      content: [{ type: 'text', text: 'model diagnostics' }],
+      error: 'outcome_unknown',
+      summary: 'Dispatch outcome could not be confirmed.',
+    };
+    assert.deepEqual(decodeClientCapabilityResult(JSON.parse(JSON.stringify(result))), result);
+    for (const metadata of [
+      { error: '' },
+      { error: true },
+      { error: 'e'.repeat(129) },
+      { summary: '' },
+      { summary: {} },
+      { summary: 's'.repeat(200_001) },
+      { text: 'untyped persistence override' },
+      { isError: true },
+    ])
+      assert.throws(
+        () => decodeClientCapabilityResult({ content: [], ...metadata }),
+        (error: unknown) => error instanceof RuntimeHostProtocolError,
+      );
   });
 
   test('rejects non-canonical media data and invalid image MIME types', () => {

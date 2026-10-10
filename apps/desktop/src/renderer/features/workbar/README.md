@@ -82,12 +82,13 @@ port; they do not persist review choices into the browser profile.
 ## Lifecycle invariants
 
 - Review, Work Board, Browser, Files and Inspector tabs are persisted globally.
-- Terminal and Side Chat tabs and their resource metadata are transient.
+- Terminal, Computer and Side Chat tabs and their resource metadata are transient.
 - `WORKBAR_TOOL_DEFINITIONS` is the authority for persistence, singleton
   behavior, default placement, icon and shortcut; storage, controller and UI
   code consume it rather than maintaining parallel kind lists.
-- A face is opened and closed only from the strip's `[+]` menu, which lists
-  every registered tool and marks the open ones. Tabs carry no close control:
+- The strip's `[+]` menu lists every registered tool and marks the open ones.
+  The conversation's Computer status can also open its inspection tab on demand.
+  Tabs carry no close control:
   `Tab` renders `endContent` inside its own `<button>`, so a per-tab close
   would nest a button in a button. Tabs are never reordered, so the strip's
   order is the order the faces were opened in.
@@ -106,6 +107,7 @@ port; they do not persist review choices into the browser profile.
 - Natural completion detaches live controls and subscriptions but may retain
   the current local xterm picture until its view closes. Late output can be
   lost; completion does not promise a final output snapshot or replay.
+
 - Removing a Session from the authoritative catalog retires its Terminal views.
   Host owns admission of Session retirement while processes are live.
 - The task terminal loads FitAddon and WebLinksAddon on the same Terminal
@@ -124,6 +126,20 @@ port; they do not persist review choices into the browser profile.
   timeline/context window, while usage-change events refresh the complete
   Session usage summary. Re-activation and head refresh preserve the requested
   trace page depth.
+
+## Computer inspection
+
+The conversation status and optional Computer tab read `WorkbarServices.computerUse`.
+Desktop owns this ephemeral, session-scoped feed; opening the tab never captures
+the screen. The view labels pixels as the last captured frame and displays a
+delivery mode only when the native result reports it. Stop uses the existing
+task stop path, and an uncertain action remains uncertain after the task ends.
+
+Render state belongs to the current subscription identity, including Session,
+visibility and service. A late initial read cannot overwrite an event, and a
+reopened tab cannot paint pixels retained by a previous subscription. Shared
+presentation interfaces live in a declaration-only contract; the main/preload
+IPC channel constants are a separate runtime module.
 
 ## Adding a tool
 

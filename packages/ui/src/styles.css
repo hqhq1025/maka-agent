@@ -830,6 +830,30 @@
 .maka-web-result-error-message { color: var(--destructive); }
 .maka-web-result-repair { color: var(--muted-foreground); }
 .maka-tool-call-detail { display: flex; flex-direction: column; gap: 6px; margin-top: 4px; }
+.maka-computer-actions { display: flex; min-width: 0; flex-direction: column; gap: 2px; }
+.maka-processing-sequence[data-computer-work] > .maka-processing-body {
+  max-height: min(22rem, 45vh);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+}
+.maka-computer-action { min-width: 0; }
+.maka-computer-action-heading {
+  display: flex; min-width: 0; align-items: center; gap: 8px; padding: 7px 0;
+  font: var(--maka-text-body); color: var(--muted-foreground); cursor: pointer; list-style: none;
+}
+.maka-computer-action-heading::-webkit-details-marker { display: none; }
+.maka-computer-action-heading:focus-visible { outline: 2px solid var(--ring); outline-offset: 3px; border-radius: 3px; }
+.maka-computer-action-signal { display: inline-flex; flex: 0 0 auto; align-items: center; }
+.maka-computer-action[data-state="confirmed"] .maka-computer-action-signal { color: var(--success); }
+.maka-computer-action[data-state="failed"] .maka-computer-action-signal { color: var(--destructive); }
+.maka-computer-action-name { min-width: 0; flex: 1; overflow-wrap: anywhere; color: var(--foreground); }
+.maka-computer-action-status { flex: 0 0 auto; font: var(--maka-text-supporting); }
+.maka-computer-action-chevron { flex: 0 0 auto; transition: transform 120ms ease; }
+.maka-computer-action[open] > summary .maka-computer-action-chevron { transform: rotate(90deg); }
+.maka-computer-action-body { padding: 0 0 8px 20px; min-width: 0; }
+.maka-computer-action-log { display: grid; gap: 8px; min-width: 0; }
+.maka-computer-action-log-heading { margin: 0; font: var(--maka-text-supporting); color: var(--muted-foreground); }
 /* A CodeBlock title (a file path, a result headline) sits at the same tier as
    the command header beside it. Astryx hard-codes that title to the supporting
    tier, which is 12px against the block's own 14px code — rebinding the role

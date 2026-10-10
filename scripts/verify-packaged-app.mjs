@@ -1053,6 +1053,9 @@ export async function assertPackagedResources(
     // Current Desktop builds ship the direct-peer Client addon beside its Rust
     // notices. Upgrade baselines may predate both resources.
     requireDirectPeerArtifact = true,
+    // Mac and Windows previews need a retained native window identity. Upgrade
+    // baselines may predate this read-only Desktop addon.
+    requireDesktopWindowIdentity = ['darwin', 'win32'].includes(process.platform),
   } = {},
 ) {
   const required = [
@@ -1065,6 +1068,9 @@ export async function assertPackagedResources(
           join('runtime-host-peer', 'maka_runtime_host_peer.node'),
           join('licenses', 'runtime-host-peer', 'THIRD_PARTY_NOTICES.txt'),
         ]
+      : []),
+    ...(requireDesktopWindowIdentity
+      ? [join('desktop-window-identity', 'maka_desktop_window_identity.node')]
       : []),
     // The picker's catalog is read at runtime, and Electron reports a missing
     // file as an empty image rather than an error — a packaging change that
@@ -1109,15 +1115,11 @@ export async function assertPackagedResources(
     join('licenses', 'git'),
     join('tools', 'officecli'),
     join('licenses', 'officecli'),
-    // cua-driver is gone from this repository, and these two forbids stay for the
-    // same reason the officecli ones next to them do: `apps/desktop/resources/bin`
-    // is gitignored, so a binary a developer prepared before this change is still
-    // sitting in their tree and would be packaged without anything noticing.
+    // The in-process Cua SDK lives in app.asar.unpacked/node_modules.
+    // Reject obsolete standalone helpers left in gitignored resource directories.
     join('bin', 'cua-driver'),
     join('tools', 'cua-driver'),
-    // maka-cu is built from source locally and is not signed, so it may not be in
-    // a packaged build at all — an ad-hoc helper fails notarization for the whole
-    // app, and `distributionReady` is false for exactly this reason.
+    // The replaced maka-cu executor must not ship alongside the SDK.
     join('bin', 'maka-cu'),
     join('tools', 'maka-cu'),
   ];

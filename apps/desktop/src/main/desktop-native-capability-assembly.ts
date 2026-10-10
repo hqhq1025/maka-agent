@@ -17,7 +17,7 @@
  * under the License.
  */
 
-import { app, nativeImage, powerMonitor, screen } from 'electron';
+import { nativeImage, powerMonitor } from 'electron';
 import { createComputerUseOverlayHook } from '@maka/computer-use';
 import { buildBrowserTools } from './browser/browser-tools.js';
 import {
@@ -25,8 +25,8 @@ import {
   createDesktopPhysicalInputGuard,
 } from './computer-use-host.js';
 import { createCursorOverlayController } from './computer-use/cursor-overlay-window.js';
-import { withComputerUsePip } from './computer-use/pip-feed.js';
-import { createComputerUsePipController } from './computer-use/pip-window.js';
+import { createComputerUsePresentationFeed } from './computer-use/presentation-feed.js';
+import { createComputerUseWindowIdentity } from './computer-use/window-identity.js';
 import {
   createComputerUseStatusItem,
   withComputerUseStatusItem,
@@ -35,25 +35,16 @@ import {
   createComputerUseScreenLockGuard,
   withComputerUseScreenLock,
 } from './computer-use/screen-lock.js';
-import {
-  applyComputerUseRealModelPolicy,
-  parseComputerUseRealModelPolicy,
-} from './computer-use-real-model-policy.js';
 import type { DesktopLocaleAuthority } from './desktop-locale-authority.js';
 import type { WindowRevealMode } from './window-reveal.js';
 
 const COMPUTER_USE_WAKE_HOLD = 'computer-use';
 
 export interface DesktopNativeCapabilityAssemblyDeps {
-  readonly isComputerUseRealModelE2e: boolean;
   readonly revealMode: WindowRevealMode;
   readonly locale: Pick<DesktopLocaleAuthority, 'current' | 'subscribe'>;
   readonly keepSystemAwake?: { hold(reason: string): void; release(reason: string): void };
-  readonly mainWindow?: {
-    windowBounds(): { x: number; y: number; width: number; height: number } | undefined;
-    onWindowGeometryChanged(cb: () => void): () => void;
-    browserWindow(): { isDestroyed(): boolean } | undefined;
-  };
+  readonly isComputerUseSessionActive: (sessionId: string) => boolean;
 }
 
 /** Assemble the Desktop-owned capabilities that a Host may call. */
@@ -61,20 +52,17 @@ export function assembleDesktopNativeCapabilities(
   deps: DesktopNativeCapabilityAssemblyDeps,
 ) {
   const browserTools = buildBrowserTools();
-  const computerUseOverlay = createCursorOverlayController({ revealMode: deps.revealMode });
-  const computerUsePip = createComputerUsePipController(
-    deps.mainWindow
-      ? {
-          resolveAnchorRect: () => deps.mainWindow?.windowBounds(),
-          subscribeAnchorChanges: (cb) => deps.mainWindow?.onWindowGeometryChanged(cb) ?? (() => {}),
-          resolveParentWindow: () => deps.mainWindow?.browserWindow(),
-          cursorPoint: () => screen.getCursorScreenPoint(),
-          workAreaFor: (rect) => screen.getDisplayMatching(rect).workArea,
-          revealMode: deps.revealMode,
-        }
-      : { revealMode: deps.revealMode },
-  );
-
+  const computerUseWindowIdentity = createComputerUseWindowIdentity();
+  const computerUseScreenLock = createComputerUseScreenLockGuard({
+    onLock: () => {
+      computerUseOverlay.destroyAll();
+      computerUsePresentation.suspendPreview();
+    },
+  });
+  const computerUseOverlay = createCursorOverlayController({
+    revealMode: deps.revealMode,
+    mayPresent: (sessionId) => deps.isComputerUseSessionActive(sessionId) && !computerUseScreenLock.locked(),
+  });
   const computerUseStatusItem = createComputerUseStatusItem({
     resolveLocale: () => deps.locale.current(),
     subscribeLocaleChanges: (listener) => deps.locale.subscribe(listener),
@@ -83,10 +71,26 @@ export function assembleDesktopNativeCapabilities(
       else deps.keepSystemAwake?.release(COMPUTER_USE_WAKE_HOLD);
     },
   });
-  const computerUseScreenLock = createComputerUseScreenLockGuard();
+  const computerUsePresentation = createComputerUsePresentationFeed(Date.now, deps.isComputerUseSessionActive, {
+    identity: computerUseWindowIdentity,
+    mayPreview: () => !computerUseScreenLock.locked(),
+    applicationIcon: async (target) => computerUseWindowIdentity.applicationIcon(target),
+  });
   const computerUseHost = createComputerUseHost({
-    isPackaged: app.isPackaged,
-    resourcesPath: process.resourcesPath,
+    ...(['darwin', 'win32'].includes(process.platform) ? { listOwnedWindows: (pid: number) => computerUseWindowIdentity.listOwnedWindows(pid) } : {}),
+    presentationTargetIdentity: {
+      acquire: (target, context) => computerUseWindowIdentity.acquire(target, context),
+      validate: (id, target) => computerUseWindowIdentity.validate(id, target.pid, target.windowId),
+      validateForeground: (id, target) => computerUseWindowIdentity.validateForeground(id, target.pid, target.windowId),
+      release: (id) => computerUseWindowIdentity.release(id),
+    },
+    requestAccessibilityPermission: async (signal) => {
+      signal.throwIfAborted();
+      if (process.platform === 'darwin') {
+        const { systemPreferences } = await import('electron');
+        systemPreferences.isTrustedAccessibilityClient(true);
+      }
+    },
     compressFrame: (base64) => {
       try {
         const image = nativeImage.createFromBuffer(Buffer.from(base64, 'base64'));
@@ -108,46 +112,26 @@ export function assembleDesktopNativeCapabilities(
       computerUseScreenLock.noteSessionActive(sessionId);
       return true;
     },
-    ...(deps.isComputerUseRealModelE2e
-      ? {
-          onTrace: (event) => {
-            const tracePath = process.env.MAKA_CU_REAL_MODEL_TRACE;
-            if (!tracePath) return;
-            void import('node:fs/promises')
-              .then(({ appendFile }) =>
-                appendFile(tracePath, `${JSON.stringify(event)}\n`, {
-                  encoding: 'utf8',
-                  mode: 0o600,
-                }),
-              )
-              .catch(() => undefined);
-          },
-        }
-      : {}),
-    overlay: withComputerUseStatusItem(
+    overlay: computerUsePresentation.wrap(withComputerUseStatusItem(
       withComputerUseScreenLock(
-        withComputerUsePip(createComputerUseOverlayHook(computerUseOverlay), computerUsePip),
+        createComputerUseOverlayHook(computerUseOverlay),
         computerUseScreenLock,
       ),
       computerUseStatusItem,
-    ),
+    )),
   });
   const computerUse = computerUseHost.selected;
   computerUseScreenLock.setSessionEvents(computerUse.tools.sessionEvents);
-  const computerUseTools = applyComputerUseRealModelPolicy(
-    computerUse.tools,
-    deps.isComputerUseRealModelE2e
-      ? parseComputerUseRealModelPolicy(process.env.MAKA_CU_REAL_MODEL_POLICY)
-      : undefined,
-  );
+  const computerUseTools = computerUse.tools;
 
   return {
     browserTools,
     computerUse,
     computerUseOverlay,
-    computerUsePip,
     computerUseStatusItem,
     computerUseScreenLock,
+    computerUsePresentation,
+    computerUseWindowIdentity,
     computerUseTools,
   };
 }

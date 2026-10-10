@@ -20,6 +20,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import type { CuAction } from '@maka/core/computer-use';
+import type { CuRunContext, CuSemanticAction } from '@maka/runtime/computer-use-types';
 import { buildComputerUseTools } from '@maka/runtime/computer-use-tools';
 import { parseObservationText } from '@maka/runtime/test-only/observation-text-reader';
 import { createComputerUseOverlayHook } from '../computer-use-overlay-hook.js';
@@ -29,10 +30,14 @@ function fakeController() {
   const completions: unknown[] = [];
   const cancellations: unknown[] = [];
   const ensured: string[] = [];
+  const cleared: string[] = [];
   return {
     controller: {
       ensure: (sessionId: string) => {
         ensured.push(sessionId);
+      },
+      clearForSession: (sessionId: string) => {
+        cleared.push(sessionId);
       },
       move: (input: unknown) => {
         moves.push(input);
@@ -48,6 +53,7 @@ function fakeController() {
     completions,
     cancellations,
     ensured,
+    cleared,
   };
 }
 
@@ -69,7 +75,6 @@ test('presentation starts from the Runtime-bound screen point', () => {
       screenX: 201,
       screenY: 151,
       kind: 'click',
-      instant: true,
       keepElevated: true,
     },
   ]);
@@ -180,8 +185,35 @@ test('failed semantic action cancels presentation', () => {
   assert.deepEqual(cancellations, [{ actionId: 'a1', sessionId: 's1' }]);
 });
 
-test('non-presented actions keep the session cursor without moving it', () => {
-  const { controller, moves, ensured } = fakeController();
+test('unverifiable and unknown input keep a neutral target indication without a click pulse', () => {
+  for (const outcome of [
+    {
+      ok: true,
+      tier: 'semantic-foreground',
+      verified: false,
+      evidence: { path: 'synthetic', effect: 'unverifiable' },
+    },
+    { ok: false, error: 'outcome_unknown', message: 'Delivery is unknown.' },
+  ] as const) {
+    const { controller, completions, cancellations } = fakeController();
+    const hook = createComputerUseOverlayHook(controller);
+    hook.onActionEnd?.(
+      { type: 'click_element' },
+      { outcome },
+      {
+        sessionId: 's1',
+        toolCallId: 'a1',
+        presentationScreenPoint: { x: 201, y: 151 },
+      },
+    );
+    assert.equal(completions.length, 1);
+    assert.equal((completions[0] as { pulse: boolean }).pulse, false);
+    assert.deepEqual(cancellations, []);
+  }
+});
+
+test('non-presented actions clear the preceding target instead of creating an empty canvas', () => {
+  const { controller, moves, ensured, cleared } = fakeController();
   const hook = createComputerUseOverlayHook(controller as never);
   for (const action of [
     { type: 'type', text: 'hi' },
@@ -192,7 +224,8 @@ test('non-presented actions keep the session cursor without moving it', () => {
     hook.onActionBegin(action, { sessionId: 's1', toolCallId: 'a1' });
   }
   assert.deepEqual(moves, []);
-  assert.deepEqual(ensured, ['s1', 's1', 's1', 's1']);
+  assert.deepEqual(ensured, []);
+  assert.deepEqual(cleared, ['s1', 's1', 's1', 's1']);
 });
 
 // ── The seam, not the fixture ───────────────────────────────────────────────
@@ -219,6 +252,7 @@ function recordingSink() {
     events,
     sink: {
       ensure: () => events.push({ call: 'ensure', input: {} }),
+      clearForSession: () => events.push({ call: 'clear', input: {} }),
       move: (input: Record<string, unknown>) => {
         events.push({ call: 'move', input: strip(input) });
         return { readyForInteraction: Promise.resolve(), finished: Promise.resolve() };
@@ -286,7 +320,8 @@ async function driveRealTool(
     async run() {
       return { outcome: { ok: true, tier: 'ax', verified: true } };
     },
-    async runSemantic() {
+    async runSemantic(_action: CuSemanticAction, _signal: AbortSignal, context: CuRunContext) {
+      await context.beforeNativeDispatch?.();
       return { outcome: { ok: true, tier: 'ax', verified: true }, observation: observed };
     },
   };
@@ -307,30 +342,40 @@ async function driveRealTool(
   return events;
 }
 
-test('a semantic action reaches the sink with the point it is aimed at', async () => {
-  const events = await driveRealTool({}, { action: 'click_element', element_id: '5' });
-  assert.deepEqual(
-    events.map((event) => event.call),
-    ['move', 'complete'],
-    'an element action must move the cursor and land it, not ensure-then-cancel',
-  );
-  // The centre of the element's own observed frame, in screen coordinates.
-  assert.deepEqual(events[0]?.input, {
-    screenX: 220,
-    screenY: 110,
-    kind: 'click',
-    instant: true,
-    keepElevated: false,
-    targetWindowId: 4321,
+for (const action of ['click_element', 'double_click_element', 'set_value', 'press_key', 'type']) {
+  test(`${action} reaches the sink with the point it is aimed at`, async () => {
+    const events = await driveRealTool(
+      {},
+      {
+        action,
+        element_id: '5',
+        ...(action === 'set_value' ? { value: 'hello' } : {}),
+        ...(action === 'press_key' ? { text: 'Return' } : {}),
+        ...(action === 'type' ? { text: 'A paragraph.' } : {}),
+      },
+    );
+    assert.deepEqual(
+      events.map((event) => event.call),
+      ['move', 'complete'],
+      'an element action must move the cursor and land it, not ensure-then-cancel',
+    );
+    // The centre of the element's own observed frame, in screen coordinates.
+    assert.deepEqual(events[0]?.input, {
+      screenX: 220,
+      screenY: 110,
+      kind: 'click',
+      keepElevated: false,
+      targetWindowId: 4321,
+    });
+    assert.deepEqual(events[1]?.input, {
+      screenX: 220,
+      screenY: 110,
+      kind: 'click',
+      pulse: action === 'click_element' || action === 'double_click_element',
+      targetWindowId: 4321,
+    });
   });
-  assert.deepEqual(events[1]?.input, {
-    screenX: 220,
-    screenY: 110,
-    kind: 'click',
-    pulse: true,
-    targetWindowId: 4321,
-  });
-});
+}
 
 test('an element whose observed frame is outside its window is not aimed at', async () => {
   // A frame that no longer lies inside the window is stale or the element has
@@ -352,7 +397,7 @@ test('an element whose observed frame is outside its window is not aimed at', as
   );
   assert.deepEqual(
     events.map((event) => event.call),
-    ['ensure', 'cancel'],
+    ['clear', 'cancel'],
   );
 });
 
@@ -372,6 +417,39 @@ test('an element the observation reported no frame for is not aimed at either', 
   );
   assert.deepEqual(
     events.map((event) => event.call),
-    ['ensure', 'cancel'],
+    ['clear', 'cancel'],
   );
+});
+
+test('hidden, minimized, and other-Space windows retain execution but do not present a cursor', async () => {
+  const events = await driveRealTool(
+    { presentationVisibility: 'unavailable' },
+    { action: 'click_element', element_id: '5' },
+  );
+  assert.deepEqual(
+    events.map((event) => event.call),
+    ['clear', 'clear'],
+  );
+});
+
+test('a target hidden during execution clears the cursor when its observation settles', () => {
+  const { controller, completions, cleared } = fakeController();
+  const hook = createComputerUseOverlayHook(controller);
+  hook.onActionEnd?.(
+    { type: 'click_element' },
+    {
+      outcome: { ok: true, tier: 'ax' },
+      observation: {
+        observationId: 'new',
+        appId: 'App',
+        pid: 42,
+        windowId: 7,
+        elements: [],
+        presentationVisibility: 'unavailable',
+      },
+    },
+    { sessionId: 's1', toolCallId: 'a1', presentationScreenPoint: { x: 201, y: 151 } },
+  );
+  assert.deepEqual(completions, []);
+  assert.deepEqual(cleared, ['s1']);
 });

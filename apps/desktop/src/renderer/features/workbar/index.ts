@@ -28,5 +28,6 @@ export { loadTerminalWebLinks } from './tools/terminal/terminal-web-links';
 export { WorkbarProvider } from './ui/workbar-provider';
 export { WorkbarShellRoot, type WorkbarShellProjection } from './ui/workbar-shell-root';
 export { WorkbarServicesProvider } from './services-context';
+export { ComputerUseConversationStatus } from './tools/computer/computer-use-status.js';
 export type { SessionWorkbarTabKind } from './model/workbar-tabs';
 export type { WorkbarServices } from './ports';

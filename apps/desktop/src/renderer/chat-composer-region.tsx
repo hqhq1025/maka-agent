@@ -191,6 +191,7 @@ export function ChatComposerRegion({
     activeInteraction?.type === 'sandbox_boundary_request' ? activeInteraction : undefined;
   const activeClientCapability =
     activeInteraction?.type === 'client_capability_request' ? activeInteraction : undefined;
+  const computerPermissionPending = activeClientCapability?.capability === 'computer_use';
   const activeQuestion = activeInteraction?.type === 'user_question_request' ? activeInteraction : undefined;
   const activeForm = activeInteraction?.type === 'form_request' ? activeInteraction : undefined;
   const activeModelChoice = composerRest.activeModel
@@ -281,6 +282,9 @@ export function ChatComposerRegion({
           ref={composerRef}
           {...(guest ? guestComposerProps(composerRest, guest) : {
             ...composerRest,
+            // Answering the pending request does not require a model/executor
+            // admission. The submission owner still holds duplicate sends.
+            ...(computerPermissionPending ? { sendBlocked: newTaskSendPending, disabled: false } : {}),
             contextUsage: contextUsage && liveContextUsage
               ? {
                   ...contextUsage,
@@ -305,7 +309,7 @@ export function ChatComposerRegion({
             goalActive: goalProjection.goalActive,
             onSetGoal: goalProjection.onSetGoal,
           })}
-          hidden={!active || onboardingComposerHidden || Boolean(activeInteraction) || Boolean(guest && !guest.composer)}
+          hidden={!active || onboardingComposerHidden || Boolean(activeInteraction && !computerPermissionPending) || Boolean(guest && !guest.composer)}
           draftKey={activeId ?? newTaskDraftKey}
           draftPersistence={newTaskDraftPersistence}
         />
@@ -360,6 +364,7 @@ export function ChatComposerRegion({
           <ClientCapabilityPrompt
             request={activeClientCapability}
             onRespond={respondToClientCapability}
+            textResponseAvailable={computerPermissionPending}
           />
         )}
         {activeQuestion && (

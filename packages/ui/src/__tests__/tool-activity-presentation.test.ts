@@ -21,6 +21,7 @@ import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import { createElement, type ReactNode } from 'react';
 import { renderToStaticMarkup as renderReactToStaticMarkup } from 'react-dom/server';
+import { parseHTML } from 'linkedom';
 import { computerUseModelCallArgs } from '@maka/core/computer-use';
 import { UI_LOCALES, type UiCatalog, type UiLocale } from '@maka/core/ui-locale';
 import { ToolCallDetail, ToolTrow } from '../tool-activity.js';
@@ -44,6 +45,14 @@ function renderToStaticMarkup(node: ReactNode, locale: UiLocale = 'zh-CN'): stri
 
 function outputPanelCount(markup: string): number {
   return (markup.match(/data-slot="tool-output"/g) ?? []).length;
+}
+
+function computerHeading(markup: string, toolUseId?: string): string {
+  const document = parseHTML(markup).document;
+  const rows = Array.from(document.querySelectorAll('.maka-computer-action'));
+  const row = toolUseId ? rows.find((entry) => entry.getAttribute('data-tool-use-id') === toolUseId) : rows[0];
+  assert.ok(row, 'Expected a Computer action row');
+  return row.querySelector('summary')?.outerHTML ?? '';
 }
 
 describe('tool activity presentation', () => {
@@ -152,30 +161,133 @@ describe('tool activity presentation', () => {
     assert.doesNotMatch(settled, /answers:/);
   });
 
-  it('describes Computer Use proxy calls by action instead of the generic tool name', () => {
-    const item: ToolActivityItem = {
-      toolUseId: 'computer-observe',
-      toolName: 'mcp__desktop_computer_use__maka_computer',
-      displayName: 'Maka Computer',
-      activityKind: 'tool',
-      status: 'completed',
-      args: computerUseModelCallArgs({
-        action: 'observe',
-        app: '计算器',
-        window_id: 7,
-      }),
-    };
+  for (const toolName of ['computer', 'mcp__desktop_computer_use__computer', 'maka_computer', 'mcp__desktop_computer_use__maka_computer']) {
+    it(`describes current and persisted ${toolName} calls by action`, () => {
+      const item: ToolActivityItem = {
+        toolUseId: 'computer-observe',
+        toolName,
+        displayName: toolName.includes('maka_computer') ? 'Maka Computer' : 'Computer',
+        activityKind: 'tool',
+        status: 'completed',
+        args: computerUseModelCallArgs({
+          action: 'observe',
+          app: '计算器',
+          window_id: 7,
+        }),
+      };
 
-    assert.equal(isComputerTool(item), true);
-    assert.equal(computerActionLabel(item, 'zh-CN'), '观察「计算器」窗口');
-    const markup = renderToStaticMarkup(
-      createElement(ToolTrow, { items: [item] }),
-    );
-    assert.match(markup, /观察「计算器」窗口/);
-    assert.doesNotMatch(markup, /Maka Computer/);
+      assert.equal(isComputerTool(item), true);
+      assert.equal(computerActionLabel(item, 'zh-CN'), '检查窗口');
+      const markup = renderToStaticMarkup(
+        createElement(ToolTrow, { items: [item] }),
+      );
+      assert.match(markup, /检查窗口/);
+      assert.match(markup, /「计算器」/);
+      assert.doesNotMatch(markup, /Maka Computer/);
+    });
+  }
+
+  it('renders live proxy arguments as generic activity and keeps technical evidence in details', () => {
+    const args = computerUseModelCallArgs({
+      action: 'set_value',
+      observation_id: '00000000-0000-0000-0000-000000000001',
+      element_id: 'e2',
+      window_id: 482,
+      value: 'Private field content',
+      delivery: 'foreground',
+    });
+    const live: ToolActivityItem = {
+      toolUseId: 'computer-fill',
+      toolName: 'mcp__desktop_computer_use__computer',
+      displayName: 'Computer',
+      activityKind: 'tool',
+      status: 'running',
+      args: undefined,
+      argsPreview: args,
+    };
+    const wording = {
+      'zh-CN': { running: '正在填写内容', settled: '填写内容' },
+      'zh-TW': { running: '正在填寫內容', settled: '填寫內容' },
+      en: { running: 'Filling in content', settled: 'Fill in content' },
+    } satisfies UiCatalog<{ running: string; settled: string }>;
+
+    for (const locale of UI_LOCALES) {
+      const row = computerHeading(renderToStaticMarkup(createElement(ToolTrow, { items: [live] }), locale));
+      assert.ok(row.includes(wording[locale].running), `${locale}: live action preview`);
+      assert.equal(computerRunningLabel([live], locale), wording[locale].running);
+      assert.doesNotMatch(row, /set_value|e2|482|Private field content|foreground|Maka Computer/);
+
+      // The durable args take precedence when the live preview is stale.
+      const settled = { ...live, status: 'completed' as const, args,
+        argsPreview: { action: 'observe' } };
+      const settledRow = computerHeading(renderToStaticMarkup(createElement(ToolTrow, { items: [settled] }), locale));
+      assert.ok(settledRow.includes(wording[locale].settled), `${locale}: durable action`);
+      assert.doesNotMatch(settledRow, /set_value|e2|Private field content|foreground/);
+
+      const detail = renderToStaticMarkup(createElement(ToolCallDetail, { item: settled }), locale);
+      assert.match(detail, /set_value/);
+      assert.match(detail, /e2/);
+      assert.match(detail, /482/);
+      assert.doesNotMatch(detail, /Private field content/);
+    }
   });
 
-  it('inherits the confirmed target and exposes live sequence progress', () => {
+  it('uses a supplied live app target without repeating technical action parameters', () => {
+    const observed: ToolActivityItem = {
+      toolUseId: 'live-observe',
+      toolName: 'mcp__desktop_computer_use__computer',
+      status: 'running',
+      args: undefined,
+      argsPreview: computerUseModelCallArgs({ action: 'observe', app: '计算器', window_id: 7 }),
+    };
+    const row = computerHeading(renderToStaticMarkup(createElement(ToolTrow, { items: [observed] })));
+    assert.match(row, /正在检查窗口/);
+    assert.equal((row.match(/「计算器」/g) ?? []).length, 1);
+    assert.doesNotMatch(row, /action:|>observe<|window_id/);
+    assert.equal(computerRunningLabel([observed], 'zh-CN'), '正在检查窗口 · 「计算器」');
+  });
+
+  it('distinguishes current double-click proxy calls in live and completed rows', () => {
+    const args = computerUseModelCallArgs({
+      action: 'double_click_element',
+      observation_id: '00000000-0000-0000-0000-000000000001',
+      element_id: 'e2',
+    });
+    const live: ToolActivityItem = {
+      toolUseId: 'computer-double-click',
+      toolName: 'mcp__desktop_computer_use__computer',
+      activityKind: 'tool',
+      status: 'running',
+      args: undefined,
+      argsPreview: args,
+    };
+    const wording = {
+      'zh-CN': { running: '正在双击', settled: '双击', click: '点击' },
+      'zh-TW': { running: '正在雙擊', settled: '雙擊', click: '點選' },
+      en: { running: 'Double-clicking', settled: 'Double-click', click: 'Click' },
+    } satisfies UiCatalog<{ running: string; settled: string; click: string }>;
+
+    for (const locale of UI_LOCALES) {
+      const row = computerHeading(renderToStaticMarkup(createElement(ToolTrow, { items: [live] }), locale));
+      assert.ok(row.includes(wording[locale].running), `${locale}: live double-click`);
+      assert.equal(computerRunningLabel([live], locale), wording[locale].running);
+      assert.doesNotMatch(row, /double_click_element|e2|mcp__/);
+
+      const completed = { ...live, status: 'completed' as const, args,
+        argsPreview: { action: 'click_element' } };
+      const completedRow = computerHeading(renderToStaticMarkup(createElement(ToolTrow, { items: [completed] }), locale));
+      assert.ok(completedRow.includes(wording[locale].settled), `${locale}: completed double-click`);
+      assert.equal(computerActionLabel({ ...completed, args: { action: 'click_element' } }, locale),
+        wording[locale].click);
+      assert.doesNotMatch(completedRow, /double_click_element|e2|mcp__/);
+
+      const detail = renderToStaticMarkup(createElement(ToolCallDetail, { item: completed }), locale);
+      assert.match(detail, /double_click_element/);
+      assert.match(detail, /e2/);
+    }
+  });
+
+  it('exposes live sequence progress without borrowing a previous call target', () => {
     const observed: ToolActivityItem = {
       toolUseId: 'computer-observe',
       toolName: 'maka_computer',
@@ -203,15 +315,17 @@ describe('tool activity presentation', () => {
     const markup = renderToStaticMarkup(
       createElement(ToolTrow, { items: [observed, sequence] }),
     );
-    assert.match(markup, /连续操作 11 个控件/);
-    assert.match(markup, /「计算器」窗口/);
-    // Group summaries expose the target; per-call progress is visible on an
-    // individual row, not in the group's unmounted collapsed body.
+    const heading = computerHeading(markup, sequence.toolUseId);
+    assert.match(heading, /正在操作电脑/);
+    assert.doesNotMatch(heading, /「计算器」/);
+    // The sequence row does not borrow the earlier observation's app target.
     assert.match(renderToStaticMarkup(createElement(ToolTrow, { items: [sequence] })), />7\/11</);
     assert.equal(
       computerRunningLabel([observed, sequence], 'zh-CN'),
-      '正在操作「计算器」窗口 · 连续操作第 7/11 步',
+      '正在连续操作第 7/11 步',
     );
+    const sequenceRow = renderToStaticMarkup(createElement(ToolTrow, { items: [sequence] }));
+    assert.doesNotMatch(sequenceRow, /计算器/);
   });
 
   it('renders a tool_search activation as a localized capability summary', () => {
@@ -224,7 +338,7 @@ describe('tool activity presentation', () => {
       result: {
         kind: 'json',
         value: {
-          activated: ['mcp__desktop_computer_use__maka_computer'],
+          activated: ['mcp__desktop_computer_use__computer'],
         },
       },
     };
@@ -236,7 +350,7 @@ describe('tool activity presentation', () => {
     assert.match(detail, /可以查看和操作已授权的本地应用/);
     assert.match(detail, /1 项能力可用/);
     assert.match(detail, /技术详情/);
-    assert.match(detail, /mcp__desktop_computer_use__maka_computer/);
+    assert.match(detail, /mcp__desktop_computer_use__computer/);
     assert.doesNotMatch(detail, /maka-tool-output-stack/);
   });
 

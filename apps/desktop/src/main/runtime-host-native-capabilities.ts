@@ -18,6 +18,8 @@
  */
 
 import { Buffer } from "node:buffer";
+import { randomUUID } from 'node:crypto';
+import { isComputerUseActivity, isCuToolAction } from '@maka/core/computer-use';
 import type { ComputerUseToolSet } from '@maka/runtime/computer-use-tools';
 import type { MakaTool } from '@maka/runtime/tool-runtime';
 import {
@@ -33,6 +35,7 @@ import {
   decodeClientCapabilityReplaceInput,
   decodeClientCapabilityToolDescriptor,
   projectToolInputSchema,
+  type ClientCapabilityAdmissionEvidence,
   type ClientCapabilityCallFrame,
   type ClientCapabilityCallResult,
   type ClientCapabilityContentBlock,
@@ -46,6 +49,10 @@ import { clientCapabilityEntityId } from "@maka/runtime-host/client-capability-e
 import { toJSONSchema, z } from "zod";
 import { withBrowserOriginAdmission } from './browser/browser-origin-admission.js';
 import type { DesktopTargetScope } from '../shared/runtime-host-identity.js';
+import {
+  withComputerUseForegroundAdmission,
+  type ComputerUseForegroundPolicyAuthority,
+} from './computer-use/foreground-admission.js';
 
 const CAPABILITY_VERSION = "0";
 const BROWSER_OFFER_ID = "desktop_browser";
@@ -107,6 +114,7 @@ export interface DesktopNativeCapabilityProviderInput {
   }) => string | Promise<string>;
   readonly releaseBrowserSession: (sessionId: string) => void | Promise<void>;
   readonly computerUseTools: ComputerUseToolSet;
+  readonly computerUseForegroundPolicy?: ComputerUseForegroundPolicyAuthority;
   readonly releaseDesktopInteractionSession: (
     sessionId: string,
   ) => void | Promise<void>;
@@ -126,6 +134,7 @@ export interface DesktopCapabilityService extends ClientCapabilityServiceOffer {
 }
 
 export interface DesktopNativeCapabilityProvider extends ClientCapabilityProvider {
+  call: NonNullable<ClientCapabilityProvider['call']>;
   abortSession(sessionId: string): Promise<void>;
   releaseSession(sessionId: string): Promise<void>;
   close(): Promise<void>;
@@ -192,12 +201,16 @@ export function createDesktopNativeCapabilityProvider(
     { readonly sessionId: string; readonly settled: Promise<void> }
   >();
   const usedSessionIds = new Set<string>();
+  const foregroundProviderEpoch = randomUUID();
+  // Only freshness is remembered here; every invocation still asks the Host to admit it.
+  const foregroundInvalidatedEpochs = new Map<string, string>();
   let closed = false;
   let closeTask: Promise<void> | undefined;
 
   function close(): Promise<void> {
     if (closeTask) return closeTask;
     closed = true;
+    foregroundInvalidatedEpochs.clear();
     closeTask = closeProvider(
       activeInvocations,
       usedSessionIds,
@@ -228,6 +241,8 @@ export function createDesktopNativeCapabilityProvider(
         providerOptions,
         invocation,
         usedSessionIds,
+        foregroundProviderEpoch,
+        foregroundInvalidatedEpochs,
       );
       const settled = task.then(
         () => undefined,
@@ -258,6 +273,7 @@ export function createDesktopNativeCapabilityProvider(
       await Promise.all(settling);
     },
     releaseSession: async (sessionId) => {
+      foregroundInvalidatedEpochs.delete(sessionId);
       const settling = abortInvocations(activeInvocations, sessionId);
       await Promise.all(settling);
       usedSessionIds.delete(sessionId);
@@ -383,8 +399,14 @@ async function invokeNativeTool(
   providerOptions: DesktopNativeCapabilityProviderOptions,
   invocation: AbortController,
   usedSessionIds: Set<string>,
+  foregroundProviderEpoch: string,
+  foregroundInvalidatedEpochs: Map<string, string>,
 ): Promise<ClientCapabilityCallResult> {
-  const hostPathAccess = providerOptions.hostPathAccess ?? "cwd";
+  // Computer targets belong to the executing Desktop, including when its Host
+  // is local. A Host workspace path supplies no authority over those targets.
+  const hostPathAccess = frame.offerId === COMPUTER_USE_OFFER_ID
+    ? "none"
+    : providerOptions.hostPathAccess ?? "cwd";
   if (hostPathAccess === "none" && frame.cwd !== undefined) {
     throw new Error("Desktop native capability does not accept a Host path");
   }
@@ -402,7 +424,19 @@ async function invokeNativeTool(
     frame.offerId === BROWSER_OFFER_ID || frame.offerId === COMPUTER_USE_OFFER_ID
       ? providerOptions.nativeSessionId?.(frame.sessionId) ?? frame.sessionId
       : frame.sessionId;
-  const admissionEvidence =
+  const isComputerUse = frame.offerId === COMPUTER_USE_OFFER_ID
+    && frame.serverId === COMPUTER_USE_OFFER_ID && frame.toolName === 'computer';
+  const foregroundPolicy = isComputerUse
+    ? await input.computerUseForegroundPolicy?.read()
+    : undefined;
+  const delivery = isPlainRecord(args) && args.delivery === 'foreground' ? 'foreground' : 'background';
+  if (isComputerUse && delivery === 'foreground' && foregroundPolicy?.policy === 'never') {
+    throw new Error('Foreground computer use is disabled in this Desktop\'s settings. Continue in the background or ask the user to change the setting.');
+  }
+  if (isComputerUse && delivery === 'foreground' && !foregroundPolicy) {
+    throw new Error('Foreground computer use authority is unavailable.');
+  }
+  const admissionEvidence: ClientCapabilityAdmissionEvidence =
     frame.offerId === BROWSER_OFFER_ID
       ? {
           kind: "browser_url" as const,
@@ -413,10 +447,24 @@ async function invokeNativeTool(
             signal,
           }),
         }
-      : { kind: "none" as const };
+      : isComputerUse
+        ? {
+            kind: 'computer_use' as const,
+            delivery,
+            foregroundPolicy: foregroundPolicy?.policy ?? 'never',
+            authorityEpoch: `${foregroundProviderEpoch}_${foregroundPolicy?.epoch ?? 'disabled'}`,
+          }
+        : { kind: "none" as const };
   signal.throwIfAborted();
   await options.accept(admissionEvidence);
   signal.throwIfAborted();
+  if (admissionEvidence.kind === 'computer_use' && delivery === 'foreground') {
+    const current = await input.computerUseForegroundPolicy?.read();
+    signal.throwIfAborted();
+    if (current?.policy === 'never' || current?.epoch !== foregroundPolicy?.epoch) {
+      throw new Error('Foreground computer use policy changed while admission was pending. Observe again before requesting foreground access.');
+    }
+  }
   if (admissionEvidence.kind === "browser_url") {
     const currentUrl = await input.resolveBrowserUrl({
       sessionId,
@@ -429,10 +477,35 @@ async function invokeNativeTool(
     }
   }
   signal.throwIfAborted();
+  if (providerOptions.isTargetValid?.() === false) {
+    throw new Error('Desktop native capability target is no longer valid');
+  }
   usedSessionIds.add(frame.sessionId);
   providerOptions.onSessionUsed?.(frame.sessionId);
   if (frame.offerId === COMPUTER_USE_OFFER_ID || frame.offerId === "desktop_workhub") {
     providerOptions.onDesktopInteractionTurnUsed?.(frame.sessionId, frame.turnId);
+  }
+  if (admissionEvidence.kind === 'computer_use' && delivery === 'foreground'
+    && foregroundInvalidatedEpochs.get(frame.sessionId) !== admissionEvidence.authorityEpoch) {
+    const action = args && typeof args === 'object' && 'action' in args ? args.action : undefined;
+    input.computerUseTools.sessionEvents.reobserveRequired(sessionId);
+    foregroundInvalidatedEpochs.set(frame.sessionId, admissionEvidence.authorityEpoch);
+    return projectToolResult(binding.tool, frame.toolCallId, args, {
+      text: 'computer failed: reobserve_required — foreground access is now authorized for this task. No input was sent. Call action:"observe" for the target, then plan the next action from the fresh observation.',
+      error: 'reobserve_required',
+      ...(typeof action === 'string' && isCuToolAction(action) ? {
+        computerUse: {
+          toolCallId: frame.toolCallId,
+          action,
+          outcome: {
+            execution: 'not_started',
+            ok: false,
+            error: 'reobserve_required',
+            reason: 'foreground_authorized_reobserve',
+          },
+        },
+      } : {}),
+    }, true);
   }
   const execute = () =>
     binding.tool.impl(args, {
@@ -445,13 +518,29 @@ async function invokeNativeTool(
       requestUserForm: options.requestInteraction,
       ...(options.progress ? { emitProgress: options.progress } : {}),
     });
-  const output = await (admissionEvidence.kind === "browser_url"
-    ? withBrowserOriginAdmission(
-        { sessionId, url: admissionEvidence.url },
-        execute,
-      )
-    : execute());
-  return projectToolResult(binding.tool, frame.toolCallId, args, output);
+  let executing = true;
+  let output: unknown;
+  try {
+    output = await (admissionEvidence.kind === "browser_url"
+      ? withBrowserOriginAdmission(
+          { sessionId, url: admissionEvidence.url },
+          execute,
+        )
+      : admissionEvidence.kind === 'computer_use' && delivery === 'foreground'
+        ? withComputerUseForegroundAdmission({
+            sessionId,
+            turnId: frame.turnId,
+            toolCallId: frame.toolCallId,
+            isCurrent: () => executing && !signal.aborted
+              && providerOptions.isTargetValid?.() !== false
+              && input.computerUseForegroundPolicy?.current().policy !== 'never'
+              && input.computerUseForegroundPolicy?.current().epoch === foregroundPolicy?.epoch,
+          }, execute)
+        : execute());
+  } finally {
+    executing = false;
+  }
+  return projectToolResult(binding.tool, frame.toolCallId, args, output, isComputerUse);
 }
 
 function browserOrigin(value: string): string {
@@ -486,7 +575,7 @@ function capabilityOffer(
     offerId: group.offerId,
     version: CAPABILITY_VERSION,
     affinity: "session",
-    hostPathAccess,
+    hostPathAccess: group.offerId === COMPUTER_USE_OFFER_ID ? "none" : hostPathAccess,
     label: group.label,
     description: group.description,
     tools: Object.freeze(
@@ -729,7 +818,21 @@ async function projectToolResult(
   toolCallId: string,
   input: unknown,
   output: unknown,
+  computerUse = false,
 ): Promise<ClientCapabilityCallResult> {
+  const raw = output && typeof output === 'object' ? output as Record<string, unknown> : undefined;
+  const error = typeof raw?.error === 'string' && raw.error.length > 0 ? raw.error : undefined;
+  const metadata = {
+    // The wire status is bounded; full diagnostics remain in the tool content.
+    ...(error ? { error: error.length <= 128 ? error : 'tool_failed' } : {}),
+    ...(computerUse && typeof raw?.text === 'string' && raw.text.length > 0
+      ? { summary: raw.text }
+      : {}),
+    ...(computerUse && isComputerUseActivity(raw?.computerUse) &&
+      raw.computerUse.toolCallId === toolCallId
+      ? { computerUse: structuredClone(raw.computerUse) }
+      : {}),
+  };
   const modelOutput = tool.toModelOutput
     ? await tool.toModelOutput({
         toolCallId,
@@ -739,24 +842,28 @@ async function projectToolResult(
     : undefined;
   if (!modelOutput) {
     return typeof output === "string"
-      ? { content: [{ type: "text", text: output }] }
-      : { content: [], structuredContent: output };
+      ? { content: [{ type: "text", text: output }], ...metadata }
+      : { content: [], structuredContent: output, ...metadata };
   }
   switch (modelOutput.type) {
     case "text":
     case "error-text":
-      return { content: [{ type: "text", text: modelOutput.value }] };
+      return { content: [{ type: "text", text: modelOutput.value }], ...metadata,
+        ...(modelOutput.type === 'error-text' ? { error: metadata.error ?? 'tool_failed' } : {}) };
     case "json":
     case "error-json":
-      return { content: [], structuredContent: modelOutput.value };
+      return { content: [], structuredContent: modelOutput.value, ...metadata,
+        ...(modelOutput.type === 'error-json' ? { error: metadata.error ?? 'tool_failed' } : {}) };
     case "execution-denied":
       return {
+        ...metadata,
+        error: metadata.error ?? 'execution_denied',
         content: [
           { type: "text", text: modelOutput.reason ?? "Execution denied" },
         ],
       };
     case "content":
-      return { content: modelOutput.value.map(projectContentPart) };
+      return { content: modelOutput.value.map(projectContentPart), ...metadata };
   }
 }
 

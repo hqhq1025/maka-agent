@@ -14,7 +14,16 @@
     "test:dist": "node --test \"dist/**/*.test.js\""
   },
   "dependencies": {
+    "@trycua/cua-driver": "https://github.com/trycua/cua/releases/download/cua-driver-rs-v0.34.0/trycua-cua-driver-0.34.0.tgz",
     "@maka/core": "0.1.0",
     "@maka/runtime": "0.1.0"
+  },
+  "optionalDependencies": {
+    "@trycua/cua-driver-darwin-arm64": "https://github.com/trycua/cua/releases/download/cua-driver-rs-v0.34.0/trycua-cua-driver-darwin-arm64-0.34.0.tgz",
+    "@trycua/cua-driver-darwin-x64": "https://github.com/trycua/cua/releases/download/cua-driver-rs-v0.34.0/trycua-cua-driver-darwin-x64-0.34.0.tgz",
+    "@trycua/cua-driver-linux-arm64-gnu": "https://github.com/trycua/cua/releases/download/cua-driver-rs-v0.34.0/trycua-cua-driver-linux-arm64-gnu-0.34.0.tgz",
+    "@trycua/cua-driver-linux-x64-gnu": "https://github.com/trycua/cua/releases/download/cua-driver-rs-v0.34.0/trycua-cua-driver-linux-x64-gnu-0.34.0.tgz",
+    "@trycua/cua-driver-win32-arm64-msvc": "https://github.com/trycua/cua/releases/download/cua-driver-rs-v0.34.0/trycua-cua-driver-win32-arm64-msvc-0.34.0.tgz",
+    "@trycua/cua-driver-win32-x64-msvc": "https://github.com/trycua/cua/releases/download/cua-driver-rs-v0.34.0/trycua-cua-driver-win32-x64-msvc-0.34.0.tgz"
   }
 }

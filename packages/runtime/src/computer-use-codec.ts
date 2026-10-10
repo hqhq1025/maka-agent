@@ -42,6 +42,10 @@ export const COMPUTER_USE_REFINEMENT_MESSAGES = {
   windowMovePosition: 'window_action move requires position',
   windowResizeSize: 'window_action resize requires size',
   waitOneCondition: 'wait takes one condition, not both — send wait_for_text or wait_for_text_gone',
+  inputTarget:
+    'type and press_key require exactly one target: element_id, coordinate, or focus:"current" from the same observation',
+  currentFocusDelivery:
+    'focus:"current" requires explicit delivery:"foreground" and a fresh exact-window screenshot; it is currently supported only on Windows',
 } as const;
 
 const REFINEMENT_MESSAGE_SET: ReadonlySet<string> = new Set(
@@ -69,6 +73,11 @@ const redundantTargetHints = {
   app: z.string().min(1).max(512).optional(),
   window_id: z.number().int().positive().optional(),
 } as const;
+const delivery = z.enum(['background', 'foreground']).optional();
+export const screenshotCoordinate = z.tuple([
+  z.number().int().nonnegative(),
+  z.number().int().nonnegative(),
+]);
 export const computerParams = z.discriminatedUnion('action', [
   z
     .object({
@@ -117,6 +126,16 @@ export const computerParams = z.discriminatedUnion('action', [
   z
     .object({
       action: z.literal('click_element'),
+      delivery,
+      observation_id: z.string().min(1).max(256),
+      element_id: z.string().min(1).max(256),
+      ...redundantTargetHints,
+    })
+    .strict(),
+  z
+    .object({
+      action: z.literal('double_click_element'),
+      delivery,
       observation_id: z.string().min(1).max(256),
       element_id: z.string().min(1).max(256),
       ...redundantTargetHints,
@@ -125,6 +144,7 @@ export const computerParams = z.discriminatedUnion('action', [
   z
     .object({
       action: z.literal('set_value'),
+      delivery,
       observation_id: z.string().min(1).max(256),
       element_id: z.string().min(1).max(256),
       value: text,
@@ -143,6 +163,7 @@ export const computerParams = z.discriminatedUnion('action', [
   z
     .object({
       action: z.literal('secondary_action'),
+      delivery,
       observation_id: z.string().min(1).max(256),
       element_id: z.string().min(1).max(256),
       text,
@@ -152,6 +173,7 @@ export const computerParams = z.discriminatedUnion('action', [
   z
     .object({
       action: z.literal('scroll_element'),
+      delivery,
       observation_id: z.string().min(1).max(256),
       element_id: z.string().min(1).max(256),
       scroll_direction: z.enum(['up', 'down', 'left', 'right']),
@@ -234,21 +256,26 @@ export const computerParams = z.discriminatedUnion('action', [
   z
     .object({
       action: z.literal('press_key'),
+      delivery,
       observation_id: z.string().min(1).max(256),
       text,
-      /**
-       * Which control the key is for.
-       *
-       * Optional, and not a hint: the driver focuses the named element through
-       * accessibility before posting the key. Without it a key is posted to the
-       * application and lands on whatever happens to have focus, which is a
-       * guess the model was already trying to replace — it sent `element_id`
-       * and was told only that the field was unknown.
-       */
       element_id: z.string().min(1).max(256).optional(),
+      coordinate: screenshotCoordinate.optional(),
+      focus: z.literal('current').optional(),
       ...redundantTargetHints,
     })
-    .strict(),
+    .strict()
+    .refine(
+      (input) =>
+        [input.element_id, input.coordinate, input.focus].filter((value) => value !== undefined)
+          .length === 1,
+      {
+        message: COMPUTER_USE_REFINEMENT_MESSAGES.inputTarget,
+      },
+    )
+    .refine((input) => input.focus === undefined || input.delivery === 'foreground', {
+      message: COMPUTER_USE_REFINEMENT_MESSAGES.currentFocusDelivery,
+    }),
   z
     .object({
       action: z.literal('screenshot'),
@@ -262,10 +289,26 @@ export const computerParams = z.discriminatedUnion('action', [
   z
     .object({
       action: z.literal('type'),
+      delivery,
       observation_id: z.string().min(1).max(256),
+      element_id: z.string().min(1).max(256).optional(),
+      coordinate: screenshotCoordinate.optional(),
+      focus: z.literal('current').optional(),
       text,
+      ...redundantTargetHints,
     })
-    .strict(),
+    .strict()
+    .refine(
+      (input) =>
+        [input.element_id, input.coordinate, input.focus].filter((value) => value !== undefined)
+          .length === 1,
+      {
+        message: COMPUTER_USE_REFINEMENT_MESSAGES.inputTarget,
+      },
+    )
+    .refine((input) => input.focus === undefined || input.delivery === 'foreground', {
+      message: COMPUTER_USE_REFINEMENT_MESSAGES.currentFocusDelivery,
+    }),
   z
     .object({
       action: z.literal('key'),
@@ -418,6 +461,7 @@ export function snapshotComputerParams(args: ComputerParams): ComputerParams {
   }
   const source = args as ComputerParams & Record<string, unknown>;
   const snapshot = { ...source } as Record<string, unknown>;
+  if (Array.isArray(source.coordinate)) snapshot.coordinate = Object.freeze([...source.coordinate]);
   return Object.freeze(snapshot) as ComputerParams;
 }
 
@@ -443,6 +487,7 @@ export function adaptToCuAction(args: ComputerParams): CuAction {
     case 'launch_app':
     case 'observe':
     case 'click_element':
+    case 'double_click_element':
     case 'set_value':
     case 'select_text':
     case 'secondary_action':
@@ -499,6 +544,8 @@ export function summarizeEvidence(
   // `effect` stays on both faces. It is the one field here the model acts on:
   // `suspected_noop` means a retry of the same thing is a retry of nothing.
   if (evidence.effect) fields.push(`effect=${evidence.effect}`);
+  if (evidence.requestedDelivery) fields.push(`requested_delivery=${evidence.requestedDelivery}`);
+  if (evidence.actualDelivery) fields.push(`delivery=${evidence.actualDelivery}`);
   // Which of several conditions produced the error code, when the host
   // authored one. `target_changed` alone covers seven different situations —
   // the window moved, the tree changed under the observation, the element left
@@ -538,13 +585,13 @@ export function summarize(
     // shown it.
     //
     // It is shown only when the backend declares its diagnostics carry no
-    // application text (`maka.cu/2` §1.2 makes that a protocol rule). Absent
+    // application text. Absent
     // means withheld: a backend that says nothing is treated as one that
     // cannot promise it.
     const detail =
       outcome.messageIsAppTextFree === true && outcome.message ? ` — ${outcome.message}` : '';
     return (
-      `maka_computer.${action.type} failed: ${outcome.error}${detail}${evidence}` +
+      `computer.${action.type} failed: ${outcome.error}${detail}${evidence}` +
       (typeof outcome.completedSubSteps === 'number'
         ? ` (completed ${outcome.completedSubSteps} sub-steps)`
         : '')
@@ -573,7 +620,7 @@ export function summarize(
   // same clause it can act on, and that stays on both faces.
   const via = audience === 'host' ? ` via ${outcome.tier}` : '';
   return (
-    `maka_computer.${action.type} ${verdict}${via} (verified=${verified})${evidence}${shot}` +
+    `computer.${action.type} ${verdict}${via} (verified=${verified})${evidence}${shot}` +
     (outcome.verified === false
       ? ' — dispatch could not be confirmed; re-screenshot before retrying'
       : outcome.verified === true && outcome.evidence?.effect === 'confirmed'

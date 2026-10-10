@@ -1,0 +1,113 @@
+/*
+ * Licensed to the Apache Software Foundation (ASF) under one
+ * or more contributor license agreements.  See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership.  The ASF licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * "License"); you may not use this file except in compliance
+ * with the License.  You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing,
+ * software distributed under the License is distributed on an
+ * "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+ * KIND, either express or implied.  See the License for the
+ * specific language governing permissions and limitations
+ * under the License.
+ */
+
+.maka-computer-conversation-status {
+  box-sizing: border-box;
+  width: min(var(--maka-reading-measure), calc(100% - 2 * var(--space-6)));
+  margin-inline: auto;
+  margin-block-end: var(--space-2);
+}
+.maka-computer-activity-entry { width: 28px; min-width: 28px; height: 28px; padding: 6px; }
+.maka-computer-activity-entry > span { display: flex; justify-content: center; }
+.maka-computer-activity-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  width: 16px;
+  height: 16px;
+  color: var(--muted-foreground);
+}
+.maka-computer-activity-icon img { width: 100%; height: 100%; object-fit: contain; }
+.maka-computer-panel {
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  min-width: 0;
+  min-height: 0;
+  height: 100%;
+  overflow: auto;
+  padding: var(--space-4);
+}
+.maka-computer-panel-heading {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  justify-content: space-between;
+}
+.maka-computer-panel-status {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.maka-computer-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  gap: var(--space-2);
+  padding: var(--space-8) var(--space-3);
+}
+.maka-computer-no-frame {
+  border: 1px dashed var(--border);
+  border-radius: var(--radius-surface);
+}
+.maka-computer-preview-controls {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  justify-content: space-between;
+}
+.maka-computer-preview-copy {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  min-width: 0;
+  flex: 1;
+}
+.maka-computer-preview-controls > button { flex: none; }
+.maka-computer-preview-slot {
+  min-width: 0;
+  min-height: 160px;
+  flex-shrink: 0;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-control);
+  background: var(--surface-sunken);
+}
+.maka-computer-preview-slot[data-live] { background: #181818; }
+.maka-computer-preview-slot > .maka-computer-no-frame {
+  box-sizing: border-box;
+  justify-content: center;
+  height: 100%;
+  border: none;
+}
+.maka-computer-frame-caption {
+  display: flex;
+  justify-content: space-between;
+  gap: var(--space-2);
+}
+.maka-computer-preview-slot img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}

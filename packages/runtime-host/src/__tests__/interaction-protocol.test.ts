@@ -34,8 +34,123 @@ import {
   projectInteractionRecord,
   projectSessionInteractions,
 } from '../server/interaction-projection.js';
+import {
+  authorizeRuntimeHostOperation,
+  createRuntimeHostConnectionAuthority,
+  LOCAL_OWNER_CONNECTION_AUTHORITY,
+} from '../server/connection-authority.js';
+import {
+  CAPABILITY_PROVIDER_OPERATION_GRANTS,
+  SESSION_GUEST_OPERATION_GRANTS,
+} from '../server/access-credential-store.js';
 
 describe('Runtime Host Interaction protocol', () => {
+  test('text authorization has exact bounded wire input and owner-only operation grants', () => {
+    const frame = {
+      requestId: 'text-answer-1',
+      operation: 'interaction.respondByText',
+      input: { sessionId: 'session-1', interactionId: 'interaction-1', text: '批准' },
+    } as const;
+    assert.deepEqual(decodeClientFrame(frame), frame);
+    for (const input of [
+      { ...frame.input, decision: 'allow' },
+      { ...frame.input, text: '批'.repeat(342) },
+      { ...frame.input, interactionId: 'invalid:id' },
+    ])
+      assert.throws(() => decodeClientFrame({ ...frame, input }), isInvalidFrame);
+    for (const kind of ['unrecognized', 'unavailable']) {
+      const response = {
+        requestId: frame.requestId,
+        operation: frame.operation,
+        ok: true,
+        result: { kind },
+      };
+      assert.deepEqual(decodeHostFrame(response), response);
+      assert.throws(
+        () => decodeHostFrame({ ...response, result: { kind, decision: 'allow' } }),
+        isInvalidFrame,
+      );
+    }
+    assert.equal(authorizeRuntimeHostOperation(LOCAL_OWNER_CONNECTION_AUTHORITY, frame), true);
+    for (const [principalKind, operationGrants] of [
+      ['session_guest', SESSION_GUEST_OPERATION_GRANTS],
+      ['capability_provider', CAPABILITY_PROVIDER_OPERATION_GRANTS],
+    ] as const) {
+      const authority = createRuntimeHostConnectionAuthority({
+        principalKind,
+        principalId: 'test-principal',
+        credentialId: 'test-credential',
+        operationGrants,
+        canPublishClientCapabilities: false,
+        canUseHostPaths: false,
+      });
+      assert.equal(authorizeRuntimeHostOperation(authority, frame), false);
+    }
+    const restrictedOwner = createRuntimeHostConnectionAuthority({
+      principalKind: 'remote_owner',
+      principalId: 'remote-owner',
+      credentialId: 'remote-credential',
+      operationGrants: ['interaction.answer'],
+      canPublishClientCapabilities: false,
+      canUseHostPaths: false,
+    });
+    assert.equal(authorizeRuntimeHostOperation(restrictedOwner, frame), false);
+    const remoteOwner = createRuntimeHostConnectionAuthority({
+      ...restrictedOwner,
+      operationGrants: ['interaction.respondByText'],
+    });
+    assert.equal(authorizeRuntimeHostOperation(remoteOwner, frame), true);
+  });
+
+  test('text authorization output carries the original reply only on a canonical decision', () => {
+    const snapshot = {
+      ...snapshotBase('interaction-1'),
+      revision: 2,
+      status: 'answered',
+      request: {
+        kind: 'client_capability',
+        toolUseId: 'tool-1',
+        target: {
+          providerId: 'provider-1',
+          contractId: 'contract-1',
+          serverId: 'desktop_computer_use',
+          toolName: 'computer',
+          capability: 'computer_use',
+          scope: { kind: 'capability' },
+        },
+      },
+      outcome: {
+        kind: 'client_capability_decision',
+        decision: 'allow',
+        committedAt: 5,
+        responseText: '批准',
+      },
+    } as const;
+    const response = {
+      requestId: 'text-1',
+      operation: 'interaction.respondByText',
+      ok: true,
+      result: { kind: 'answered', snapshot },
+    } as const;
+    assert.deepEqual(decodeHostFrame(response), response);
+    assert.throws(
+      () =>
+        decodeInteractionSnapshot({
+          ...snapshot,
+          outcome: { ...snapshot.outcome, responseText: '批'.repeat(342) },
+        }),
+      isInvalidFrame,
+    );
+    assert.throws(
+      () =>
+        HOST_OPERATION_SPECS['interaction.respondByText'].assertOutputForInput?.(
+          { sessionId: 'session-1', interactionId: 'other-request', text: '批准' },
+          response.result,
+        ),
+      isInvalidFrame,
+    );
+  });
+
   test('decodes a closed snapshot and rejects extra fields', () => {
     const closed = {
       ...snapshotBase('interaction-1'),

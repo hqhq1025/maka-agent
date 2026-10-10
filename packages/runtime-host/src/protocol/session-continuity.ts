@@ -18,6 +18,7 @@
  */
 
 import { TOOL_ACTIVITY_KINDS, TOOL_OUTPUT_DELTA_MAX_CHARS } from '@maka/core/events';
+import { isComputerUseActivity, type ComputerUseActivity } from '@maka/core/computer-use';
 import type { SandboxBoundaryFailureSignal, ToolResultPreviewContent } from '@maka/core/events';
 import { decodeToolResultPreviewContent } from '@maka/core/tool-result-preview';
 import type { ToolActivityKind } from '@maka/core/events';
@@ -209,6 +210,7 @@ export type SessionToolEvent =
       operationId?: string;
       status: 'completed' | 'errored';
       sandboxFailureReason?: SandboxBoundaryFailureSignal['reason'];
+      computerUse?: ComputerUseActivity;
       durationMs?: number;
     })
   | (SessionToolEventIdentity & {
@@ -970,6 +972,7 @@ function decodeSessionToolEvent(value: unknown): SessionToolEvent {
       'operationId',
       'status',
       'sandboxFailureReason',
+      'computerUse',
       'durationMs',
     ];
     assertAllowedKeys(record, 'Session tool result event', allowed);
@@ -987,6 +990,13 @@ function decodeSessionToolEvent(value: unknown): SessionToolEvent {
     if (record.status === 'completed' && record.sandboxFailureReason !== undefined) {
       throw invalidProtocolFrame('Completed Session tool result cannot carry a sandbox failure');
     }
+    if (
+      record.computerUse !== undefined &&
+      (!isComputerUseActivity(record.computerUse) ||
+        record.computerUse.toolCallId !== identity.toolUseId)
+    ) {
+      throw invalidProtocolFrame('Invalid Session Computer Use activity');
+    }
     return {
       type: record.type,
       ...identity,
@@ -994,6 +1004,9 @@ function decodeSessionToolEvent(value: unknown): SessionToolEvent {
         ? {}
         : { operationId: requireEntityId(record.operationId, 'operationId') }),
       status: record.status,
+      ...(record.computerUse === undefined
+        ? {}
+        : { computerUse: structuredClone(record.computerUse) }),
       ...(record.sandboxFailureReason === undefined
         ? {}
         : { sandboxFailureReason: requireSandboxFailureReason(record.sandboxFailureReason) }),

@@ -858,6 +858,26 @@ describe('assertPackagedResources', () => {
   };
   const forbidPath = async () => {};
 
+  test('current macOS preview requires the retained-window addon and legacy baselines may omit it', async () => {
+    const addon = join(resources, 'desktop-window-identity', 'maka_desktop_window_identity.node');
+    await assert.rejects(
+      () =>
+        assertPackagedResources(resources, {
+          requirePath: requirePathMissing(addon),
+          forbidPath,
+          requireWindowsSandbox: false,
+          requireDesktopWindowIdentity: true,
+        }),
+      /MISSING .*maka_desktop_window_identity\.node/,
+    );
+    await assertPackagedResources(resources, {
+      requirePath: requirePathMissing(addon),
+      forbidPath,
+      requireWindowsSandbox: false,
+      requireDesktopWindowIdentity: false,
+    });
+  });
+
   test('a current build must carry the canonical icon', async () => {
     await assert.rejects(
       () =>

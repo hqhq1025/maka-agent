@@ -25,6 +25,7 @@ import { decodePersistedPermissionMode, isPermissionMode } from './permission.js
 import type { PersistedValue } from './persisted-value.js';
 import { isStorageRef, type ToolResultContent } from './events.js';
 import { validateSandboxBoundaryExpansion } from './sandbox-boundary.js';
+import { isComputerUseActivity } from './computer-use.js';
 import {
   defineObjectShape,
   hasExactShape,
@@ -41,7 +42,7 @@ type RiveResult = Result<'rive_workflow'>;
 
 const TEXT_SHAPE = defineObjectShape<Result<'text'>>()(
   ['kind', 'text'],
-  ['sandboxDenial', 'sandboxFailure', 'uncertainOutcome'],
+  ['sandboxDenial', 'sandboxFailure', 'uncertainOutcome', 'computerUse'],
 );
 const SANDBOX_FAILURE_SHAPE = defineObjectShape<NonNullable<Result<'text'>['sandboxFailure']>>()(
   ['reason'],
@@ -212,6 +213,7 @@ function isNonShellToolResultContent(value: unknown): value is ToolResultContent
       return (
         hasExactShape(value, TEXT_SHAPE) &&
         typeof value.text === 'string' &&
+        (value.computerUse === undefined || isComputerUseActivity(value.computerUse)) &&
         (value.sandboxDenial === undefined || isSandboxDenialSignal(value.sandboxDenial)) &&
         (value.sandboxFailure === undefined ||
           (isRecord(value.sandboxFailure) &&

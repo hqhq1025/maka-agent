@@ -18,137 +18,31 @@
  */
 
 import assert from 'node:assert/strict';
-import { createHash } from 'node:crypto';
-import { chmod, mkdtemp, rm, symlink, writeFile } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
-import { describe, it } from 'node:test';
-import {
-  createComputerUseHost,
-  computerUseServiceHealth,
-} from '../computer-use-host.js';
+import { test } from 'node:test';
+import { createComputerUseHost, computerUseServiceHealth } from '../computer-use-host.js';
 
-describe('Computer Use host health', () => {
-  const snapshot = (
-    state: 'idle' | 'starting' | 'ready' | 'backing_off' | 'unavailable' | 'disposed',
-  ) => ({ state, generation: 1, restartAttempts: 0 });
-
-  it('does not report a binary-only executor as healthy before first use', () => {
-    assert.deepEqual(computerUseServiceHealth('maka-cu', snapshot('idle')), {
-      state: 'not_run',
-      reason: 'cu_executor_lazy_start',
-    });
+test('Desktop selects the SDK without provisioning a legacy executable', async () => {
+  const host = createComputerUseHost({ physicalInputRecentlyActive: () => false });
+  assert.equal(host.selected.backendId, 'cua-driver');
+  assert.equal(host.selected.tools.length, 1);
+  assert.deepEqual(computerUseServiceHealth(host.selected.backendId, host.selected.backend?.executorState?.()), {
+    state: 'not_run', reason: 'cu_executor_lazy_start',
   });
+  await host.selected.backend?.dispose?.();
+  assert.equal(computerUseServiceHealth('cua-driver', host.selected.backend?.executorState?.()).reason, 'cu_executor_stopped');
+});
 
-  it('reports ready, recovery, and unavailable states', () => {
-    assert.equal(computerUseServiceHealth('maka-cu', snapshot('ready')).state, 'healthy');
-    assert.equal(
-      computerUseServiceHealth('maka-cu', snapshot('backing_off')).reason,
-      'cu_executor_recovering',
-    );
-    assert.equal(
-      computerUseServiceHealth('maka-cu', snapshot('starting')).state,
-      'degraded',
-    );
-    assert.deepEqual(computerUseServiceHealth('maka-cu', snapshot('unavailable')), {
-      state: 'not_available',
-      reason: 'cu_executor_start_failed',
-    });
-    assert.deepEqual(computerUseServiceHealth('maka-cu', snapshot('disposed')), {
-      state: 'not_available',
-      reason: 'cu_executor_stopped',
-    });
+test('failed native import is unavailable, not healthy', () => {
+  assert.deepEqual(computerUseServiceHealth('cua-driver', { state: 'unavailable' }), {
+    state: 'not_available', reason: 'cu_executor_start_failed',
   });
+});
 
-  it('reports a missing backend as unavailable', () => {
-    assert.equal(computerUseServiceHealth('none', undefined).state, 'not_available');
+test('a loaded SDK with missing desktop prerequisites remains degraded', () => {
+  assert.deepEqual(computerUseServiceHealth('cua-driver', { state: 'ready', environmentReady: false }), {
+    state: 'degraded', reason: 'cu_backend_unavailable',
   });
-
-  it('constructs a backend only when the local artifact matches the manifest hash', async (t) => {
-    const directory = await mkdtemp(join(tmpdir(), 'maka-cu-host-'));
-    try {
-      const binaryPath = join(directory, 'maka-cu');
-      const manifestPath = join(directory, 'bundled-tools.json');
-      const bytes = Buffer.from('#!/bin/sh\nexit 0\n');
-      await writeFile(binaryPath, bytes);
-      await chmod(binaryPath, 0o755);
-      const hash = createHash('sha256').update(bytes).digest('hex');
-      await writeFile(manifestPath, JSON.stringify({
-        makaCu: { binarySha256: hash, distributionReady: false },
-      }));
-
-      const validForDevelopment = createComputerUseHost({
-        isPackaged: false,
-        resourcesPath: directory,
-        manifestPath,
-        binaryPath,
-        physicalInputRecentlyActive: () => false,
-      });
-      assert.equal(validForDevelopment.selected.backendId, process.platform === 'darwin'
-        ? 'maka-cu'
-        : 'none');
-
-      const blockedForDistribution = createComputerUseHost({
-        isPackaged: true,
-        resourcesPath: directory,
-        manifestPath,
-        binaryPath,
-        physicalInputRecentlyActive: () => false,
-      });
-      assert.equal(blockedForDistribution.selected.backendId, 'none');
-
-      await writeFile(manifestPath, JSON.stringify({
-        makaCu: { binarySha256: hash, distributionReady: true },
-      }));
-      const validForDistribution = createComputerUseHost({
-        isPackaged: true,
-        resourcesPath: directory,
-        manifestPath,
-        binaryPath,
-        physicalInputRecentlyActive: () => false,
-      });
-      assert.equal(validForDistribution.selected.backendId, process.platform === 'darwin'
-        ? 'maka-cu'
-        : 'none');
-
-      await writeFile(manifestPath, JSON.stringify({
-        makaCu: {
-          binarySha256: '0'.repeat(64),
-          distributionReady: true,
-        },
-      }));
-      const invalid = createComputerUseHost({
-        isPackaged: false,
-        resourcesPath: directory,
-        manifestPath,
-        binaryPath,
-        physicalInputRecentlyActive: () => false,
-      });
-      assert.equal(invalid.selected.backendId, 'none');
-
-      await t.test('rejects a symlinked binary', async (context) => {
-        const linkedBinaryPath = join(directory, 'linked-maka-cu');
-        try {
-          await symlink(binaryPath, linkedBinaryPath, 'file');
-        } catch (error) {
-          if (process.platform === 'win32' && (error as NodeJS.ErrnoException).code === 'EPERM') {
-            context.skip('File symlinks require Developer Mode or symlink privileges on Windows');
-            return;
-          }
-          throw error;
-        }
-        const linked = createComputerUseHost({
-          isPackaged: false,
-          resourcesPath: directory,
-          manifestPath,
-          binaryPath: linkedBinaryPath,
-          physicalInputRecentlyActive: () => false,
-        });
-        assert.equal(linked.selected.backendId, 'none');
-      });
-    } finally {
-      await rm(directory, { recursive: true, force: true });
-    }
+  assert.deepEqual(computerUseServiceHealth('cua-driver', { state: 'ready', environmentReady: true }), {
+    state: 'healthy', reason: 'cu_executor_ready',
   });
-
 });

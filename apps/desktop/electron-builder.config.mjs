@@ -72,6 +72,7 @@ const baseDesktopBuilderConfig = {
   productName: 'Maka',
   artifactName: 'Maka-${version}-mac-${arch}.${ext}',
   asar: true,
+  asarUnpack: ['**/node_modules/@trycua/**', '**/node_modules/@ubjs/**'],
   beforePack: stageReleaseManifests,
   extraMetadata: { runtimeHostSetupPackage, makaUpdateChannel: 'release' },
   directories: {
@@ -139,6 +140,12 @@ const baseDesktopBuilderConfig = {
       from: '../../native/runtime-host-peer/target/release/maka_runtime_host_peer.node',
       to: 'runtime-host-peer/maka_runtime_host_peer.node',
     },
+    ...(['darwin', 'win32'].includes(process.platform)
+      ? [{
+          from: '../../native/desktop-window-identity/build/maka_desktop_window_identity.node',
+          to: 'desktop-window-identity/maka_desktop_window_identity.node',
+        }]
+      : []),
     {
       from: '../../packages/cli/RUNTIME_HOST_PEER_THIRD_PARTY_NOTICES.txt',
       to: 'licenses/runtime-host-peer/THIRD_PARTY_NOTICES.txt',

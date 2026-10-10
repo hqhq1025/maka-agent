@@ -20,6 +20,7 @@
 import { useEffect, useRef } from 'react';
 import type { Meta, StoryObj } from '@storybook/react-vite';
 import { expect, userEvent, waitFor, within } from 'storybook/test';
+import { computerUseModelCallArgs } from '@maka/core/computer-use';
 import { ToolCallDetail, ToolTrow } from '../src/tool-activity.js';
 import type { ToolActivityItem } from '../src/materialize.js';
 import {
@@ -47,7 +48,7 @@ type Story = StoryObj<typeof meta>;
 
 const requiresBypassItem: ToolActivityItem = {
   toolUseId: 'client-capability-boundary',
-  toolName: 'maka_computer',
+  toolName: 'computer',
   displayName: '列出打开的应用',
   activityKind: 'computer',
   status: 'errored',
@@ -175,6 +176,37 @@ export const RequiresBypassRecovery: Story = {
       />
     </Board>
   ),
+};
+
+const doubleClickArgs = computerUseModelCallArgs({
+  action: 'double_click_element',
+  observation_id: '00000000-0000-0000-0000-000000000001',
+  element_id: 'e2',
+});
+
+// Real path: the Host streams a double_click_element call into a conversation,
+// then the durable transcript supplies its arguments when it settles. This
+// board presents both reachable row states together as a review scaffold.
+export const ComputerDoubleClickRows: Story = {
+  args: {
+    items: [
+      {
+        toolUseId: 'double-click-live',
+        toolName: 'mcp__desktop_computer_use__computer',
+        status: 'running',
+        args: undefined,
+        argsPreview: doubleClickArgs,
+      },
+      {
+        toolUseId: 'double-click-completed',
+        toolName: 'mcp__desktop_computer_use__computer',
+        status: 'completed',
+        args: doubleClickArgs,
+        durationMs: 460,
+      },
+    ],
+  },
+  render: (args) => <ToolRowBoard items={args.items} width={860} />,
 };
 
 // Real path: a turn that mixes many tool kinds — the density case reviewers compare

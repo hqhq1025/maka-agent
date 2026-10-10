@@ -20,6 +20,7 @@
 import type { UsageScreenQuery, UsageScreenRequest } from '@maka/core/settings';
 
 import {
+  Fragment,
   useEffect,
   useEffectEvent,
   useMemo,
@@ -75,6 +76,8 @@ import {
 } from '@maka/ui';
 import { ProvidersPanel } from './providers-panel';
 import { ExternalAgentsSettingsPage } from '../features/external-agent-settings/index.js';
+import { ComputerUseForegroundSettings } from '../features/computer-use-settings/index.js';
+import { createDesktopComputerUseSettingsService } from '../platform/desktop/create-computer-use-settings-service.js';
 import { SubagentSettingsPage } from './subagent-settings-page';
 import { safeLocalStorageSet } from '../browser-storage';
 import { ProjectsSettingsPage } from './projects-settings-page';
@@ -97,7 +100,7 @@ import {
 } from './settings-nav';
 import { getSettingsNavigationCopy } from '../locales/settings-navigation-copy.js';
 import { SettingRow } from './settings-rows';
-import { SettingsPage, SettingsSection as SettingsSectionBlock } from './settings-section';
+import { SettingsPage, SettingsSection as SettingsSectionBlock } from '../application/contracts/settings-presentation/settings-section.js';
 import { settingsActionErrorMessage } from './settings-error-copy';
 import { SessionBundleTasks } from '../features/session-bundle';
 import { CatalogSessions } from '../application/contracts/session-catalog/catalog-sessions.js';
@@ -141,6 +144,7 @@ import { createSettingsRequestAuthority } from './settings-request-authority.js'
 import { SHELL_SETTINGS_NARROW_QUERY } from '../application/contracts/shell-layout-contract.js';
 
 const RUNTIME_HOST_CATALOG_KEY = 'runtime-host-catalog';
+const computerUseSettings = createDesktopComputerUseSettingsService();
 
 function isBuiltInSettingsSection(value: string): value is SettingsSection {
   return SETTINGS_NAV.some((item) => item.id === value);
@@ -473,6 +477,7 @@ function SettingsSurfaceContent(
     : 'client';
   const showsRuntimeHost = sectionScope !== 'client';
   const requiresRuntimeHost = sectionScope === 'runtime-host';
+  const PageContent = section === 'permissions' ? SettingsPage : Fragment;
   useEffect(() => {
     props.onSelectedRuntimeHostProfileIdChange(
       showsRuntimeHost ? selectedProfileId : undefined,
@@ -994,6 +999,10 @@ function SettingsSurfaceContent(
               ) : undefined}
               content={(
                 <LayoutContent padding={6} isScrollable={false}>
+                  <PageContent>
+                  {section === 'permissions' ? (
+                    <ComputerUseForegroundSettings services={computerUseSettings} locale={locale} describeError={settingsActionErrorMessage} />
+                  ) : null}
                   <UsageScopeMount
                     ref={usageScopeRef}
                     targetKey={usageTargetKey}
@@ -1100,6 +1109,7 @@ function SettingsSurfaceContent(
                     </>
                   )}
                   </UsageScopeMount>
+                  </PageContent>
                 </LayoutContent>
               )}
             />

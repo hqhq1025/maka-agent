@@ -65,6 +65,7 @@
 @import "./styles/workbar/terminal.css" layer(components);
 @import "./styles/workbar/inspector.css" layer(components);
 @import "./styles/workbar/browser.css" layer(components);
+@import "./styles/workbar/computer.css" layer(components);
 @import "./styles/workbar/artifacts.css" layer(components);
 @import "./styles/chat-detail.css" layer(components);
 @import "./styles/settings.css" layer(components);

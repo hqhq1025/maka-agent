@@ -277,6 +277,7 @@ async function renderOwnershipProbe(
   );
   return {
     ...rendered,
+    get projection() { return projection; },
     setActive: rendered.setActive,
     send: (text: string, attachments?: readonly PendingAttachment[]) => send(text, attachments),
     queue: (text: string) => queue(text),
@@ -398,6 +399,32 @@ afterEach(async () => {
   }
   mountedRoot = undefined;
   Object.assign(globalThis, originalGlobals);
+});
+
+test('side chat text approval answers its own request and preserves a replacement prompt', async () => {
+  const answer = deferred<{ kind: 'answered'; decision: 'allow' }>();
+  const calls: unknown[] = [];
+  const rendered = await renderOwnershipProbe({
+    send: async () => ({ ok: true as const, turnId: 'side-turn' }),
+    respondToInteractionByText: async (id, input) => { calls.push([id, input]); return answer.promise; },
+  });
+  await act(async () => { assert.equal(await rendered.send('prepare'), true); });
+  await awaitCompanion(rendered.container);
+  const request = (requestId: string): SessionEvent => ({
+    type: 'client_capability_request', id: requestId, turnId: 'side-turn', ts: 1, requestId, toolUseId: 'call',
+    capability: 'computer_use', scope: { kind: 'computer_use_foreground', authorityEpoch: 'epoch' },
+  });
+  await act(async () => rendered.emit(request('first')));
+  let pending!: Promise<Awaited<ReturnType<typeof rendered.projection.respondToInteractionByText>>>;
+  await act(async () => { pending = rendered.projection.respondToInteractionByText('first', '批准'); });
+  assert.deepEqual(calls, [['side-conversation', { requestId: 'first', text: '批准' }]]);
+  await act(async () => rendered.emit({ type: 'client_capability_decision_ack', id: 'ack', turnId: 'side-turn', ts: 2,
+    requestId: 'first', toolUseId: 'call', decision: 'deny' }));
+  await act(async () => rendered.emit(request('replacement')));
+  await act(async () => { answer.resolve({ kind: 'answered', decision: 'allow' }); assert.deepEqual(await pending, { kind: 'answered', decision: 'allow' }); });
+  assert.equal(rendered.projection.activeClientCapability?.requestId, 'replacement');
+  assert.deepEqual(await rendered.projection.respondToInteractionByText('first', '批准'), { kind: 'unavailable' });
+  assert.equal(calls.length, 1);
 });
 
 test('first send while the source is still on its first turn forks with an empty context', async () => {

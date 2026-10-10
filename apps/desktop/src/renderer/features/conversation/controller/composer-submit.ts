@@ -86,6 +86,8 @@ export interface RevisionSendPorts<TDraft extends RevisionDraftIdentity> {
   retractedWorkspaceReferencesRef: RefBox<Record<string, InlineReference[]>>;
   captureStaging(): ComposerStagingSubmission;
   prepareRevisionSend: (text: string) => Promise<boolean>;
+  /** Undefined leaves ordinary chat routing intact; false preserves the draft. */
+  respondToInteractionByText?: (sessionId: string, text: string) => Promise<boolean | undefined>;
   send: (text: string, pending?: readonly PendingAttachment[], options?: SubmitOptions) => Promise<boolean>;
   enqueueFollowUp: (
     sessionId: string,
@@ -127,6 +129,7 @@ export interface RevisionSendPorts<TDraft extends RevisionDraftIdentity> {
 
 export interface RevisionAwareOnSendPorts<TDraft extends RevisionDraftIdentity> extends RevisionSendPorts<TDraft> {
   setNewTaskSendPending: (pending: boolean) => void;
+  sendPendingRef?: RefBox<boolean>;
 }
 
 /** Shared by Shell's follow-up callback and its production-owner tests. */
@@ -173,14 +176,18 @@ export function createStagedFollowUp(ports: {
 export function createRevisionAwareOnSend<TDraft extends RevisionDraftIdentity>(
   ports: RevisionAwareOnSendPorts<TDraft>,
 ): (text: string, metadata?: ComposerSendMetadata) => Promise<boolean | void> {
+  const pending = ports.sendPendingRef ?? { current: false };
   return async function sendOwningItsTarget(
     text: string,
     metadata?: ComposerSendMetadata,
   ): Promise<boolean | void> {
+    if (pending.current) return false;
+    pending.current = true;
     ports.setNewTaskSendPending(true);
     try {
       return await revisionAwareSend(ports, text, metadata);
     } finally {
+      pending.current = false;
       ports.setNewTaskSendPending(false);
     }
   };
@@ -213,6 +220,12 @@ export async function revisionAwareSend<TDraft extends RevisionDraftIdentity>(
     metadata?.workspaceFileReferences,
     sessionId ? ports.retractedWorkspaceReferencesRef.current[sessionId] : undefined,
   );
+  if (sessionId && !revisionSend && !slashCommand && !text.trimStart().startsWith('/')
+    && !text.includes('/skill:') && !staging.hasPendingContext && !staging.hasStagedQuotes
+    && !workspaceFileReferences.length && ports.respondToInteractionByText) {
+    const answered = await ports.respondToInteractionByText(sessionId, text);
+    if (answered !== undefined) return answered;
+  }
   const followUpAtSubmit = slashCommand ? undefined : metadata?.followUpMode;
   if (sessionId && followUpAtSubmit) {
     const queued = await ports.enqueueFollowUp(sessionId, text, followUpAtSubmit, {

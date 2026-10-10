@@ -45,6 +45,7 @@ interface ClientSettingsEffectDependencies {
    */
   readonly systemPrefersDark: () => boolean;
   readonly observeLocale: (settings: AppSettings) => void;
+  readonly observeComputerUseForegroundPolicy?: (policy: AppSettings['computerUse']['foregroundPolicy']) => void;
   /** False means no live renderer accepted an IPC send (not a delivery ack). */
   readonly emitExternalChanged: () => boolean;
 }
@@ -62,6 +63,7 @@ export function createClientSettingsEffects(
   // on the OS appearance, which is read fresh rather than captured here.
   let appIcon: AppIconChoice | undefined;
   let tail = Promise.resolve();
+  let policyObservation = 0;
 
   const schedule = (
     load: () => AppSettings | Promise<AppSettings>,
@@ -124,7 +126,21 @@ export function createClientSettingsEffects(
   };
 
   return {
-    apply: (settings, notifyRenderer) => schedule(() => settings, notifyRenderer),
-    refresh: (notifyRenderer) => schedule(() => dependencies.settingsStore.get(), notifyRenderer),
+    apply: (settings, notifyRenderer) => {
+      policyObservation += 1;
+      // A pending bot or OS effect must not delay a user revoking foreground input.
+      dependencies.observeComputerUseForegroundPolicy?.(settings.computerUse.foregroundPolicy);
+      return schedule(() => settings, notifyRenderer);
+    },
+    refresh: (notifyRenderer) => {
+      const observation = ++policyObservation;
+      return schedule(async () => {
+        const settings = await dependencies.settingsStore.get();
+        if (policyObservation === observation) {
+          dependencies.observeComputerUseForegroundPolicy?.(settings.computerUse.foregroundPolicy);
+        }
+        return settings;
+      }, notifyRenderer);
+    },
   };
 }

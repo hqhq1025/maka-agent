@@ -6,7 +6,7 @@ source_language: zh-CN
 implementation_status: current
 document_status: current
 translation_status: source-only
-last_verified: 2026-09-11
+last_verified: 2026-10-07
 owners:
   - maka-backend
 ---
@@ -32,8 +32,10 @@ owners:
 # Maka Computer Use Foundation Contract
 
 状态：Accepted
-适用范围：Desktop foundation；CLI 仅实验性 opt-in；Eval subject 通过 Runtime Host 继承同一边界
-目的：定义 stacked PR 不可破坏的合同与验证门。
+适用范围：macOS、Windows 和 Linux Desktop 的 Cua Driver SDK 集成；Runtime Host 使用同一工具合同。
+目的：定义当前执行边界与验证门。具体动作映射和生命周期以
+`packages/computer-use/README.md` 与 `packages/computer-use/src/cua-driver-backend.ts`
+为准；历史 native 实验不能作为新 SDK 的验收证据。
 
 外部证据参考（不属于本仓库）：
 
@@ -43,61 +45,66 @@ owners:
 - `codex-computer-use-lab/docs/19-electron-presentation-and-mcp-event-contract.md`：presentation 与 native action transport 分离。
 - `codex-computer-use-lab/docs/22-native-ax-diff-refetch-and-instance-isolation.md`：stable AX revision ids、ordered difference、no-change 与 full fallback。
 
-上述文件位于独立逆向实验仓库。本文只记录由 Maka 测试锁定的合同，
-不把外部路径声明为本仓库内链接。
+上述文件位于独立逆向实验仓库，是历史设计参考，不是当前 SDK 的行为保证，
+也不是本仓库内链接。
 
 ## Contract
 
 1. Observation authority
-   - 每个可执行 observation 具有唯一 `frameId + epoch`、截图尺寸、`pid + windowId`、capture-local 坐标信息，以及适用时的 Electron page identity。
-   - 同一窗口跨 revision 的模型 element id 可以稳定，但它只是 presentation identity；每次 dispatch 仍必须解析到 fresh snapshot 的 opaque token。
-   - WebContent/renderer 元素同时绑定 host process generation 与 actual input-owner generation；唯一真实 WebContent 元素会遮蔽同框叶子 mirror，歧义 mirror 不删除。
-   - 坐标只能在产生它的截图/窗口 frame 内解释。dispatch 禁止重新选择当前全局坐标下的最高 z-order 窗口。
-   - 新 observation、turn/session 结束、abort、user stop、service loss 和明确 intervention 使旧 action claim 与 keyboard ownership 失效。
+   - 每个可执行 observation 绑定当前 task session、`frameId + epoch`、精确 `pid + windowId` 与 Driver 返回的 opaque element token。
+   - 模型 element id 只是 observation 内的 presentation identity，不能跨 observation 复用；adapter 不自行实现上游的 AX refetch 或 renderer 身份判断。
+   - 无 action token 的 AX 文本只能作为只读上下文；模型不能用文本猜测或重建 token。
+   - 新 observation、session 清理、abort、user stop 和明确 intervention 撤销旧 action claim。同一原生窗口的新 capture 还会使其他 task 的旧 snapshot 失效。
 
 2. Action binding
    - mutation 在第一次异步边界前完成参数快照、规范化、fingerprint、claim，并绑定 active observation。
-   - 有顺序依赖的动作按 Computer Use session 串行；不同 session 不全局串行。
+   - Runtime 管理 session action claim，adapter 的单设备队列串行化所有 native 调用。不同任务不能在同一设备上并行执行原生操作。
    - stale、replay、unclaimed、malformed、targetless action 均 fail closed，不得回退到裸 pixel、foreground activation 或当前系统焦点。
 
 3. Exact target validation
-   - coordinate action 在 dispatch 前验证同一 window identity、geometry、screenshot scale、page identity 和 occlusion。
-   - semantic action 优先按稳定 token refetch；否则仅允许唯一且 identity-preserving 的匹配。缺失、歧义、越界、遮挡或 page 变化必须失败。
+   - 当前动作面仅暴露精确窗口和 token 寻址，不暴露 coordinate、ambient type/key 或任意 Driver tool 调用。
+   - adapter 验证 task 所有权、当前 observation、原生 ID 的安全整数表示及可用 token；原生目标有效性和路由由 Driver 验证。没有匹配 token 时不得改按文本或当前焦点投递。
    - 无关 AX/DOM 内容变化不能合成 `user_intervened`。物理介入和 terminal host state 必须来自明确事件。
-   - drag/zoom 两端必须属于同一个 bound window。
-   - WebContent click 只有在 host/window 与 renderer generation 都验证后才能走 `skylight_pid`；失败不得退回 AX mirror 或 JavaScript click。
+   - 平台没有对应原生合同的动作不进入模型 schema。Linux 不暴露 secondary action；Windows 仅支持 Driver 声明的 expand；macOS 按支持的 AX action 映射。
+   - Linux 和 Windows 的通用 launch 尚无合格动作映射，因此不暴露；前台授权不能使该动作可用。
 
 4. Execution ownership
-   - maka-cu 是唯一 native executor；window/page discovery、semantic preparation、input dispatch 和 effect readback 均留在该边界内。
-   - agent 不得移动真实鼠标、抢前台焦点、临时 activate 窗口或执行 windowless desktop input。
-   - keyboard ownership 绑定 `session + turn + generation + pid + windowId + page/frame`，并在失败、stale、新 observation、intervention、service generation 变化、turn/session 结束时撤销。
-   - child process 在未知 action outcome 下退出时必须 re-observe，禁止自动重放。
+   - 官方 Cua Driver 0.34.0 SDK 和匹配的 native release package 是唯一执行层。Desktop 持有一个惰性、进程内实例，没有独立执行器或自动兼容回退。
+   - 能指定 delivery 的 native 请求默认显式使用 background。支持的单步语义操作可以请求 foreground，经独立任务授权后执行；不以后台失败触发自动前台重试。
+   - 每次 mutation 在设备队列等待后再次检查锁屏与物理输入状态。Driver 的 delivery 结果不能代替 Maka 的任务授权。
+   - native 调用进入后即使取消也要等待原调用结束才能释放队列；调用结果未知时必须重新观察，禁止自动重放。
 
 5. Postcondition
    - mutation 成功后旧 observation 被消费并返回 fresh authoritative observation；完整当前元素树保留在 observation 内，可获得视觉状态时向模型返回新截图。
-   - immediate post-action model text 可以使用 executor 声明的 no-change/difference/full presentation；显式 observe 仍显示完整树，差分不得成为重建当前状态的唯一来源。
-   - transport success 不等于 business success。`verified:true` 必须由 action-specific effect/readback 支撑。
-   - `supported:true, ok:false` 为本次 terminal failure；仅 side-effect-free 的 `supported:false` 可进行一次显式允许的 fallback。
-   - retry 基于 fresh observation 和新 claim，禁止重试旧 coordinate/fingerprint。
+   - transport success 不等于 business success。Driver 的 `effect=confirmed` 才映射为 `verified:true`；新截图本身不能把 unverifiable effect 升级成 confirmed。
+   - route、effect 和实际 delivery 必须是可识别的组合。只有显式 `effect=refused` 可声明没有输入；malformed、partial 或 unknown 结果不作此声明。
+   - retry 基于 fresh observation 和新 claim，不复用旧 token/fingerprint；不自动切换执行路由。
 
-6. Service lifecycle
-   - executable、version、hash、role 和 generation 必须 runtime-observable；dead/mismatched child 不得复用。
-   - startup、request、shutdown、restart 均有界；成功恢复后重置连续失败预算。
-   - process exit 清理 pending request、observation、keyboard ownership、presentation 和受影响 session lease。
-   - capability 反映实时 `healthy / degraded / unavailable`，不能只检查 binary path。
+6. SDK lifecycle
+   - 安装使用官方 GitHub release URL 与 lockfile integrity，首次加载验证 native `driverVersion=0.34.0`；加载或版本验证失败报告 unavailable。
+   - shutdown 先等待 native 队列结束，再释放 SDK handle。清理正在启动的 session 必须阻止迟到的 start 重新建立会话。
+   - 进程内 native 调用不能保证强制中断，native hang/crash 是当前隔离边界的限制；不得用宿主 timeout 假装输入已经停止。
+   - capability 反映 SDK 与当前平台环境。macOS 查询 TCC；Windows 查询 UIA；Linux 查询 display 与 AT-SPI。Linux route eligibility 不等于 Wayland portal grant 或任意窗口后台输入许可。
 
 7. Approval and privacy
    - approval 是 app capability gate，不是 active observation 或 action freshness 证明。
-   - Maka 采用分级短 lease：`metadata_read`、`screenshot_read`、`keyboard_mutation`、`semantic_mutation` 四类（见 `packages/core/src/computer-use.ts`），分离；目标、action class、observation 或 session generation 变化时重新授权。
+   - Maka 保留现有 action class 与内容权限边界（见 `packages/core/src/computer-use.ts`）。任务权限、OS 权限和 native delivery mode 是三个独立维度。
+   - 用户设置前台策略 `never | ask | allow`，默认 ask。独立 `computer_use_foreground` scope 的一次同意覆盖当前对话后续轮次的前台操作；已有 Computer Use capability 同意不构成前台授权。
+   - Host 绑定对话、Desktop 连接与策略 epoch，审批等待不占用 native 队列；Desktop 在批准后和排队执行前重检本机权限。策略变化、重连、派生任务不能继承旧授权。模型设置工具不得修改此策略。
+   - 首次前台准入撤销旧 observation 并返回 `reobserve_required`，模型重新观察后才能执行。请求 delivery、有效授权和 native 实际 delivery 分开记录；Bypass 不绕过前台策略。
+   - owner-only `interaction.respondByText` 绑定 session、当前展示的精确 request ID（协议字段 `interactionId`）与有界原始文本，只接受当前唯一 live Computer Use 基础或前台请求的中/繁/英整句同义表达，复用按钮的 Host outcome/grant 路径。未识别聊天正常排队；过期或取消请求不能授权或恢复执行，也不修改全局设置或交给模型自由解释授权。
+   - 准入证据、scope、文本应答与原生 `computer` 工具身份使用 Runtime Host compatibility epoch 208，Desktop 与远端 Host 必须版本匹配。
    - approval 至少标明 action class 与目标 app/window；敏感应用、secure/password field 和不支持的目的地 fail closed。
    - screenshot、typed text、coordinate、raw AX label/value、window title、secret 和 raw page content 默认不进入持久 session log、telemetry 或 evaluation report。
    - 上传截图前验证 model vision capability，并满足对应用户/provider consent policy。
 
 8. Presentation isolation
-   - cursor/PiP 位于 targeting 下游，不能选择、转换、授权或改变执行坐标。
+   - cursor overlay 与按需打开的 Computer 侧栏位于 targeting 下游，不能选择、转换、授权或改变执行坐标；旧自动 PiP 已移除。
    - `readyForInteraction` 只能通过有界 fail-open 策略影响 dispatch 时机；`finished` 不阻塞 native dispatch 或 postcondition。
    - completion 使用 executor-resolved point；失败、abort、teardown、supersede 或缺少 completion point 时必须 cancel。
    - acknowledgement 按 session + action identity 绑定，stale ack 必须忽略。
+   - 对话状态与侧栏只接收当前 task/Host epoch 的已接受观察，不因打开预览另行截图。切换窗口、停止和退订清除旧画面；native 未返回时保持“正在停止”。
+   - 当前预览是按需打开的最近截图。独立实时视频方案已选定但尚未实现，也没有自动展开设置。
 
 ## Renderer semantic source contract
 
@@ -139,11 +146,27 @@ Maka 自己的 Electron renderer 也是 Computer Use 的目标。它不能依赖
 
 完整页面、状态、动作与性能边界清单见 `docs/computer-use-ui-coverage.md`。
 
-## Validation Matrix
+## 当前验证范围
+
+| 范围 | 证据 | 尚未证明 |
+|---|---|---|
+| Adapter 与 Runtime | 定向测试覆盖队列、task snapshot 所有权、平台参数、refusal/unknown outcome 和取消边界 | native 调用的强制中断 |
+| macOS arm64 | 真实 Electron → Maka tool → Driver → AppKit fixture，截图、后台 click、中文 set_value 与独立应用 readback | 签名安装包的 TCC 归属、所有应用的后台支持 |
+| Linux x64 | 真实 selector → Maka tool → Driver → GTK fixture，在 Xvfb/Openbox/AT-SPI 下完成截图、后台 click、中文 set_value 与独立 readback | Wayland、其他 compositor/toolkit、用户日常桌面下的介入行为 |
+| Windows | SDK 原生包、平台映射和 fixture/CI 路径已接入 | 真实 Windows 执行证据；跨平台单测不能替代它 |
+| 前台授权与执行 | 真实 Host/SQLite/桌面 provider/Driver 组合验证：待授权与未识别文本均零点击；文本授权后先 `reobserve_required`，新观察后恰好 1 次实际前台点击、独立计数 1、640x424 PNG、正常退出 | Electron 43.2.0；传输与 tool-commit 使用内存替身，未覆盖模型、Composer、socket 或持久 tool-event log；早先锁屏失败仅为历史尝试 |
+| 对话 UI A | 对话状态、按需 Computer 侧栏、任务前台授权入口与停止状态已实现 | Desktop 构建、类型与架构检查通过；浏览器组件场景验证授权、停止清图和 Host 断线时本机策略可保存；尚非真实模型驱动的 Electron 对话验收 |
+| Provider qualification | 本文下方保留旧执行器的历史边界 | 使用当前 Driver 的 live-provider 完整任务资格 |
+
+运行入口见 `scripts/cua-driver-spike/README.md`。真实 fixture 通过只证明所列场景，
+不能证明所有 native route、平台或 provider 均可用。
+
+## 历史 Validation Matrix（#857 拆分链）
 
 `PASS`：当前证据直接覆盖；`PARTIAL`：组件证据存在但 production 闭环不足；`FAIL`：当前实现违反合同；`UNKNOWN`：缺少足够证据。
 
-本矩阵记录 #857 拆分链建立时的基线状态，用于界定各 stacked PR 的验证责任。拆分链合入后，各领域当前状态以源码与合同测试为准。
+本矩阵记录旧执行器 #857 拆分链建立时的基线状态，保留作历史证据。
+下面的 PASS/FAIL、native route、binary pin 与 service 行为均不是当前 Cua Driver 集成的状态。
 
 | Contract area | 状态 | 当前证据 | 拆分链需要的证据 |
 |---|---|---|---|
@@ -165,15 +188,15 @@ Maka 自己的 Electron renderer 也是 Computer Use 的目标。它不能依赖
 | Binary provenance | PASS | source/archive/binary/license pinning | 独立 supply-chain verifier |
 | Signed packaged app | UNKNOWN | 无 `.app` signing/notarization/Gatekeeper 证据 | nested helper、TCC chain、cold-start package smoke |
 
-## Split Gate
+## 历史 Split Gate
 
 每个 stacked PR 必须写清：负责的 contract 条款、non-goals、exported interface、focused verifier 和 cumulative verifier。重建从最终已验证 tree 按目标文件/hunk 提取，不机械重放旧 73-commit 历史。
 
-## 两个执行器留下的教训
+## 两个历史执行器留下的教训
 
-Maka 在两个 native executor 上做过真机实测：cua-driver（trycua，Rust，MCP）和一个
-自有的 Swift executor（协议 `maka.cu/2`）。下面每一条都由真机实测得出，写在这里是
-因为它们是设计层面的，换执行器不会自动消失。
+Maka 曾测试早期 cua-driver MCP 集成与自有 Swift executor（协议 `maka.cu/2`）。
+以下记录保留当时的故障和测量，文中的“当前”、native route 和实现路径均指当时版本，
+不能外推到已切换的官方 0.34.0 SDK。可复用的是验证方法与失败边界。
 
 ### 协议要封闭，而不是宽容
 

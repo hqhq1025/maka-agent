@@ -44,6 +44,7 @@ export function stubSubmissionServices(overrides: Partial<ComposerSubmissionServ
     branchFromTurn: unexpected('branchFromTurn'),
     respondToSandboxBoundary: unexpected('respondToSandboxBoundary'),
     respondToUserQuestion: unexpected('respondToUserQuestion'),
+    respondToInteractionByText: unexpected('respondToInteractionByText'),
     ...overrides,
   };
 }

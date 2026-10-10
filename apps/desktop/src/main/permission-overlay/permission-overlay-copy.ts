@@ -38,9 +38,8 @@ export interface PermissionOverlayCopy {
   dismiss: string;
   dragHint: string;
   /**
-   * Screen Recording only: macOS caches the previous denial, so a freshly
-   * granted app often keeps reading as denied until it restarts. There is
-   * no API fix — the honest answer is to say so.
+   * The in-process driver inherits host TCC state, which macOS caches.
+   * Fully relaunch the host after either grant changes.
    */
   restartHint?: string;
   /** Shown instead of the drag affordance when there is no .app to drag. */
@@ -57,15 +56,16 @@ const COPY: Catalog = {
       granted: '辅助功能已开启',
       dismiss: '关闭',
       dragHint: '拖我',
+      restartHint: '修改授权后，请完全退出并重新打开 App，让电脑操作读取新的权限。',
       noBundle: '当前不是以 .app 方式运行，无法拖拽。请在系统设置里手动添加。',
     },
     screen_recording: {
       headline: (appName) => `把 ${appName} 拖到上面的列表里，即可开启「屏幕录制」`,
-      fallback: '也可以在系统设置里点 + 号，从「应用程序」中选择本 App。',
+      fallback: '窗口截图和图像确认需要这项权限；未授权时仍可操作控件。也可以在系统设置里点 + 号，从「应用程序」中选择本 App。',
       granted: '屏幕录制已开启',
       dismiss: '关闭',
       dragHint: '拖我',
-      restartHint: '若仍显示未授权，需要重启 App —— macOS 会缓存上一次的拒绝结果。',
+      restartHint: '修改授权后，请完全退出并重新打开 App，让电脑操作读取新的权限。',
       noBundle: '当前不是以 .app 方式运行，无法拖拽。请在系统设置里手动添加。',
     },
   },
@@ -76,15 +76,16 @@ const COPY: Catalog = {
       granted: '輔助功能已開啟',
       dismiss: '關閉',
       dragHint: '拖我',
+      restartHint: '修改授權後，請完全結束並重新開啟 App，讓電腦操作讀取新的權限。',
       noBundle: '目前不是以 .app 方式執行，無法拖拽。請在系統設定裡手動新增。',
     },
     screen_recording: {
       headline: (appName) => `把 ${appName} 拖到上面的列表裡，即可開啟「螢幕錄製」`,
-      fallback: '也可以在系統設定裡點 + 號，從「應用程式」中選擇本 App。',
+      fallback: '視窗截圖和影像確認需要這項權限；未授權時仍可操作控制項。也可以在系統設定裡點 + 號，從「應用程式」中選擇本 App。',
       granted: '螢幕錄製已開啟',
       dismiss: '關閉',
       dragHint: '拖我',
-      restartHint: '若仍顯示未授權，需要重啟 App —— macOS 會快取上一次的拒絕結果。',
+      restartHint: '修改授權後，請完全結束並重新開啟 App，讓電腦操作讀取新的權限。',
       noBundle: '目前不是以 .app 方式執行，無法拖拽。請在系統設定裡手動新增。',
     },
   },
@@ -95,15 +96,16 @@ const COPY: Catalog = {
       granted: 'Accessibility enabled',
       dismiss: 'Close',
       dragHint: 'Drag me',
+      restartHint: 'After changing the grant, fully quit and reopen the app so computer actions use the new permission.',
       noBundle: 'Not running from a .app bundle, so there is nothing to drag. Add it manually in System Settings.',
     },
     screen_recording: {
       headline: (appName) => `Drag ${appName} into the list above to allow Screen Recording`,
-      fallback: 'Or click + in System Settings and pick the app from Applications.',
+      fallback: 'Window screenshots and visual verification need this permission; app controls can still be operated without it. You can also click + in System Settings and pick the app from Applications.',
       granted: 'Screen Recording enabled',
       dismiss: 'Close',
       dragHint: 'Drag me',
-      restartHint: 'If it still reads as denied, restart the app — macOS caches the previous denial.',
+      restartHint: 'After changing the grant, fully quit and reopen the app so computer actions use the new permission.',
       noBundle: 'Not running from a .app bundle, so there is nothing to drag. Add it manually in System Settings.',
     },
   },

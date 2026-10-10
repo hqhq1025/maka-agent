@@ -1,0 +1,144 @@
+--- a/libs/cua-driver/rust/crates/platform-windows/src/win32/windows.rs
++++ b/libs/cua-driver/rust/crates/platform-windows/src/win32/windows.rs
+@@ -14,7 +14,8 @@
+ //!    `FindAll(TreeScope::Children, ...)` makes no z-order guarantee, so we
+ //!    deliberately do NOT let it reorder anything Win32 already reported.
+ //!
+-//! Both sources apply the same filters (visible, non-empty title). Minimized
++//! Win32 also includes untitled windows owned by another window of the same
++//! process, so modal dialogs remain discoverable. Minimized
+ //! windows remain addressable and are reported as off-screen so callers can
+ //! restore them explicitly. The `filter_pid` argument is applied to the merged
+ //! list so the union/dedupe pipeline runs unconditionally.
+@@ -95,7 +96,7 @@
+ /// Outcome of validating a caller-supplied `(pid, window_id)` pair.
+ #[derive(Debug, Clone)]
+ pub(crate) enum PidWindowLookup {
+-    /// The HWND is a visible, titled top-level window owned by `pid`.
++    /// The HWND is a visible task window owned by `pid`.
+     Found(WindowInfo),
+     /// The HWND is listed, but under another pid.
+     OtherPid(u32),
+@@ -281,14 +282,16 @@
+         return None;
+     }
+     let title_len = unsafe { GetWindowTextLengthW(native) };
+-    if title_len == 0 {
+-        return None;
+-    }
+     let mut buf = vec![0u16; (title_len + 1) as usize];
+     unsafe { GetWindowTextW(native, &mut buf) };
+     let title_len = buf.iter().position(|&c| c == 0).unwrap_or(buf.len());
+     let title = String::from_utf16_lossy(&buf[..title_len]);
+-    if title.trim().is_empty() {
++    let same_process_owner = unsafe { GetWindow(native, GW_OWNER) }
++        .ok()
++        .filter(|owner| !owner.0.is_null())
++        .and_then(|owner| window_owner_pid(owner.0 as u64))
++        == Some(pid);
++    if title.trim().is_empty() && !same_process_owner {
+         return None;
+     }
+     let minimized = unsafe { IsIconic(native) }.as_bool();
+@@ -314,8 +317,8 @@
+     windows
+ }
+ 
+-/// Walk `EnumWindows` and collect every visible, non-empty-titled
+-/// top-level window. No pid filter is applied here — the caller does that on
++/// Walk `EnumWindows` and collect the same addressable windows as exact lookup.
++/// No pid filter is applied here — the caller does that on
+ /// the merged list.
+ fn enumerate_via_enum_windows() -> Vec<WindowInfo> {
+     let state = Mutex::new(EnumState {
+@@ -331,46 +334,9 @@
+ unsafe extern "system" fn enum_windows_cb(hwnd: HWND, lparam: LPARAM) -> BOOL {
+     let state = &*(lparam.0 as *const Mutex<EnumState>);
+ 
+-    // Invisible helper windows are not user-addressable. Iconic windows are:
+-    // retain them with explicit state so callers can restore them.
+-    if IsWindowVisible(hwnd).0 == 0 {
+-        return TRUE;
+-    }
+-    let minimized = IsIconic(hwnd).0 != 0;
+-
+-    // Get pid.
+-    let mut pid: u32 = 0;
+-    GetWindowThreadProcessId(hwnd, Some(&mut pid));
+-
+-    // Get title (skip empty).
+-    let title_len = GetWindowTextLengthW(hwnd);
+-    if title_len == 0 {
+-        return TRUE;
++    if let Some(window) = window_info_by_handle(hwnd.0 as u64) {
++        state.lock().unwrap().windows.push(window);
+     }
+-    let mut buf = vec![0u16; (title_len + 1) as usize];
+-    GetWindowTextW(hwnd, &mut buf);
+-    let title = {
+-        let len = buf.iter().position(|&c| c == 0).unwrap_or(buf.len());
+-        String::from_utf16_lossy(&buf[..len])
+-    };
+-    if title.trim().is_empty() {
+-        return TRUE;
+-    }
+-
+-    // Get bounds — prefer DWM extended frame bounds (includes shadow), fallback to GetWindowRect.
+-    let (x, y, w, h) = get_window_bounds(hwnd);
+-
+-    state.lock().unwrap().windows.push(WindowInfo {
+-        hwnd: hwnd.0 as u64,
+-        pid,
+-        title,
+-        x,
+-        y,
+-        width: w,
+-        height: h,
+-        is_on_screen: !minimized,
+-        minimized,
+-    });
+ 
+     TRUE
+ }
+@@ -407,6 +373,41 @@
+     };
+     use std::sync::atomic::{AtomicUsize, Ordering};
+ 
++    #[test]
++    fn untitled_owned_dialog_is_discoverable_and_exactly_addressable() {
++        use windows::core::w;
++        use windows::Win32::Foundation::HWND;
++        use windows::Win32::UI::WindowsAndMessaging::{
++            CreateWindowExW, DestroyWindow, ShowWindow, WINDOW_EX_STYLE, WS_POPUP,
++            WS_VISIBLE, SW_HIDE,
++        };
++        struct OwnedWindow(HWND);
++        impl Drop for OwnedWindow {
++            fn drop(&mut self) { unsafe { let _ = DestroyWindow(self.0); } }
++        }
++        unsafe {
++            let owner = OwnedWindow(CreateWindowExW(WINDOW_EX_STYLE(0), w!("STATIC"),
++                w!("Cua owned-dialog regression"), WS_POPUP | WS_VISIBLE,
++                20, 20, 300, 200, None, None, None, None).unwrap());
++            let dialog = OwnedWindow(CreateWindowExW(WINDOW_EX_STYLE(0), w!("STATIC"),
++                w!(""), WS_POPUP | WS_VISIBLE,
++                30, 30, 200, 100, owner.0, None, None, None).unwrap());
++            let helper = OwnedWindow(CreateWindowExW(WINDOW_EX_STYLE(0), w!("STATIC"),
++                w!(""), WS_POPUP | WS_VISIBLE,
++                40, 40, 100, 100, None, None, None, None).unwrap());
++            let pid = std::process::id();
++            let hwnd = dialog.0.0 as u64;
++            let windows = super::list_windows_via_win32(Some(pid));
++            assert!(windows.iter().any(|window| window.hwnd == hwnd && window.title.is_empty()));
++            assert!(!windows.iter().any(|window| window.hwnd == helper.0.0 as u64));
++            assert!(super::find_window_by_pid_and_handle(pid, hwnd).is_some());
++            assert!(super::find_window_by_pid_and_handle(pid.wrapping_add(1), hwnd).is_none());
++            let _ = ShowWindow(dialog.0, SW_HIDE);
++            assert!(super::find_window_by_pid_and_handle(pid, hwnd).is_none());
++            assert!(!super::list_windows_via_win32(Some(pid)).iter().any(|window| window.hwnd == hwnd));
++        }
++    }
++
+     fn window(pid: u32, hwnd: u64) -> WindowInfo {
+         WindowInfo {
+             hwnd,

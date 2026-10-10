@@ -54,6 +54,7 @@ export const INTERACTION_QUESTION_MAX_BYTES = 1024;
 export const INTERACTION_OPTION_LABEL_MAX_BYTES = 256;
 export const INTERACTION_OPTION_DESCRIPTION_MAX_BYTES = 512;
 export const INTERACTION_ANSWER_MAX_BYTES = 2048;
+export const INTERACTION_AUTHORIZATION_TEXT_MAX_BYTES = 1024;
 export const INTERACTION_REQUEST_MAX_BYTES = 16 * 1024;
 export const INTERACTION_SANDBOX_BOUNDARY_JUSTIFICATION_MAX_CHARS = 2_000;
 export const INTERACTION_ANSWER_SERIALIZED_MAX_BYTES = 8 * 1024;
@@ -273,6 +274,8 @@ export interface InteractionCanonicalClientCapabilityOutcome {
   readonly kind: 'client_capability_decision';
   readonly decision: 'allow' | 'deny';
   readonly committedAt: number;
+  /** Verbatim direct-user reply when the Host classified a text authorization. */
+  readonly responseText?: string;
 }
 
 export interface InteractionCanonicalClosureOutcome {
@@ -370,7 +373,7 @@ const SANDBOX_BOUNDARY_OUTCOME_SHAPE =
 const CLIENT_CAPABILITY_OUTCOME_SHAPE =
   defineObjectShape<InteractionCanonicalClientCapabilityOutcome>()(
     ['kind', 'decision', 'committedAt'],
-    [],
+    ['responseText'],
   );
 const CLOSURE_OUTCOME_SHAPE = defineObjectShape<InteractionCanonicalClosureOutcome>()(
   ['kind', 'reason', 'committedAt'],
@@ -624,6 +627,15 @@ export function decodeInteractionCanonicalOutcome(value: unknown): InteractionCa
       kind: 'client_capability_decision',
       decision: oneOf(record.decision, ['allow', 'deny'] as const, 'decision'),
       committedAt: safeInteger(record.committedAt, 'committedAt', false),
+      ...(record.responseText === undefined
+        ? {}
+        : {
+            responseText: boundedString(
+              record.responseText,
+              'authorization response text',
+              INTERACTION_AUTHORIZATION_TEXT_MAX_BYTES,
+            ),
+          }),
     };
   } else if (record.kind === 'closure') {
     exact(record, CLOSURE_OUTCOME_SHAPE, 'closure outcome');

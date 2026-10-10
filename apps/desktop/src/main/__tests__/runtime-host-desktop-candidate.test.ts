@@ -331,6 +331,25 @@ test('owns one complete Desktop candidate generation and can restart cleanly', a
   assert.equal(ipc.size, 0);
 });
 
+test('text approval IPC accepts only the owned main renderer top frame', async () => {
+  const ipc = ipcHarness();
+  const host = connectionHarness('text');
+  const candidateDeps = deps(ipc);
+  candidateDeps.mainWindowController.isMainRenderer = (contents) => contents === ipc.sender as never;
+  const candidate = await createDesktopRuntimeHostCandidate(host.connection, candidateDeps);
+  const response = { requestId: 'request', text: 'x'.repeat(1025) };
+  assert.deepEqual(await ipc.invoke('sessions:respondToInteractionByText', 'session-text', response), { kind: 'unrecognized' });
+  ipc.senderFrame = {};
+  await assert.rejects(ipc.invoke('sessions:respondToInteractionByText', 'session-text', response), /trusted Desktop renderer/);
+  ipc.senderFrame = ipc.sender.mainFrame;
+  candidateDeps.mainWindowController.isMainRenderer = () => false;
+  await assert.rejects(ipc.invoke('sessions:respondToInteractionByText', 'session-text', response), /trusted Desktop renderer/);
+  candidateDeps.mainWindowController.isMainRenderer = () => true;
+  ipc.destroyed = true;
+  await assert.rejects(ipc.invoke('sessions:respondToInteractionByText', 'session-text', response), /trusted Desktop renderer/);
+  await candidate.close();
+});
+
 test('routes Guest catalog changes through the mount projection authority', async () => {
   const ipc = ipcHarness();
   const sharedResource = sharedShellRunUpdate('session-guest');
@@ -1139,8 +1158,13 @@ type IpcHandler = Parameters<Pick<IpcMain, 'handle'>['handle']>[1];
 function ipcHarness(recordSend?: (channel: string, payload: unknown) => void) {
   const handlers = new Map<string, IpcHandler>();
   let epoch = TEST_TARGET_EPOCH;
+  let destroyed = false;
+  const mainFrame = {};
+  let senderFrame = mainFrame;
   const sender = Object.assign(new EventEmitter(), {
     id: 1,
+    mainFrame,
+    isDestroyed: () => destroyed,
     sent: [] as Array<{ channel: string; hostId?: string; payload: unknown }>,
     send(channel: string, ...args: unknown[]): void {
       const hostId = (args[0] as { hostId?: unknown } | undefined)?.hostId;
@@ -1155,6 +1179,10 @@ function ipcHarness(recordSend?: (channel: string, payload: unknown) => void) {
     },
   });
   return {
+    get senderFrame() { return senderFrame; },
+    set senderFrame(value) { senderFrame = value; },
+    get destroyed() { return destroyed; },
+    set destroyed(value) { destroyed = value; },
     get epoch() {
       return epoch;
     },
@@ -1185,7 +1213,7 @@ function ipcHarness(recordSend?: (channel: string, payload: unknown) => void) {
     ): Promise<unknown> {
       const handler = handlers.get(channel);
       assert.ok(handler, `missing handler: ${channel}`);
-      return handler({ sender } as never, { hostId, targetEpoch }, ...args);
+      return handler({ sender, senderFrame } as never, { hostId, targetEpoch }, ...args);
     },
     get channels(): string[] {
       return [...handlers.keys()].sort();
@@ -1209,6 +1237,7 @@ function deps(
 ): DesktopRuntimeHostCandidateDeps {
   return {
     mainWindowController: {
+      isMainRenderer: () => true,
       showSaveDialog: async () => ({ canceled: true }),
       showOpenDialog: async () => ({ canceled: true, filePaths: [] }),
     },

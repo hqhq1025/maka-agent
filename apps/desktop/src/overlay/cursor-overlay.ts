@@ -109,6 +109,12 @@ let readySent = false;
 let waitForNativeCompletion = false;
 let sessionId = '';
 let generation = 0;
+let idleFade: ReturnType<typeof setTimeout> | undefined;
+
+function cancelIdleFade(): void {
+  clearTimeout(idleFade);
+  idleFade = undefined;
+}
 
 function reportPhase(phase: 'readyForInteraction' | 'finished'): void {
   if (!activeActionId) return;
@@ -134,6 +140,7 @@ function loop(now: number): void {
   engine.paint(ctx, 0, 0); // MAIN sends window-local coords, so origin is (0,0)
   if (
     !readySent
+    && !engine.isAppearing()
     && (
       !engine.hasMotionPath()
       || engine.motionProgress() >= CLOSE_ENOUGH_PROGRESS_THRESHOLD
@@ -164,7 +171,8 @@ window.cursorOverlay?.onReset((p) => {
   // Reset owns a new lifecycle identity. Stop the old presentation and clear
   // its reporting state before adopting the new session/generation, so an
   // already queued frame cannot relabel an old action as part of the new one.
-  engine.cancel();
+  cancelIdleFade();
+  engine.hide();
   activeActionId = null;
   readySent = false;
   waitForNativeCompletion = false;
@@ -174,6 +182,7 @@ window.cursorOverlay?.onReset((p) => {
   kick();
 });
 window.cursorOverlay?.onMove((p) => {
+  cancelIdleFade();
   activeActionId = p.actionId;
   readySent = false;
   waitForNativeCompletion = true;
@@ -191,15 +200,22 @@ window.cursorOverlay?.onMove((p) => {
   kick();
 });
 window.cursorOverlay?.onComplete((p) => {
-  if (p.actionId && activeActionId && p.actionId !== activeActionId) return;
+  if (p.actionId && p.actionId !== activeActionId) return;
   if (p.actionId) activeActionId = p.actionId;
   waitForNativeCompletion = false;
   engine.completeAt(p.x, p.y, p.pulse === true);
+  cancelIdleFade();
+  idleFade = setTimeout(() => {
+    idleFade = undefined;
+    engine.fadeOut();
+    kick();
+  }, 900);
   kick();
 });
 window.cursorOverlay?.onCancel((p) => {
   if (!activeActionId || p.actionId !== activeActionId) return;
-  engine.cancel();
+  cancelIdleFade();
+  engine.hide();
   readySent = true;
   waitForNativeCompletion = false;
   kick();

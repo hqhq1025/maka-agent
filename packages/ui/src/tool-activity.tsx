@@ -17,7 +17,7 @@
  * under the License.
  */
 
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { countDiffLineStats } from '@maka/core/unified-diff';
 import { isInFlightToolStatus } from '@maka/core/tool-result-status';
 import { formatUserQuestionResult } from '@maka/core/tool-quiet-preview';
@@ -48,10 +48,10 @@ import {
 import { isConnectorTool, resolveToolDisplayName, workHubControlStatus } from './tool-activity/display-name.js';
 import {
   computerActionLabel,
-  computerActionLabelIncludesTarget,
   computerActionTarget,
   isComputerTool,
 } from './tool-activity/computer-action-label.js';
+import { ComputerActionLog, ComputerActionRow } from './tool-activity/computer-action-row.js';
 import {
   extractErrorText,
   isCancelledToolResult,
@@ -446,7 +446,11 @@ export function ToolCallDetail({
       {decision.decorations.requiresBypass && (
         <RequiresBypassBanner onSwitchToBypassAndRetry={onSwitchToBypassAndRetry} />
       )}
-      <ToolCallDetailBody body={decision.body} actionIdentity={actionIdentity} />
+      {isComputerTool(item) && !decision.decorations.requiresBypass ? (
+        <ComputerActionLog item={item} locale={locale}>
+          <ToolCallDetailBody body={decision.body} actionIdentity={actionIdentity} />
+        </ComputerActionLog>
+      ) : <ToolCallDetailBody body={decision.body} actionIdentity={actionIdentity} />}
     </div>
   );
 }
@@ -485,6 +489,11 @@ export function ToolTrow({
           data-maka-transcript-boundary=""
           calls={segment.calls}
         />
+      ) : segment.kind === 'computer' ? (
+        <div key={segment.key} className="maka-computer-actions" data-maka-transcript-boundary="">
+          {segment.rows.map(({ item, detail, errorMessage }) => <ComputerActionRow key={item.toolUseId}
+            item={item} locale={locale} activityObserved={activityObserved} errorMessage={errorMessage}>{detail}</ComputerActionRow>)}
+        </div>
       ) : (
         <LinkedAgentList
           key={segment.key}
@@ -511,6 +520,7 @@ type LinkedAgentRow = {
 
 type ToolTrowSegment =
   | { kind: 'tools'; key: string; calls: ChatToolCallItem[] }
+  | { kind: 'computer'; key: string; rows: Array<{ item: ToolActivityItem; detail: ReactNode; errorMessage?: string }> }
   | { kind: 'agents'; key: string; rows: LinkedAgentRow[] };
 
 function toolTrowSegments(
@@ -520,7 +530,6 @@ function toolTrowSegments(
   onSwitchToBypassAndRetry?: () => void | Promise<void>,
 ): ToolTrowSegment[] {
   const segments: ToolTrowSegment[] = [];
-  let computerTarget: string | undefined;
   for (const item of items) {
     const rows = linkedAgentRows(item, locale);
     const previous = segments.at(-1);
@@ -530,16 +539,19 @@ function toolTrowSegments(
       continue;
     }
     const ownComputerTarget = computerActionTarget(item, locale);
-    if (ownComputerTarget) computerTarget = ownComputerTarget;
     const call = standardToolCall(
       item,
       locale,
       activityObserved,
-      isComputerTool(item) && !computerActionLabelIncludesTarget(item)
-        ? computerTarget
-        : undefined,
+      ownComputerTarget,
       onSwitchToBypassAndRetry,
     );
+    if (isComputerTool(item)) {
+      const row = { item, detail: call.resultDetail, errorMessage: call.errorMessage };
+      if (previous?.kind === 'computer') previous.rows.push(row);
+      else segments.push({ kind: 'computer', key: item.toolUseId, rows: [row] });
+      continue;
+    }
     if (previous?.kind === 'tools') previous.calls.push(call);
     else segments.push({ kind: 'tools', key: item.toolUseId, calls: [call] });
   }
@@ -620,13 +632,13 @@ function standardToolCall(
   return {
     key: item.toolUseId,
     // The name is what a person reads to tell one call from the next, and for
-    // Computer Use the display name is "Maka Computer" — a noun, identical on
+    // Computer Use the display name is "Computer" — a noun, identical on
     // every row of a ten-call turn. A label derived from the call's own
     // arguments says what happened instead.
     name: computerActionLabel(item, locale) ?? resolveToolDisplayName(item, locale),
     status: astryxToolStatus(item),
     target: collapsedToolTarget(item, locale, inferredTarget),
-    duration: formatDuration(item.durationMs) ?? undefined,
+    duration: isComputerTool(item) ? undefined : formatDuration(item.durationMs) ?? undefined,
     errorMessage: toolCallErrorMessage(item, locale),
     stats: item.progress && isInFlightToolStatus(toolActivityPresentationStatus(item))
       ? `${item.progress.current}/${item.progress.total}`
@@ -671,6 +683,9 @@ function collapsedToolTarget(
   preferred?: string,
 ): string | undefined {
   if (workHubControlStatus(item)) return undefined;
+  // Computer parameters belong in the expanded evidence. With no known app
+  // name, repeating "action: set_value" adds no useful target information.
+  if (isComputerTool(item)) return preferred;
   if (item.intent) return formatToolIntent(item.intent);
   const line = preferred ?? formatToolInvocationLine(item, locale);
   if (!line) return undefined;

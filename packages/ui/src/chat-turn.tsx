@@ -24,7 +24,7 @@ import { Markdown } from './markdown.js';
 import { formatTurnDuration } from './chat-display-helpers.js';
 import { formatAbsoluteTimestamp } from '@maka/core/relative-time';
 import { isTimeDrivenMotionEnabled } from './streaming-presentation.js';
-import { computerRunningLabel } from './tool-activity/computer-action-label.js';
+import { computerRunningLabel, isComputerTool } from './tool-activity/computer-action-label.js';
 import {
   Badge,
   Banner,
@@ -1441,8 +1441,8 @@ const TurnTimelineEntry = memo(function TurnTimelineEntry(props: {
 
 /**
  * The turn's execution process (reasoning, intermediate commentary, tool
- * activity) under one disclosure. Live work stays expanded; a settled turn
- * collapses and the reader's open/closed choice survives appended events.
+ * activity) under one disclosure. Computer work defaults to a compact live
+ * summary; the reader can inspect steps without subsequent events reopening it.
  *
  * The LAST disclosure in a turn also carries the turn's status row as its
  * summary (`statusRow`), so the turn's state lives in one place whether or
@@ -1460,33 +1460,38 @@ const ProcessingBlock = memo(function ProcessingBlock(props: {
   initialLiveContent?: ReadonlyMap<string, string>;
 }) {
   const copy = getConversationCopy(useUiLocale()).messages;
-  // null follows the lifecycle: open while running, collapsed on completion.
-  // Settled reader choices survive appended events. Live work stays expanded.
-  // A failed tool is an ordinary row: no label and no reveal of its own.
+  const computerWork = props.entries.some((entry) =>
+    entry.kind === 'tools' && entry.items.some(isComputerTool));
+  // The status summary carries current Computer activity while its steps are
+  // folded. Other live work retains its existing expansion behavior.
   const [manualOpen, setManualOpen] = useState<boolean | null>(null);
-  const open = props.running || manualOpen === true;
-  const chevron = props.running ? null : (
+  const forcedOpen = props.running && !computerWork;
+  const open = forcedOpen || manualOpen === true;
+  const chevron = forcedOpen ? null : (
     <Icon icon="chevronRight" size="xsm" color="inherit" className="maka-processing-chevron" />
   );
   return (
     <details
       className="maka-processing-sequence"
       data-maka-transcript-boundary=""
+      data-computer-work={computerWork || undefined}
       open={open}
     >
       <summary
         className="maka-processing-summary"
         aria-expanded={open}
-        aria-disabled={props.running || undefined}
-        tabIndex={props.running ? -1 : 0}
+        aria-disabled={forcedOpen || undefined}
+        tabIndex={forcedOpen ? -1 : 0}
         onClick={(event) => {
           event.preventDefault();
-          if (!props.running) setManualOpen(!open);
+          if (!forcedOpen) setManualOpen(!open);
         }}
       >
         {props.statusRow ? (
           <span className="maka-turn-statusbar" data-turn-status={props.statusRow.status}>
-            <TurnStatusRow {...props.statusRow} />
+            <TurnStatusRow {...props.statusRow}
+              startedAt={computerWork ? undefined : props.statusRow.startedAt}
+              durationMs={computerWork ? undefined : props.statusRow.durationMs} />
             {chevron}
           </span>
         ) : (

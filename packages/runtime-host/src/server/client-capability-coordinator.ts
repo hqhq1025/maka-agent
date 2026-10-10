@@ -36,6 +36,7 @@ import type { InteractiveInteractionStoreWriterFacade } from '@maka/storage/inte
 import {
   decodeClientCapabilityReplaceInput,
   type ClientCapabilityOffer,
+  type ClientCapabilityCallResult,
   type ClientCapabilityAdmissionEvidence,
   type ClientCapabilityOwnerIdentity,
   type ClientCapabilityReplaceInput,
@@ -64,9 +65,11 @@ import { clientCapabilityProviderId } from './client-capability-provider-id.js';
 // Leave the Host deadline outside the provider's bounded action deadline so an
 // accepted call can return its real terminal result instead of outcome_unknown.
 const DEFAULT_CALL_TIMEOUT_MS = 150_000;
+const MAX_FOREGROUND_DENIALS = 512;
 // Bound pre-creation Session publications even when a client invents Session IDs.
 export const MAX_SESSION_REGISTRATIONS_PER_PROVIDER = 64;
 const DESKTOP_BROWSER_SERVER_ID = 'desktop_browser';
+const DESKTOP_COMPUTER_USE_SERVER_ID = 'desktop_computer_use';
 const DESKTOP_SETTINGS_SERVER_ID = 'desktop_settings';
 const DESKTOP_MCP_OFFER_PREFIX = 'desktop_mcp';
 const DESKTOP_BROWSER_TOOLS = new Set([
@@ -234,6 +237,7 @@ export class HostClientCapabilityCoordinator implements ClientCapabilityService 
   readonly #connections = new Map<string, ClientProviderConnection>();
   readonly #sessions = new Map<string, SessionCapabilityState>();
   readonly #pendingApprovals = new Map<string, Promise<'allow' | 'deny'>>();
+  readonly #foregroundDenials = new Set<string>();
   readonly #previewSessions = new AsyncLocalStorage<ReadonlyMap<string, SessionCapabilityState>>();
   readonly #pendingConnectionReleases = new Set<Promise<void>>();
   readonly #invocations: ClientCapabilityInvocationBroker<CapabilityRegistration>;
@@ -887,6 +891,9 @@ export class HostClientCapabilityCoordinator implements ClientCapabilityService 
         this.#sessions.delete(sessionId);
         this.#revision += 1;
       }
+      for (const key of this.#foregroundDenials) {
+        if (retiredSessionIds.has(key.split('\0', 1)[0]!)) this.#foregroundDenials.delete(key);
+      }
       for (const provider of this.#providers.values()) {
         for (const sessionId of retiredSessionIds) {
           const registration = provider.sessionRegistrations.get(sessionId);
@@ -958,6 +965,7 @@ export class HostClientCapabilityCoordinator implements ClientCapabilityService 
     await Promise.allSettled([...this.#pendingConnectionReleases]);
     this.#invocations.close();
     this.#sessions.clear();
+    this.#foregroundDenials.clear();
   }
 
   #replace(
@@ -1330,26 +1338,68 @@ export class HostClientCapabilityCoordinator implements ClientCapabilityService 
           const evidence = await prepared.waitUntilAccepted();
           const boundary = options.context.executionBoundary;
           if (!boundary) throw new Error('Client Capability execution boundary is unavailable');
-          if (boundary.kind !== 'bypass') {
+          const managed = boundary.kind !== 'bypass';
+          if (managed) {
             if (options.context.permissionMode !== 'ask' || !options.context.runId) {
               throw new Error('Client Capability is unavailable in the current permission mode');
             }
-            const target = managedClientCapabilityGrantTarget(
-              selectedBinding.contractId,
-              dynamicBinding.registration,
-              dynamicBinding.tool,
-              evidence,
-              options.context.sessionId,
-            );
-            if (!target) {
-              return {
-                execute: ({ emitProgress, requestInteraction } = {}) =>
-                  prepared.admit(emitProgress, requestInteraction),
-                cancel: () => prepared.cancel(),
-              };
-            }
+          }
+          const computerUse = isDesktopComputerUse(dynamicBinding.tool);
+          const target =
+            managed || computerUse
+              ? managedClientCapabilityGrantTarget(
+                  selectedBinding.contractId,
+                  dynamicBinding.registration,
+                  dynamicBinding.tool,
+                  evidence,
+                  options.context.sessionId,
+                  args,
+                )
+              : undefined;
+          const targets: ClientCapabilityGrantTarget[] = managed && target ? [target] : [];
+          if (
+            computerUse &&
+            target &&
+            evidence.kind === 'computer_use' &&
+            evidence.delivery === 'foreground' &&
+            evidence.foregroundPolicy === 'ask'
+          ) {
+            targets.push({
+              ...target,
+              scope: {
+                kind: 'computer_use_foreground',
+                // A local policy change rotates the provider epoch. The connection
+                // binding also prevents durable grants from surviving reconnects.
+                authorityEpoch: createHash('sha256')
+                  .update(
+                    JSON.stringify([
+                      dynamicBinding.registration.connectionId,
+                      evidence.authorityEpoch,
+                    ]),
+                  )
+                  .digest('hex'),
+              },
+            });
+          }
+          for (const target of targets) {
+            options.signal?.throwIfAborted();
+            prepared.providerSignal.throwIfAborted();
             const key = { sessionId: options.context.sessionId, ...target };
+            const approvalKey = clientCapabilityApprovalKey(key);
+            if (
+              target.scope.kind === 'computer_use_foreground' &&
+              this.#foregroundDenials.has(approvalKey)
+            ) {
+              throw new Error(
+                'Foreground access was declined for this task; continue in the background',
+              );
+            }
             if (!(await this.#grants.readClientCapabilitySessionGrant(key))) {
+              if (!options.context.runId) {
+                throw new Error('Client Capability approval requires a current task run');
+              }
+              options.signal?.throwIfAborted();
+              prepared.providerSignal.throwIfAborted();
               const decision = await this.#requestApprovalOnce({
                 ...key,
                 turnId: options.context.turnId,
@@ -1358,15 +1408,28 @@ export class HostClientCapabilityCoordinator implements ClientCapabilityService 
                 providerSignal: prepared.providerSignal,
                 callerSignal: options.signal,
               });
-              if (decision !== 'allow') throw new Error('Client Capability request was denied');
+              if (decision !== 'allow') {
+                if (target.scope.kind === 'computer_use_foreground') {
+                  this.#foregroundDenials.add(approvalKey);
+                  if (this.#foregroundDenials.size > MAX_FOREGROUND_DENIALS) {
+                    this.#foregroundDenials.delete(this.#foregroundDenials.values().next().value!);
+                  }
+                }
+                throw new Error('Client Capability request was denied');
+              }
               if (!(await this.#grants.readClientCapabilitySessionGrant(key))) {
                 throw new Error('Client Capability approval did not publish its Session Grant');
               }
             }
           }
+          options.signal?.throwIfAborted();
+          prepared.providerSignal.throwIfAborted();
           return {
-            execute: ({ emitProgress, requestInteraction } = {}) =>
-              prepared.admit(emitProgress, requestInteraction),
+            execute: async ({ emitProgress, requestInteraction } = {}) =>
+              projectClientCapabilityResult(
+                await prepared.admit(emitProgress, requestInteraction),
+                dynamicBinding.registration.trustedProvider && computerUse,
+              ),
             cancel: () => prepared.cancel(),
           };
         } catch (error) {
@@ -1374,18 +1437,24 @@ export class HostClientCapabilityCoordinator implements ClientCapabilityService 
           throw error;
         }
       },
-      callTool: (binding, args, options) => {
+      callTool: async (binding, args, options) => {
         const { dynamicBinding } = resolveBinding(binding);
         assertRegistrationSession(dynamicBinding.registration, options.context.sessionId);
-        return this.#invocations.invoke(
-          dynamicBinding.registration,
-          dynamicBinding.tool,
-          args,
-          options.context,
-          options.signal,
-          options.timeoutMs ?? DEFAULT_CALL_TIMEOUT_MS,
-          options.emitProgress,
-          options.requestInteraction,
+        if (isDesktopComputerUse(dynamicBinding.tool)) {
+          throw new Error('Desktop Computer Use requires prepared Host admission');
+        }
+        return projectClientCapabilityResult(
+          await this.#invocations.invoke(
+            dynamicBinding.registration,
+            dynamicBinding.tool,
+            args,
+            options.context,
+            options.signal,
+            options.timeoutMs ?? DEFAULT_CALL_TIMEOUT_MS,
+            options.emitProgress,
+            options.requestInteraction,
+          ),
+          false,
         );
       },
     };
@@ -1413,13 +1482,7 @@ export class HostClientCapabilityCoordinator implements ClientCapabilityService 
       capability: input.capability,
       scope: input.scope,
     };
-    const key = [
-      input.sessionId,
-      target.providerId,
-      target.contractId,
-      target.capability,
-      clientCapabilityScopeIdentity(target.scope),
-    ].join('\0');
+    const key = clientCapabilityApprovalKey({ sessionId: input.sessionId, ...target });
     const existing = this.#pendingApprovals.get(key);
     if (existing) return waitForClientCapabilityApproval(existing, input.callerSignal);
     const pending = this.#interactions
@@ -1883,8 +1946,12 @@ function managedClientCapabilityGrantTarget(
   tool: FrozenToolBinding,
   evidence: ClientCapabilityAdmissionEvidence,
   sessionId: string,
+  args: Record<string, unknown>,
 ): ClientCapabilityGrantTarget | undefined {
   const { serverId, name: toolName } = tool.descriptor;
+  if (isDesktopComputerUse(tool) && tool.admission === 'mcp') {
+    throw new Error('Desktop Computer Use cannot use MCP admission');
+  }
   if (tool.admission === 'mcp') {
     if (
       registration.sessionId !== sessionId ||
@@ -1904,6 +1971,26 @@ function managedClientCapabilityGrantTarget(
   }
   if (!registration.trustedProvider) {
     throw new Error('Managed Client Capability requires a trusted Desktop provider');
+  }
+  if (isDesktopComputerUse(tool)) {
+    if (tool.hostPathAccess !== 'none' || evidence.kind !== 'computer_use') {
+      throw new Error('Desktop Computer Use admission requires local policy evidence');
+    }
+    const delivery = args.delivery ?? 'background';
+    if (delivery !== evidence.delivery) {
+      throw new Error('Desktop Computer Use delivery does not match its invocation');
+    }
+    if (delivery === 'foreground' && evidence.foregroundPolicy === 'never') {
+      throw new Error('Desktop Computer Use foreground execution is disabled in local settings');
+    }
+    return Object.freeze({
+      providerId: registration.providerId,
+      contractId,
+      serverId,
+      toolName,
+      capability: 'computer_use',
+      scope: Object.freeze({ kind: 'capability' }),
+    });
   }
   if (
     tool.offerId === DESKTOP_SETTINGS_SERVER_ID &&
@@ -1961,6 +2048,27 @@ function managedClientCapabilityGrantTarget(
     });
   }
   throw new Error(`Client Capability has no managed admission policy: ${serverId}/${toolName}`);
+}
+
+function isDesktopComputerUse(tool: FrozenToolBinding): boolean {
+  return (
+    tool.offerId === DESKTOP_COMPUTER_USE_SERVER_ID &&
+    tool.descriptor.serverId === DESKTOP_COMPUTER_USE_SERVER_ID &&
+    tool.descriptor.name === 'computer'
+  );
+}
+
+function clientCapabilityApprovalKey(
+  target: ClientCapabilityGrantTarget & { readonly sessionId: string },
+): string {
+  return [
+    target.sessionId,
+    target.providerId,
+    target.contractId,
+    target.capability,
+    target.scope.kind,
+    clientCapabilityScopeIdentity(target.scope),
+  ].join('\0');
 }
 
 function serviceContract(serviceId: string, version: string): string {
@@ -2161,6 +2269,33 @@ function sessionCapabilityStatesEqual(
 
 function asError(value: unknown): Error {
   return value instanceof Error ? value : new Error(String(value));
+}
+
+/** Preserve executor status without treating model observations as transcript summaries. */
+function projectClientCapabilityResult(
+  result: ClientCapabilityCallResult,
+  nativeComputerUse: boolean,
+): ClientCapabilityCallResult & { text?: string; modelText?: string } {
+  const { summary, computerUse, ...modelResult } = result;
+  if (nativeComputerUse && summary === undefined) {
+    throw new Error('Desktop Computer Use did not return its safe result summary');
+  }
+  return {
+    ...modelResult,
+    ...(nativeComputerUse ? { text: summary } : {}),
+    ...(nativeComputerUse && computerUse ? { computerUse } : {}),
+    ...(result.error
+      ? {
+          modelText:
+            result.content
+              .filter(
+                (block): block is Extract<typeof block, { type: 'text' }> => block.type === 'text',
+              )
+              .map((block) => block.text)
+              .join('\n') || result.error,
+        }
+      : {}),
+  };
 }
 
 /** Registration IDs and connections rotate; authenticated provider authority must not. */

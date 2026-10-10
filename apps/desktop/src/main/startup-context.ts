@@ -30,10 +30,7 @@ export const hasIsolatedE2eProfile =
   !app.isPackaged &&
   !!process.env.MAKA_E2E_USER_DATA_DIR;
 export const isE2e = hasIsolatedE2eProfile && process.env.MAKA_E2E === '1';
-export const isComputerUseRealModelE2e =
-  hasIsolatedE2eProfile &&
-  process.env.MAKA_CU_REAL_MODEL_E2E === '1';
-export const isIsolatedE2e = isE2e || isComputerUseRealModelE2e;
+export const isIsolatedE2e = isE2e;
 
 export const revealMode = resolveWindowRevealMode(
   isIsolatedE2e || Boolean(process.env.MAKA_E2E_FIXTURE),

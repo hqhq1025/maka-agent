@@ -71,7 +71,7 @@ import type {
   UserQuestionResponse,
   UserQuestionResult,
 } from '@maka/core/user-question';
-import { computerUseModelCallArgs } from '@maka/core/computer-use';
+import { computerUseModelCallArgs, isComputerUseActivity } from '@maka/core/computer-use';
 import type { SessionHeader } from '@maka/core/session';
 import type { ToolInvocationRecord } from '@maka/core/usage-stats/types';
 import { redactSecrets } from '@maka/core/redaction';
@@ -1061,6 +1061,9 @@ export class ToolRuntime {
       ...(durableOutcome ? { operationId: durableOutcome.operationId } : {}),
       isError: input.isError,
       content: input.content,
+      ...(input.content.kind === 'text' && input.content.computerUse
+        ? { computerUse: input.content.computerUse }
+        : {}),
       modelProjection: input.modelProjection,
       ...(input.durationMs !== undefined ? { durationMs: input.durationMs } : {}),
       ...input.activityIdentity,
@@ -1633,7 +1636,22 @@ export class ToolRuntime {
           ) {
             throw new ToolResultLimitError();
           }
-          const content = coerceResultContent(result);
+          const normalizedContent = coerceResultContent(result);
+          const content =
+            normalizedContent.kind === 'text' ? { ...normalizedContent } : normalizedContent;
+          // Canonical text results must pass the same metadata trust gate below.
+          if (content.kind === 'text') delete content.computerUse;
+          if (
+            tool.activityKind === 'computer' &&
+            content.kind === 'text' &&
+            result &&
+            typeof result === 'object' &&
+            'computerUse' in result &&
+            isComputerUseActivity(result.computerUse) &&
+            result.computerUse.toolCallId === toolUseId
+          ) {
+            content.computerUse = structuredClone(result.computerUse);
+          }
           const projected = this.projectToolResult(tool, turnId, toolUseId, executionArgs, result);
           const modelProjection = isPromiseLike(projected) ? await projected : projected;
           return {
@@ -3057,6 +3075,7 @@ function computerUseSemanticSignature(args: unknown): string | undefined {
   const record = args as Record<string, unknown>;
   if (
     record.action !== 'click_element' &&
+    record.action !== 'double_click_element' &&
     record.action !== 'set_value' &&
     record.action !== 'select_text' &&
     record.action !== 'secondary_action'

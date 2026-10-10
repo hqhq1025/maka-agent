@@ -22,6 +22,10 @@ import type { UiCatalog, UiLocale } from '@maka/core/ui-locale';
 type BackgroundTerminalStatus = 'running' | 'completed' | 'failed' | 'timed_out' | 'cancelled' | 'orphaned';
 type WebCredentialCopyKey = 'env' | 'settings' | 'missing' | 'unknown';
 type WebGuidanceKey = 'env' | 'settings' | 'rate_limited' | 'not_configured' | 'timed_out' | 'privacy_mode' | 'unknown';
+export type ComputerActionKind =
+  | 'inspect' | 'open' | 'capture' | 'click' | 'doubleClick' | 'fill' | 'select'
+  | 'scroll' | 'window' | 'key' | 'wait' | 'pointer' | 'operate';
+export type ComputerActionState = 'running' | 'confirmed' | 'unconfirmed' | 'notStarted' | 'failed' | 'noChange' | 'unrecorded' | 'authorized' | 'stopped';
 
 export interface ToolActivityCopy {
   errorLabel: string;
@@ -53,58 +57,15 @@ export interface ToolActivityCopy {
     action: string;
     pending: string;
   };
-  /**
-   * Row labels for one Computer Use call, derived from its arguments (see
-   * `computer-action-label.ts`). The tool's display name is a noun, so every
-   * call rendered the same row; these are verb phrases that say what the call
-   * did.
-   *
-   * Each entry uses exactly what the persisted projection carries — the action,
-   * the app, the window id, the element id — and nothing more. There is no
-   * entry that spells out a typed value, a key name or a coordinate, because
-   * the privacy boundary keeps those out of anything a renderer can read, so
-   * such an entry could only ever be exercised by a fixture.
-   */
+  /** Generic operation wording; control IDs and parameters stay in details. */
   computer: {
-    fallback: string;
-    listApps: string;
-    launchApp: (app: string) => string;
-    launchAppUnknown: string;
-    observe: string;
-    observeApp: (app: string) => string;
-    observeWindow: (windowId: number) => string;
-    observeMenu: (menu: string) => string;
-    screenshot: string;
-    screenshotApp: (app: string) => string;
-    screenshotWindow: (windowId: number) => string;
-    element: (elementId: string) => string;
-    elementUnknown: string;
-    clickElement: (element: string) => string;
-    setValue: (element: string) => string;
-    selectText: (element: string) => string;
-    secondaryAction: (element: string) => string;
-    scrollElement: (element: string) => string;
-    elementSequence: (count: number) => string;
-    elementSequenceUnknown: string;
-    windowAction: string;
-    windowMove: string;
-    windowResize: string;
-    windowMinimize: string;
-    targetApp: (app: string) => string;
-    targetWindow: (windowId: number) => string;
-    runningAction: (action: string, target?: string) => string;
+    actions: Record<ComputerActionKind, { label: string; running: string }>;
+    targetName: (name: string) => string;
+    foregroundAuthorized: string;
+    states: Record<ComputerActionState, string>;
+    diagnostics: string;
+    duration: (value: string) => string;
     runningSequence: (current: number, total: number, target?: string) => string;
-    scroll: string;
-    pressKey: string;
-    type: string;
-    holdKey: string;
-    wait: string;
-    zoom: string;
-    cursorPosition: string;
-    pointer: Record<
-      'move' | 'left' | 'right' | 'middle' | 'double' | 'triple' | 'down' | 'up' | 'drag',
-      string
-    >;
   };
   loadTools: {
     displayName: string;
@@ -202,58 +163,34 @@ const TOOL_ACTIVITY_COPY = {
       pending: '正在切换…',
     },
     computer: {
-      fallback: '操作电脑',
-      listApps: '列出打开的应用',
-      launchApp: (app) => `打开「${app}」`,
-      launchAppUnknown: '打开应用',
-      observe: '观察当前窗口',
-      observeApp: (app) => `观察「${app}」窗口`,
-      observeWindow: (windowId) => `观察窗口 ${windowId}`,
-      observeMenu: (menu) => `查看「${menu}」菜单`,
-      screenshot: '截图当前窗口',
-      screenshotApp: (app) => `截图「${app}」窗口`,
-      screenshotWindow: (windowId) => `截图窗口 ${windowId}`,
-      element: (elementId) => `元素 ${elementId}`,
-      elementUnknown: '该元素',
-      clickElement: (element) => `点击${element}`,
-      // The element phrase ends every clause it appears in: it is "元素 e12",
-      // and Chinese typography wants a space around the latin id, which a
-      // trailing 「的值」/「执行」 would either eat or leave dangling.
-      setValue: (element) => `设置值：${element}`,
-      selectText: (element) => `选择文本：${element}`,
-      secondaryAction: (element) => `次要操作：${element}`,
-      scrollElement: (element) => `滚动${element}`,
-      elementSequence: (count) => `连续操作 ${count} 个控件`,
-      elementSequenceUnknown: '连续操作多个控件',
-      windowAction: '操作窗口',
-      windowMove: '移动窗口',
-      windowResize: '调整窗口大小',
-      windowMinimize: '最小化窗口',
-      targetApp: (app) => `「${app}」窗口`,
-      targetWindow: (windowId) => `窗口 ${windowId}`,
-      runningAction: (action, target) => target ? `正在${action} · ${target}` : `正在${action}`,
+      actions: {
+        inspect: { label: '检查窗口', running: '正在检查窗口' },
+        open: { label: '打开应用', running: '正在打开应用' },
+        capture: { label: '查看窗口截图', running: '正在查看窗口截图' },
+        click: { label: '点击', running: '正在点击' },
+        doubleClick: { label: '双击', running: '正在双击' },
+        fill: { label: '填写内容', running: '正在填写内容' },
+        select: { label: '选择文本', running: '正在选择文本' },
+        scroll: { label: '滚动', running: '正在滚动' },
+        window: { label: '调整窗口', running: '正在调整窗口' },
+        key: { label: '使用键盘', running: '正在使用键盘' },
+        wait: { label: '等待', running: '正在等待' },
+        pointer: { label: '操作鼠标', running: '正在操作鼠标' },
+        operate: { label: '操作电脑', running: '正在操作电脑' },
+      },
+      targetName: (name) => `「${name}」`,
+      foregroundAuthorized: '前台操作已获准',
+      states: {
+        running: '进行中', confirmed: '已确认', unconfirmed: '效果未确认',
+        notStarted: '未执行', failed: '未完成', noChange: '未确认变化',
+        unrecorded: '结果未记录', authorized: '尚未操作', stopped: '已停止',
+      },
+      diagnostics: '操作日志',
+      duration: (value) => `耗时：${value}`,
       runningSequence: (current, total, target) =>
         target
           ? `正在操作${target} · 连续操作第 ${current}/${total} 步`
           : `正在连续操作第 ${current}/${total} 步`,
-      scroll: '滚动',
-      pressKey: '按下按键',
-      type: '输入文本',
-      holdKey: '按住按键',
-      wait: '等待',
-      zoom: '放大查看区域',
-      cursorPosition: '读取指针位置',
-      pointer: {
-        move: '移动指针',
-        left: '点击',
-        right: '右键点击',
-        middle: '中键点击',
-        double: '双击',
-        triple: '三击',
-        down: '按下鼠标',
-        up: '松开鼠标',
-        drag: '拖动',
-      },
     },
     loadTools: {
       displayName: '启用能力',
@@ -310,58 +247,34 @@ const TOOL_ACTIVITY_COPY = {
       pending: '正在切換…',
     },
     computer: {
-      fallback: '操作電腦',
-      listApps: '列出開啟的應用',
-      launchApp: (app) => `開啟「${app}」`,
-      launchAppUnknown: '開啟應用',
-      observe: '觀察目前視窗',
-      observeApp: (app) => `觀察「${app}」視窗`,
-      observeWindow: (windowId) => `觀察視窗 ${windowId}`,
-      observeMenu: (menu) => `檢視「${menu}」選單`,
-      screenshot: '截圖目前視窗',
-      screenshotApp: (app) => `截圖「${app}」視窗`,
-      screenshotWindow: (windowId) => `截圖視窗 ${windowId}`,
-      element: (elementId) => `元素 ${elementId}`,
-      elementUnknown: '該元素',
-      clickElement: (element) => `點選${element}`,
-      // The element phrase ends every clause it appears in: it is "元素 e12",
-      // and Chinese typography wants a space around the latin id, which a
-      // trailing 「的值」/「執行」 would either eat or leave dangling.
-      setValue: (element) => `設定值：${element}`,
-      selectText: (element) => `選擇文本：${element}`,
-      secondaryAction: (element) => `次要操作：${element}`,
-      scrollElement: (element) => `滾動${element}`,
-      elementSequence: (count) => `連續操作 ${count} 個控制元件`,
-      elementSequenceUnknown: '連續操作多個控制元件',
-      windowAction: '操作視窗',
-      windowMove: '移動視窗',
-      windowResize: '調整視窗大小',
-      windowMinimize: '最小化視窗',
-      targetApp: (app) => `「${app}」視窗`,
-      targetWindow: (windowId) => `視窗 ${windowId}`,
-      runningAction: (action, target) => target ? `正在${action} · ${target}` : `正在${action}`,
+      actions: {
+        inspect: { label: '檢查視窗', running: '正在檢查視窗' },
+        open: { label: '開啟應用', running: '正在開啟應用' },
+        capture: { label: '檢視視窗截圖', running: '正在檢視視窗截圖' },
+        click: { label: '點選', running: '正在點選' },
+        doubleClick: { label: '雙擊', running: '正在雙擊' },
+        fill: { label: '填寫內容', running: '正在填寫內容' },
+        select: { label: '選擇文字', running: '正在選擇文字' },
+        scroll: { label: '捲動', running: '正在捲動' },
+        window: { label: '調整視窗', running: '正在調整視窗' },
+        key: { label: '使用鍵盤', running: '正在使用鍵盤' },
+        wait: { label: '等待', running: '正在等待' },
+        pointer: { label: '操作滑鼠', running: '正在操作滑鼠' },
+        operate: { label: '操作電腦', running: '正在操作電腦' },
+      },
+      targetName: (name) => `「${name}」`,
+      foregroundAuthorized: '前台操作已獲准',
+      states: {
+        running: '進行中', confirmed: '已確認', unconfirmed: '效果未確認',
+        notStarted: '未執行', failed: '未完成', noChange: '未確認變化',
+        unrecorded: '結果未記錄', authorized: '尚未操作', stopped: '已停止',
+      },
+      diagnostics: '操作日誌',
+      duration: (value) => `耗時：${value}`,
       runningSequence: (current, total, target) =>
         target
           ? `正在操作${target} · 連續操作第 ${current}/${total} 步`
           : `正在連續操作第 ${current}/${total} 步`,
-      scroll: '滾動',
-      pressKey: '按下按鍵',
-      type: '輸入文本',
-      holdKey: '按住按鍵',
-      wait: '等待',
-      zoom: '放大檢視區域',
-      cursorPosition: '讀取指標位置',
-      pointer: {
-        move: '移動指標',
-        left: '點選',
-        right: '右鍵點選',
-        middle: '中鍵點選',
-        double: '雙擊',
-        triple: '三擊',
-        down: '按下滑鼠',
-        up: '鬆開滑鼠',
-        drag: '拖動',
-      },
     },
     loadTools: {
       displayName: '啟用能力',
@@ -418,55 +331,34 @@ const TOOL_ACTIVITY_COPY = {
       pending: 'Switching…',
     },
     computer: {
-      fallback: 'Use the computer',
-      listApps: 'List open apps',
-      launchApp: (app) => `Open “${app}”`,
-      launchAppUnknown: 'Open an app',
-      observe: 'Observe the current window',
-      observeApp: (app) => `Observe the “${app}” window`,
-      observeWindow: (windowId) => `Observe window ${windowId}`,
-      observeMenu: (menu) => `Inspect the “${menu}” menu`,
-      screenshot: 'Screenshot the current window',
-      screenshotApp: (app) => `Screenshot the “${app}” window`,
-      screenshotWindow: (windowId) => `Screenshot window ${windowId}`,
-      element: (elementId) => `element ${elementId}`,
-      elementUnknown: 'the element',
-      clickElement: (element) => `Click ${element}`,
-      setValue: (element) => `Set the value of ${element}`,
-      selectText: (element) => `Select text in ${element}`,
-      secondaryAction: (element) => `Run a secondary action on ${element}`,
-      scrollElement: (element) => `Scroll ${element}`,
-      elementSequence: (count) => `Operate ${count} controls`,
-      elementSequenceUnknown: 'Operate multiple controls',
-      windowAction: 'Operate the window',
-      windowMove: 'Move the window',
-      windowResize: 'Resize the window',
-      windowMinimize: 'Minimize the window',
-      targetApp: (app) => `“${app}” window`,
-      targetWindow: (windowId) => `Window ${windowId}`,
-      runningAction: (action, target) => target ? `${action} · ${target}` : action,
+      actions: {
+        inspect: { label: 'Check a window', running: 'Checking a window' },
+        open: { label: 'Open an app', running: 'Opening an app' },
+        capture: { label: 'View a window screenshot', running: 'Viewing a window screenshot' },
+        click: { label: 'Click', running: 'Clicking' },
+        doubleClick: { label: 'Double-click', running: 'Double-clicking' },
+        fill: { label: 'Fill in content', running: 'Filling in content' },
+        select: { label: 'Select text', running: 'Selecting text' },
+        scroll: { label: 'Scroll', running: 'Scrolling' },
+        window: { label: 'Adjust a window', running: 'Adjusting a window' },
+        key: { label: 'Use the keyboard', running: 'Using the keyboard' },
+        wait: { label: 'Wait', running: 'Waiting' },
+        pointer: { label: 'Use the mouse', running: 'Using the mouse' },
+        operate: { label: 'Use the computer', running: 'Using the computer' },
+      },
+      targetName: (name) => `“${name}”`,
+      foregroundAuthorized: 'Foreground access authorized',
+      states: {
+        running: 'In progress', confirmed: 'Confirmed', unconfirmed: 'Effect unconfirmed',
+        notStarted: 'Not performed', failed: 'Not completed', noChange: 'Change unconfirmed',
+        unrecorded: 'Result not recorded', authorized: 'No input sent', stopped: 'Stopped',
+      },
+      diagnostics: 'Operation log',
+      duration: (value) => `Duration: ${value}`,
       runningSequence: (current, total, target) =>
         target
           ? `Operating ${target} · step ${current}/${total}`
           : `Operating controls · step ${current}/${total}`,
-      scroll: 'Scroll',
-      pressKey: 'Press a key',
-      type: 'Type text',
-      holdKey: 'Hold a key',
-      wait: 'Wait',
-      zoom: 'Zoom into a region',
-      cursorPosition: 'Read the pointer position',
-      pointer: {
-        move: 'Move the pointer',
-        left: 'Click',
-        right: 'Right-click',
-        middle: 'Middle-click',
-        double: 'Double-click',
-        triple: 'Triple-click',
-        down: 'Press the mouse',
-        up: 'Release the mouse',
-        drag: 'Drag',
-      },
     },
     loadTools: {
       displayName: 'Enable capabilities',

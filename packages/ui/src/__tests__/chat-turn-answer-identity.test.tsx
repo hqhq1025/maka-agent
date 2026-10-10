@@ -31,6 +31,7 @@ import { applyThinkingDelta } from '../thinking-stream.js';
 
 const originalGlobals = {
   document: globalThis.document,
+  getComputedStyle: globalThis.getComputedStyle,
   matchMedia: globalThis.matchMedia,
   requestAnimationFrame: globalThis.requestAnimationFrame,
   cancelAnimationFrame: globalThis.cancelAnimationFrame,
@@ -60,6 +61,7 @@ function domRoot() {
   Object.assign(globalThis, {
     document,
     window,
+    getComputedStyle: () => ({ direction: 'ltr', writingMode: 'horizontal-tb', getPropertyValue: () => '' }) as unknown as CSSStyleDeclaration,
     matchMedia: () => ({ matches: false, addEventListener() {}, removeEventListener() {} }),
     requestAnimationFrame: () => 1,
     cancelAnimationFrame() {},
@@ -836,6 +838,44 @@ test('keeps running work expanded and allows manual disclosure after settlement'
   await click();
   await renderTurn(root, { ...turnWith([PROCESS_TEXT, COMPLETED_TOOL, { ...ANSWER, live: false }]), status: 'completed', durationMs: 2000 });
   assert.equal(process.hasAttribute('open'), true);
+});
+
+test('keeps a live Computer process folded and preserves the reader choice as steps arrive', async () => {
+  const { container, root } = domRoot();
+  const steps = Array.from({ length: 24 }, (_, index) => ({
+    toolUseId: `computer-${index}`, toolName: 'computer',
+    status: 'completed' as const, args: { action: 'observe', app: 'Firefox' },
+  }));
+  const renderComputer = (running = true) => renderTurn(root, {
+    ...turnWith([{ kind: 'tools', items: steps }, { ...ANSWER, live: running }]),
+    startedAt: Date.now() - 22_000, durationMs: 22_000,
+    tools: steps, status: running ? 'running' : 'completed',
+  }, running ? { runningStatus: true } : undefined);
+  await renderComputer();
+  const process = container.querySelector('details.maka-processing-sequence');
+  const summary = process?.querySelector('summary');
+  assert.ok(process && summary);
+  assert.equal(process.hasAttribute('open'), false);
+  assert.equal(summary.hasAttribute('aria-disabled'), false);
+  assert.equal(summary.getAttribute('tabindex'), '0');
+  assert.equal(summary.querySelector('.maka-turn-elapsed'), null);
+  const click = () => act(() => { summary.dispatchEvent(new window.Event('click', { bubbles: true, cancelable: true })); });
+  await click();
+  assert.equal(process.hasAttribute('open'), true);
+  assert.equal(process.querySelectorAll('.maka-computer-action').length, 24);
+  steps.push({ toolUseId: 'computer-24', toolName: 'computer', status: 'completed', args: { action: 'observe', app: 'Firefox' } });
+  await renderComputer();
+  assert.equal(process.hasAttribute('open'), true);
+  assert.equal(process.querySelectorAll('.maka-computer-action').length, 25);
+  await click();
+  await renderComputer();
+  assert.equal(process.hasAttribute('open'), false);
+  await renderComputer(false);
+  assert.equal(process.hasAttribute('open'), false);
+  assert.equal(summary.textContent, 'Done');
+  assert.equal(container.querySelector('details.maka-processing-sequence'), process);
+  assert.doesNotMatch(process.textContent ?? '', /the answer/);
+  assert.match(container.querySelector('.maka-chat-message-bubble-assistant')?.textContent ?? '', /the answer/);
 });
 
 test('keeps failed-tool details folded with duration while turn recovery stays outside', async () => {

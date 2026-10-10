@@ -22,6 +22,50 @@ import { test } from 'node:test';
 import { createDefaultSettings } from '@maka/core/settings';
 import { createClientSettingsEffects } from '../client-settings-effects.js';
 
+test('foreground revocation takes effect while a previous OS effect is still pending', async () => {
+  const settings = createDefaultSettings();
+  const policies: string[] = [];
+  let entered!: () => void;
+  const started = new Promise<void>((resolve) => { entered = resolve; });
+  let finish!: () => void;
+  const wait = new Promise<void>((resolve) => { finish = resolve; });
+  const effects = createClientSettingsEffects({
+    settingsStore: { get: async () => settings },
+    applyWorkHub: async () => { entered(); await wait; },
+    applyKeepSystemAwake: async () => {}, applyBotSettings: async () => {}, applyAppIcon: async () => {},
+    systemPrefersDark: () => false, observeLocale: () => {}, emitExternalChanged: () => true,
+    observeComputerUseForegroundPolicy: (policy) => { policies.push(policy); },
+  });
+  const initial = effects.apply(settings, true);
+  await started;
+  const revoked = effects.apply({ ...settings, computerUse: { foregroundPolicy: 'never' } }, true);
+  assert.deepEqual(policies, ['ask', 'never']);
+  finish();
+  await Promise.all([initial, revoked]);
+  assert.deepEqual(policies, ['ask', 'never']);
+});
+
+test('a watcher read that began earlier cannot reinstate revoked foreground policy', async () => {
+  const settings = createDefaultSettings();
+  const policies: string[] = [];
+  let entered!: () => void;
+  const started = new Promise<void>((resolve) => { entered = resolve; });
+  let finish!: () => void;
+  const wait = new Promise<void>((resolve) => { finish = resolve; });
+  const effects = createClientSettingsEffects({
+    settingsStore: { get: async () => { entered(); await wait; return settings; } },
+    applyWorkHub: async () => {}, applyKeepSystemAwake: async () => {}, applyBotSettings: async () => {}, applyAppIcon: async () => {},
+    systemPrefersDark: () => false, observeLocale: () => {}, emitExternalChanged: () => true,
+    observeComputerUseForegroundPolicy: (policy) => { policies.push(policy); },
+  });
+  const stale = effects.refresh(true);
+  await started;
+  const revoked = effects.apply({ ...settings, computerUse: { foregroundPolicy: 'never' } }, true);
+  finish();
+  await Promise.all([stale, revoked]);
+  assert.deepEqual(policies, ['never']);
+});
+
 test('applies each client settings snapshot once across local writes and file watcher echoes', async () => {
   let current = createDefaultSettings();
   const keepAwake: boolean[] = [];

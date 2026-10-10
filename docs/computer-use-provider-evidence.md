@@ -6,7 +6,7 @@ source_language: en
 implementation_status: current
 document_status: current
 translation_status: source-only
-last_verified: 2026-09-11
+last_verified: 2026-10-07
 owners:
   - maka-backend
 ---
@@ -31,22 +31,29 @@ owners:
 
 # Computer Use Provider Evidence
 
-This layer defines the evidence contract for real-model Computer Use runs. It
-does not claim that any provider has completed a real run.
+This document defines the evidence contract for real-model Computer Use runs.
+The current executor is the official Cua Driver 0.34.0 SDK. Native integration
+fixtures validate the adapter separately from a live provider; no provider is
+qualified for this backend by the historical results below.
+
+The old standalone-executor scenario runners, launchers, and provider matrix
+scripts have been removed. The contract remains the acceptance criterion for a
+future SDK-backed provider qualification runner. Current fixture commands are
+documented in [`scripts/cua-driver-spike/README.md`](../scripts/cua-driver-spike/README.md).
 
 ## Scenario Contract
 
-The scenario library defines:
+A qualifying scenario must define:
 
-- an owned Electron fixture;
+- an owned fixture appropriate to the target OS and toolkit;
 - the exact user prompt and expected state;
 - forbidden effects;
 - allowed actions and per-action budgets;
 - required execution capabilities;
 - deterministic state evaluation.
 
-The fixture helper imports Electron only. It does not import Maka Runtime,
-provider transports, or execution backends.
+The fixture's independent state oracle must not infer success from Maka's
+action reports or the Driver's claimed effect.
 
 ## Report Contract
 
@@ -67,18 +74,58 @@ fixture PID/window ownership, latest-observation lineage, action budgets, and
 dispatch provenance are explicit. Expected failures must be authorized by the
 scenario; a report cannot authorize itself.
 
-The sanitizer preserves action types, timing, result codes, aggregate state,
-and allowlisted trace fields. It removes coordinates, typed text, raw UI
-content, credentials, full URLs, and provider payloads.
+A report sanitizer must preserve action types, timing, result codes, aggregate
+state, and allowlisted trace fields, while removing coordinates, typed text,
+raw UI content, credentials, full URLs, and provider payloads. Do not copy raw
+Driver errors into a supposedly content-free report.
 
-## Consolidation Findings
+## SDK Provider Qualification Gate
+
+A provider launcher must:
+
+1. pin a scenario and the official SDK/native release;
+2. run against an owned fixture through the production Runtime and Computer Use backend;
+3. collect target PID/window ownership independently before model actions;
+4. enforce the scenario action budget before dispatch;
+5. record actual Driver route, delivery, effect and observation lineage;
+6. emit a sanitized `real-runtime` report with independent fixture and forbidden-effect assertions.
+
+Report macOS, Windows and Linux separately. Linux display-server/toolkit support,
+Windows target integrity, background delivery and task authorization are distinct
+conditions. An installed native package or passing mock test does not establish
+that the target app accepts input.
+
+## Current Host Admission Evidence
+
+The macOS `host-admission.json` fixture passed on Electron 43.2.0 through real
+ToolRuntime, Host coordinators, SQLite InteractionStore, ClientCapabilityChannel
+wire decoders, Desktop native provider, trusted AsyncLocal admission and the
+production Driver. Pending approvals and unrecognized text produced zero clicks;
+text foreground approval required a fresh observation before exactly one native
+foreground click, independently counted as 1, with a 640x424 PNG and clean exit.
+
+The report is local under `scripts/cua-driver-spike/results/host-admission.json`.
+Transport and tool-commit markers are in-memory stand-ins; there is no model,
+Composer, socket or durable tool-event log. This qualifies the composed admission
+and native fixture path, not a provider matrix cell. Windows native execution,
+Wayland, signed TCC attribution and stalled native-input cancellation remain unqualified.
+
+## Historical Qualification Record
+
+The remaining sections preserve measurements from the retired standalone
+executor and its deleted runners. Source commits, binary digests, route names,
+test counts and statements about the then-current implementation apply only to
+that historical revision. The current bundled manifest pins the official Driver
+SDK release; it does not contain these historical executor pins.
+
+### Historical Consolidation Findings
 
 Review found that the AppKit producer emitted `traces` while qualification read
 `driverTraces`, and the Desktop launcher derived its fixture window allowlist
 from the actions being judged. The first mismatch rejected valid AX evidence;
 the second allowed circular ownership proof.
 
-Both producers now emit one canonical schema. Desktop fixture identity is
+Both producers were changed to emit one canonical schema. Desktop fixture identity was
 collected independently from the launcher-owned PID and executor window
 inventory before model execution. Qualification waits for matching dispatch
 traces and requires each target to belong to that independent identity.
@@ -92,31 +139,17 @@ Qualification also keeps three fail-closed invariants:
 - the Desktop launcher and provider matrix call the same real-report validator,
   so a launcher cannot exit successfully for a matrix-invalid report.
 
-The old direct real-machine qualification runner was removed. The five-round
-restart runner remains available as `npm run computer-use -- restart-soak`,
-using the `MAKA_CU_AX_MODEL_LAB_ROOT` fixture checkout described in
-[Lab fixture setup](./computer-use-evidence-classes.md#lab-fixture-setup). The
-runner is regression-only and cannot satisfy a provider matrix cell. There is
-one qualification path rather than parallel evidence standards.
+The former five-round restart soak was regression-only and never qualified a
+provider matrix cell. It was removed with the other legacy executor runners.
 
-## Next Layer
-
-A provider launcher must:
-
-1. pin a scenario from this library;
-2. run against the owned fixture and production Computer Use backend;
-3. enforce the scenario action budget before dispatch;
-4. emit a sanitized `real-runtime` report;
-5. let the provider matrix validate fixture state and forbidden effects.
-
-## First Real Run
+### Historical First Real Run
 
 The first qualifying run completed with:
 
 - provider: OpenAI;
 - model: `gpt-5.4`;
 - evidence class: `real-runtime`;
-- tool exposure: direct E2E, with only the production `maka_computer` tool;
+- tool exposure: direct E2E, with only the production `computer` tool;
 - action: one app-scoped `observe`;
 - tool latency: 1117 ms;
 - total run latency: 7502 ms;
@@ -134,10 +167,7 @@ a `previous_response_id`, so custom Responses endpoints rejected the tool
 result. OpenAI provider options now use `store:false`, matching the existing
 Codex subscription boundary and keeping function calls/results inline.
 
-The next run should perform one AX semantic mutation after executor hardening is
-merged.
-
-That L1 run has now completed:
+A subsequent L1 run completed:
 
 - scenario: `l1-single-click`;
 - provider/model: OpenAI `gpt-5.4`;
@@ -155,9 +185,9 @@ occluded the synthetic target. The fixture host now settles and raises its
 layer-0 window with `showInactive()` and `moveTop()` before declaring readiness,
 without focusing it or using an always-on-top overlay layer.
 
-## Native WebContent Qualification
+### Historical Native WebContent Qualification
 
-The executor pinned by `apps/desktop/bundled-tools.json` now carries source
+The historical executor pin in `apps/desktop/bundled-tools.json` carried source
 commit `4a9787d2c7f2fbc6a29b33d691916c6b84543661`, including
 `maka-agent/maka-cu#2`, the window-transition follow-up in #3, and the direct
 WebContent frame-reflow fix in #4.
@@ -179,7 +209,7 @@ A separate live retained-element probe exercised the three refetch outcomes:
 - missing replacement: `element_released`, no side effect;
 - ambiguous replacement: `element_changed`, no side effect.
 
-After #4, the exact binary pinned by `apps/desktop/bundled-tools.json`
+After #4, the exact binary then pinned by `apps/desktop/bundled-tools.json`
 (`e457a3143544ba8385c489e5259f206d9450feb1c692eb562413b41b9f38de21`)
 completed a source-bound five-run Web matrix:
 

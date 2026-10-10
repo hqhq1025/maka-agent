@@ -562,6 +562,18 @@ export interface WorkHubSettings {
   enabled: boolean;
 }
 
+export type ComputerUseForegroundPolicy = 'never' | 'ask' | 'allow';
+
+/** User-owned policy on the Desktop that executes Computer Use. */
+export interface ComputerUseSettings {
+  /** Actions stay in the background unless foreground delivery is explicitly requested. */
+  foregroundPolicy: ComputerUseForegroundPolicy;
+}
+
+export function normalizeComputerUseForegroundPolicy(value: unknown): ComputerUseForegroundPolicy {
+  return value === 'never' || value === 'allow' ? value : 'ask';
+}
+
 /**
  * System-level power behavior (Settings surface: the 定时任务 page's
  * capability row). Scheduled tasks are driven by an in-process timer; when
@@ -606,6 +618,7 @@ export interface AppSettings {
   projects: ProjectPreferencesSettings;
   notifications: NotificationSettings;
   workHub: WorkHubSettings;
+  computerUse: ComputerUseSettings;
   system: SystemSettings;
   externalAgents: { antigravity: { executable: string } };
   shell: ShellSettings;
@@ -797,6 +810,7 @@ export type UpdateAppSettingsInput = Partial<{
   projects: Partial<ProjectPreferencesSettings>;
   notifications: Partial<NotificationSettings>;
   workHub: Partial<WorkHubSettings>;
+  computerUse: Partial<ComputerUseSettings>;
   system: Partial<SystemSettings>;
   externalAgents: AppSettings['externalAgents'];
   shell: Partial<ShellSettings>;
@@ -886,6 +900,9 @@ export function createDefaultSettings(): AppSettings {
     },
     workHub: {
       enabled: false,
+    },
+    computerUse: {
+      foregroundPolicy: 'ask',
     },
     system: {
       // Off by default: holding a power-save blocker is an explicit,
@@ -977,6 +994,11 @@ export function mergeSettings(current: AppSettings, patch: UpdateAppSettingsInpu
       ...current.workHub,
       ...(patch.workHub ?? {}),
     },
+    computerUse: {
+      foregroundPolicy: normalizeComputerUseForegroundPolicy(
+        patch.computerUse?.foregroundPolicy ?? current.computerUse.foregroundPolicy,
+      ),
+    },
     system: {
       ...current.system,
       ...(patch.system ?? {}),
@@ -1012,6 +1034,7 @@ export function normalizeSettings(input: unknown): AppSettings {
     projects: value.projects,
     notifications: value.notifications,
     workHub: value.workHub,
+    computerUse: value.computerUse,
     system: value.system,
     externalAgents: value.externalAgents,
     shell: value.shell,

@@ -78,7 +78,7 @@ type ProviderProps = Parameters<typeof ComposerSubmissionProvider<Owner>>[0];
 
 interface RegionProps {
   composerRef: { current: Partial<ComposerHandle> | null };
-  onSend(text: string, metadata?: { followUpMode?: 'steer' | 'queue' }): Promise<boolean | void>;
+  onSend(text: string, metadata?: Parameters<NonNullable<ComposerProps['onSend']>>[1]): Promise<boolean | void>;
   newTaskSendPending: boolean;
   revisionNotice?: { title: string; detail: string; cancelLabel: string; onCancel(): void };
   contextPickEnabled: boolean;
@@ -272,6 +272,94 @@ function harness(options: {
 }
 
 describe('ComposerSubmissionProvider', () => {
+  const computerRequest = (requestId = 'computer-1'): ComposerInteraction => ({
+    type: 'client_capability_request', id: requestId, turnId: 'turn-1', ts: 1, requestId, toolUseId: 'call',
+    capability: 'computer_use', scope: { kind: 'computer_use_foreground', authorityEpoch: 'epoch' },
+  });
+
+  test('typed approval uses the Desktop service before steering and settles only its request', async () => {
+    const calls: unknown[] = [];
+    const result = deferred<{ kind: 'answered'; decision: 'allow' }>();
+    const bridge = {
+      sessions: { respondToInteractionByText: (sessionId: string, response: unknown) => {
+        calls.push([sessionId, response]); return result.promise;
+      } },
+    } as unknown as DesktopComposerSubmissionBridge;
+    const services = createDesktopComposerSubmissionServices(bridge);
+    const h = harness({ ownerSessionId: 'A', services: {
+      respondToInteractionByText: services.respondToInteractionByText,
+      submitMessage: async () => { assert.fail('approval must not become a queued Message'); },
+    } });
+    await act(async () => h.target.setActiveId('A'));
+    await act(async () => h.published[0]!([userTurn('turn-1', 'earlier')]));
+    const ui = h.conversation.workspace.ui;
+    await act(async () => ui.setInteractionBySession(() => ({ A: [computerRequest()] })));
+    let sending!: Promise<boolean | void>;
+    await act(async () => { sending = h.region.onSend('批准', { followUpMode: 'steer' }); });
+    assert.deepEqual(calls, [['A', { requestId: 'computer-1', text: '批准' }]]);
+    assert.equal(h.region.newTaskSendPending, true);
+    await act(async () => { assert.equal(await h.region.onSend('批准'), false); });
+    assert.equal(h.region.newTaskSendPending, true, 'a duplicate submit cannot unlock the first');
+    await act(async () => ui.setInteractionBySession(() => ({ A: [computerRequest('replacement')] })));
+    await act(async () => { result.resolve({ kind: 'answered', decision: 'allow' }); assert.equal(await sending, true); });
+    assert.equal(h.region.activeInteraction?.requestId, 'replacement', 'settles exact old request only');
+    assert.equal(calls.length, 1);
+  });
+
+  test('an unavailable or changed text request preserves the draft and is not queued into another task', async () => {
+    const result = deferred<{ kind: 'unrecognized' }>();
+    let classified = 0;
+    let queued = 0;
+    const h = harness({ ownerSessionId: 'A', services: {
+      respondToInteractionByText: async () => { classified += 1; return result.promise; },
+      submitMessage: async () => { queued += 1; return { ok: false, reason: 'outcome_unknown' }; },
+    } });
+    await act(async () => h.target.setActiveId('A'));
+    await act(async () => h.published[0]!([userTurn('turn-1', 'earlier')]));
+    await act(async () => h.conversation.workspace.ui.setInteractionBySession(() => ({ A: [computerRequest()] })));
+    let sending!: Promise<boolean | void>;
+    await act(async () => { sending = h.region.onSend('请解释一下'); });
+    assert.equal(classified, 1);
+    await act(async () => h.target.setActiveId('B'));
+    await act(async () => { result.resolve({ kind: 'unrecognized' }); assert.equal(await sending, false); });
+    assert.equal(queued, 0);
+  });
+
+  test('approval cannot answer a replacement request before its prompt commits', async () => {
+    const calls: unknown[] = [];
+    const h = harness({ ownerSessionId: 'A', services: {
+      respondToInteractionByText: async (_sessionId, response) => { calls.push(response); return { kind: 'answered', decision: 'allow' }; },
+      submitMessage: async () => { calls.push('queued'); return { ok: false, reason: 'outcome_unknown' }; },
+    } });
+    await act(async () => h.target.setActiveId('A'));
+    await act(async () => h.published[0]!([userTurn('turn-1', 'earlier')]));
+    const ui = h.conversation.workspace.ui;
+    await act(async () => ui.setInteractionBySession(() => ({ A: [computerRequest('displayed')] })));
+    await act(async () => {
+      ui.setInteractionBySession(() => ({ A: [computerRequest('not-yet-displayed')] }));
+      assert.equal(await h.region.onSend('批准'), false);
+    });
+    assert.deepEqual(calls, [], 'neither request is answered and the draft is retained');
+    assert.equal(h.region.activeInteraction?.requestId, 'not-yet-displayed');
+  });
+
+  test('unrecognized conversation follows the ordinary queue while quoted context bypasses text authority', async () => {
+    const calls: unknown[] = [];
+    const h = harness({ ownerSessionId: 'A', services: {
+      respondToInteractionByText: async (_sessionId, response) => { calls.push(['text', response.text]); return { kind: 'unrecognized' }; },
+      submitMessage: async (_sessionId, _placement, command) => {
+        calls.push(['message', command.text]);
+        return { ok: true, disposition: 'followup', attachments: [], inlineReferences: [], skillInvocation: { loaded: [], failed: [], receipts: [] } };
+      },
+    } });
+    await act(async () => h.target.setActiveId('A'));
+    await act(async () => h.published[0]!([userTurn('turn-1', 'earlier')]));
+    await act(async () => h.conversation.workspace.ui.setInteractionBySession(() => ({ A: [computerRequest()] })));
+    await act(async () => { assert.equal(await h.region.onSend('请解释一下', { followUpMode: 'queue' }), true); });
+    assert.deepEqual(calls, [['text', '请解释一下'], ['message', '请解释一下']]);
+    await act(async () => { assert.equal(await h.region.onSend('批准', { workspaceFileReferences: [{ value: 'file.txt', start: 0 }] }), true); });
+    assert.equal(calls.filter((call) => (call as string[])[0] === 'text').length, 1);
+  });
   test('holds send-pending for the whole send and submits into the active Session through its port', async () => {
     const submitted: unknown[] = [];
     const admission = deferred<Awaited<ReturnType<ComposerSubmissionServices['submitMessage']>>>();
@@ -909,6 +997,7 @@ describe('Desktop Composer submission adapter', () => {
         branchFromTurn: record('sessions.branchFromTurn'),
         respondToSandboxBoundary: record('sessions.respondToSandboxBoundary'),
         respondToUserQuestion: record('sessions.respondToUserQuestion'),
+        respondToInteractionByText: record('sessions.respondToInteractionByText'),
       },
       newTasks: { create: record('newTasks.create') },
     } as unknown as DesktopComposerSubmissionBridge;
@@ -923,6 +1012,7 @@ describe('Desktop Composer submission adapter', () => {
     await services.branchFromTurn('s', { sourceTurnId: 'turn', copyId: 'copy' });
     await services.respondToSandboxBoundary('s', { requestId: 'b' } as SandboxBoundaryResponse);
     await services.respondToUserQuestion('s', { requestId: 'q' } as UserQuestionResponse);
+    await services.respondToInteractionByText('s', { requestId: 'cu', text: '批准' });
     assert.deepEqual(calls, [
       ['sessions.submitMessage', 's', 'next_turn', { messageId: 'm', text: 't' }, { waitForHostAdmission: true }],
       ['newTasks.create', target, { name: 'New' }],
@@ -933,6 +1023,7 @@ describe('Desktop Composer submission adapter', () => {
       ['sessions.branchFromTurn', 's', { sourceTurnId: 'turn', copyId: 'copy' }],
       ['sessions.respondToSandboxBoundary', 's', { requestId: 'b' }],
       ['sessions.respondToUserQuestion', 's', { requestId: 'q' }],
+      ['sessions.respondToInteractionByText', 's', { requestId: 'cu', text: '批准' }],
     ]);
   });
 });

@@ -2085,6 +2085,9 @@ function projectSessionEvent(
         ...identity,
         ...(event.operationId === undefined ? {} : { operationId: event.operationId }),
         status: event.isError ? 'errored' : 'completed',
+        ...(event.content.kind === 'text' && event.content.computerUse
+          ? { computerUse: event.content.computerUse }
+          : {}),
         ...(event.isError && event.content.kind === 'text' && event.content.sandboxFailure
           ? { sandboxFailureReason: event.content.sandboxFailure.reason }
           : {}),

@@ -20,6 +20,8 @@
 import type { McpIpcResult } from '../shared/mcp-ipc.js';
 import { invokeWhenReady, sendWhenReady } from './bootstrap-invoke.js';
 import { createClientPluginRouting } from './client-plugin-routing.js';
+import { createComputerUsePresentationBridge } from './computer-use-presentation.js';
+import { createComputerUsePreviewBridge } from './computer-use-preview.js';
 import type {
   SessionBundleExportIpcResult,
   SessionBundleImportIpcResult,
@@ -1529,6 +1531,8 @@ const browserSelection = createBrowserSelectionCoordinator(runtimeHostSessionRef
 }, browserDocumentId);
 
 const makaBridge = {
+  computerUse: createComputerUsePresentationBridge({ ipc: ipcRenderer, invoke: invokeWhenReady, sessionRef: runtimeHostSessionRef }),
+  computerUsePreview: createComputerUsePreviewBridge({ ipc: ipcRenderer, invoke: invokeWhenReady, sessionRef: runtimeHostSessionRef }),
   clientPlugins: createClientPluginRouting({
     activeScope: activeRuntimeHostRef,
     sessionRef: runtimeHostSessionRef,
@@ -2492,6 +2496,9 @@ const makaBridge = {
     },
     respondToUserQuestion(sessionId: string, response: UserQuestionResponse): Promise<void> {
       return invokeSessionRuntimeHost('sessions:respondToUserQuestion', sessionId, response);
+    },
+    respondToInteractionByText(sessionId, response) {
+      return invokeSessionRuntimeHost('sessions:respondToInteractionByText', sessionId, response);
     },
     respondToUserForm(sessionId: string, response: InteractionFormResponse): Promise<void> {
       return invokeSessionRuntimeHost('sessions:respondToUserForm', sessionId, response);

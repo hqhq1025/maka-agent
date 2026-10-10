@@ -104,7 +104,14 @@ export const RUNTIME_HOST_REGISTRATION_SCHEMA_VERSION = 1 as const;
 export const RUNTIME_HOST_PROTOCOL_VERSION = 0 as const;
 // Increment when the same protocol version no longer guarantees safe Client-Host
 // interoperability. Mismatches are rejected before domain commands are admitted.
-export const RUNTIME_HOST_COMPATIBILITY_EPOCH = 205 as const;
+export const RUNTIME_HOST_COMPATIBILITY_EPOCH = 209 as const;
+// 209: Computer Use terminal events and results carry typed presentation metadata.
+// 208: The native Computer Use tool is named `computer`; exact tool identity
+// gates foreground authority and result projections, so older peers must fail admission.
+// 207: Exact-request conversation authorization, original reply provenance and
+// native capability error/summary projections require matching peers.
+// 206: Typed Computer Use policy evidence and foreground grant scopes require
+// matching peers; older peers reject these admission and authorization shapes.
 // 205: Default-model selection can enable atomically; discovery can preserve the model selection.
 // 204: Executor catalogs and Session configuration carry opaque mode IDs;
 // catalog queries may request a provider refresh. Older peers reject these fields.

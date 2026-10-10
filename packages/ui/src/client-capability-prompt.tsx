@@ -27,13 +27,18 @@ import { useMountedRef } from './use-mounted-ref.js';
 export interface ClientCapabilityPromptProps {
   request: ClientCapabilityRequestEvent;
   onRespond(response: { requestId: string; decision: 'allow' | 'deny' }): void | Promise<void>;
+  /** Shown only when the surrounding chat routes typed replies to this request. */
+  textResponseAvailable?: boolean;
 }
 
 export function ClientCapabilityPrompt({
   request,
   onRespond,
+  textResponseAvailable,
 }: ClientCapabilityPromptProps) {
   const copy = getConversationCopy(useUiLocale()).clientCapability;
+  const foreground = request.capability === 'computer_use'
+    && request.scope.kind === 'computer_use_foreground';
   const titleId = useId();
   const [responsePending, setResponsePending] = useState(false);
   const responsePendingRef = useRef(false);
@@ -71,9 +76,10 @@ export function ClientCapabilityPrompt({
     >
       <div className="maka-composer-interaction-inner maka-sandbox-boundary-prompt-inner">
         <div className="maka-sandbox-boundary-copy">
-          <h2 id={titleId}>{copy.title}</h2>
+          <h2 id={titleId}>{foreground ? copy.foregroundTitle : copy.title}</h2>
           <p>{clientCapabilityLabel(request, copy)}</p>
-          <p>{copy.sessionNotice}</p>
+          <p>{foreground ? copy.foregroundNotice : copy.sessionNotice}</p>
+          {textResponseAvailable && request.capability === 'computer_use' && <p>{copy.textResponseHint}</p>}
         </div>
         <div className="maka-sandbox-boundary-actions">
           <Button
@@ -81,13 +87,13 @@ export function ClientCapabilityPrompt({
             variant="secondary"
             isDisabled={responsePending}
             onClick={() => void respond('deny')}
-            label={copy.reject}
+            label={foreground ? copy.keepBackground : copy.reject}
           />
           <Button
             variant="primary"
             isDisabled={responsePending}
             onClick={() => void respond('allow')}
-            label={copy.allowSession}
+            label={foreground ? copy.allowForeground : copy.allowSession}
           />
         </div>
       </div>
@@ -104,7 +110,9 @@ function clientCapabilityLabel(
       if (request.scope.kind !== 'browser_origin') break;
       return copy.browser(request.scope.origin);
     case 'computer_use':
-      return copy.computerUse;
+      if (request.scope.kind === 'computer_use_foreground') return copy.computerUseForeground;
+      if (request.scope.kind === 'capability') return copy.computerUse;
+      break;
     case 'desktop_mcp':
     case 'mcp':
       if (request.scope.kind !== 'mcp_tool') break;

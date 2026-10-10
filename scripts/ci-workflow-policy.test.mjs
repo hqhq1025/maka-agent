@@ -538,6 +538,7 @@ test('pull request triggers stay on an explicit allowlist', () => {
     'ci.yml',
     'cli-package-validation.yml',
     'copilot-auto-review.yml',
+    'cua-driver-platform.yml',
     'dependency-audit.yml',
     'gitoxide-helper-admission.yml',
     'pr-effort-label.yml',
@@ -1031,7 +1032,7 @@ test('everything that runs before dependency setup imports only node builtins', 
   ].join('\n');
 
   // `[\w./-]`, not `[\w.-]`: a class without `/` cannot match a path with a
-  // directory in it, which is how `scripts/computer-use/lab-root.test.mjs` —
+  // directory in it, which is how a nested script test —
   // named by a step above the install — was dropped from this derivation while
   // the count still looked right.
   const entryPoints = [

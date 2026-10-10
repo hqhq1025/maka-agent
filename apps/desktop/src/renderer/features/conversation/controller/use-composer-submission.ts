@@ -19,7 +19,7 @@
 
 import { useCallback, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import type { InlineReference } from '@maka/core/events';
-import { useToast, useUiLocale } from '@maka/ui';
+import { getConversationCopy, useToast, useUiLocale } from '@maka/ui';
 import { NEW_TASK_PENDING_KEY } from '@maka/ui/pending-items';
 import { activeHostTurn } from '../../../application/contracts/session-execution.js';
 import { getDesktopConversationCopy } from '../../../application/contracts/conversation-copy.js';
@@ -74,6 +74,12 @@ export function useComposerSubmission<Owner extends ComposerSurfaceOwner>(input:
   const toastApi = useToast();
   const activeIdRef = workspace.publishedSession;
   const activeId = useSyncExternalStore(workspace.target.subscribe, workspace.target.getSnapshot);
+  const interactionRead = workspace.ui.reads.interaction(ownerSessionId);
+  const displayedInteraction = useSyncExternalStore(interactionRead.subscribe, interactionRead.getSnapshot);
+  const displayedInteractionRef = useRef({ sessionId: ownerSessionId, request: displayedInteraction });
+  useLayoutEffect(() => {
+    displayedInteractionRef.current = { sessionId: ownerSessionId, request: displayedInteraction };
+  }, [ownerSessionId, displayedInteraction]);
   // Pending Turn-footer marks: the actions below set them, the transcript reads them.
   const turnActionRegistry = useTurnActionRegistry();
   // One instance behind both the banner and the send slot, so the two can never
@@ -99,6 +105,7 @@ export function useComposerSubmission<Owner extends ComposerSurfaceOwner>(input:
 
   // Held for the whole of a send; see ChatComposerRegion.
   const [newTaskSendPending, setNewTaskSendPending] = useState(false);
+  const sendPendingRef = useRef(false);
   const [revisionDraft, setRevisionDraft] = useState<TurnRevisionDraft | null>(null);
   const revisionDraftRef = useRef<TurnRevisionDraft | null>(null);
   const retractedWorkspaceReferencesRef = useRef<Record<string, InlineReference[]>>({});
@@ -173,6 +180,40 @@ export function useComposerSubmission<Owner extends ComposerSurfaceOwner>(input:
     retractedWorkspaceReferencesRef,
     captureStaging: staging.captureSubmission,
     prepareRevisionSend: revision.prepareRevisionSend,
+    respondToInteractionByText: async (sessionId: string, text: string) => {
+      if (sharedSessionActive || ownerSessionId !== sessionId) return undefined;
+      if (!commands.isSessionSelected(sessionId)) return false;
+      const displayed = displayedInteractionRef.current;
+      const request = displayed.sessionId === sessionId ? displayed.request : undefined;
+      if (request?.type !== 'client_capability_request' || request.capability !== 'computer_use') return undefined;
+      if (workspace.ui.reads.interaction(sessionId).getSnapshot()?.requestId !== request.requestId) return false;
+      const requestId = request.requestId;
+      const selectionCurrent = commands.captureSelection();
+      try {
+        const result = await services.respondToInteractionByText(sessionId, { requestId, text });
+        if (result.kind === 'answered') {
+          commands.markInteractionChanged(sessionId);
+          commands.settleInteraction(sessionId, requestId);
+          if (selectionCurrent() && commands.isSessionSelected(sessionId)) {
+            const copy = getConversationCopy(uiLocale).clientCapability;
+            toastApi.info(result.decision === 'allow' ? copy.textAllowed : copy.textDenied);
+          }
+          return true;
+        }
+        if (result.kind === 'unrecognized'
+          && selectionCurrent() && commands.isSessionSelected(sessionId)
+          && workspace.ui.reads.interaction(sessionId).getSnapshot()?.requestId === requestId) return undefined;
+        if (selectionCurrent() && commands.isSessionSelected(sessionId)) toastApi.info(getConversationCopy(uiLocale).clientCapability.textUnavailable);
+        return false;
+      } catch (error) {
+        if (selectionCurrent() && commands.isSessionSelected(sessionId)) {
+          const copy = getShellCopy(uiLocale).chatActions;
+          toastApi.error(copy.responseFailedTitle,
+            localizedShellErrorMessage(error, copy.responseFailedFallback, uiLocale), undefined, { sessionId });
+        }
+        return false;
+      }
+    },
     send: chat.send,
     completeRevisionCopyAttempt: completeTurnRevisionCopyAttempt,
     parseSlashCommand: parseDesktopSlashCommand,
@@ -206,6 +247,7 @@ export function useComposerSubmission<Owner extends ComposerSurfaceOwner>(input:
     getActiveOrchestrationMode: shell.orchestrationMode,
     setOrchestrationModeActive: shell.setOrchestrationModeActive,
     setNewTaskSendPending,
+    sendPendingRef,
   });
 
   const turn = useStableActions(createTurnActions, {

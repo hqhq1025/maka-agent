@@ -57,6 +57,7 @@ const CALLS: Array<Record<string, unknown>> = [
   { action: 'observe', app: 'com.apple.finder', query: '下载' },
   { action: 'observe', window_id: 7, include_screenshot: false },
   { action: 'click_element', observation_id: 'o', element_id: '3' },
+  { action: 'double_click_element', observation_id: 'o', element_id: '3', delivery: 'background' },
   { action: 'set_value', observation_id: 'o', element_id: '3', value: 'hello' },
   { action: 'select_text', observation_id: 'o', element_id: '3', text: 'hello' },
   { action: 'secondary_action', observation_id: 'o', element_id: '3', text: 'raise' },
@@ -72,8 +73,15 @@ const CALLS: Array<Record<string, unknown>> = [
     observation_id: 'o',
     steps: [{ label: 'OK' }, { label: 'Name', do: 'set_value', value: 'x' }],
   },
-  { action: 'press_key', observation_id: 'o', text: 'Return' },
+  { action: 'press_key', observation_id: 'o', coordinate: [25, 40], text: 'Return' },
   { action: 'press_key', observation_id: 'o', element_id: '3', text: 'Tab' },
+  {
+    action: 'press_key',
+    observation_id: 'o',
+    focus: 'current',
+    delivery: 'foreground',
+    text: 'ctrl+a',
+  },
   {
     action: 'window_action',
     observation_id: 'o',
@@ -90,7 +98,9 @@ const CALLS: Array<Record<string, unknown>> = [
   },
   { action: 'window_action', observation_id: 'o', element_id: '0', window_action: 'minimize' },
   { action: 'screenshot', app: 'com.apple.TextEdit' },
-  { action: 'type', observation_id: 'o', text: 'hello' },
+  { action: 'type', observation_id: 'o', element_id: '3', text: 'hello', delivery: 'foreground' },
+  { action: 'type', observation_id: 'o', coordinate: [0, 0], text: 'hello' },
+  { action: 'type', observation_id: 'o', focus: 'current', delivery: 'foreground', text: 'hello' },
   { action: 'key', observation_id: 'o', text: 'Return' },
   { action: 'wait', duration: 1 },
   { action: 'wait', wait_for_text: 'Saved', duration: 5 },
@@ -137,11 +147,27 @@ test('unsupported hold_key is rejected by both model-facing schemas', () => {
   assert.equal(computerParams.safeParse(call).success, false);
 });
 
-test('coordinate dispatch fields are absent from the wire schema', () => {
+test('only the bounded screenshot input coordinate is exposed by the wire schema', () => {
   const fields = Object.keys(computerWireParams.shape);
-  assert.equal(fields.includes('coordinate'), false);
+  assert.equal(fields.includes('coordinate'), true);
   assert.equal(fields.includes('start_coordinate'), false);
   assert.equal(fields.includes('region'), false);
+});
+
+test('type and press_key require exactly one observed target in both schemas', () => {
+  for (const action of ['type', 'press_key']) {
+    for (const target of [
+      {},
+      { element_id: '3', coordinate: [20, 30] },
+      { coordinate: [-1, 0] },
+      { coordinate: [0.5, 0] },
+      { coordinate: [0, 0, 0] },
+    ]) {
+      const args = { action, observation_id: 'o', text: 'hello', ...target };
+      assert.equal(computerWireParams.safeParse(args).success, false, JSON.stringify(args));
+      assert.equal(computerParams.safeParse(args).success, false, JSON.stringify(args));
+    }
+  }
 });
 
 for (const call of CALLS) {
@@ -214,7 +240,9 @@ test('every action in the strict union has a sample call above', () => {
  * Walks CALLS, which the test above holds to every action in the union, so an
  * action added later cannot skip this by not being listed.
  */
-for (const call of CALLS) {
+// Screenshot points stay private in durable history; only a fresh observation
+// can authorize pixel input. The separate test below covers that exception.
+for (const call of CALLS.filter((call) => call.coordinate === undefined)) {
   const name =
     call.action === 'window_action'
       ? `window_action=${String(call.window_action)}`
@@ -255,12 +283,24 @@ test('an argument the model chose itself is not replaced by a description of it'
           COMPUTER_USE_WITHHELD_VALUE.test(value) &&
           // What a person asked to have typed, and a verbatim quote of what a
           // window is showing. These are the privacy boundary and stay out.
-          !(key === 'value' || (key === 'text' && MODEL_TEXT_IS_SCREEN_CONTENT.has(replay.action))),
+          !(
+            key === 'value' ||
+            key === 'coordinate' ||
+            (key === 'text' && MODEL_TEXT_IS_SCREEN_CONTENT.has(replay.action))
+          ),
       )
       .map(([key]) => `${String(call.action)}.${key}`);
   });
 
   assert.deepEqual(withheldSomewhere, []);
+});
+
+test('persisted screenshot points remain private and cannot authorize a replay', () => {
+  for (const call of CALLS.filter((call) => call.coordinate !== undefined)) {
+    const replay = computerUseModelCallArgs(call);
+    assert.equal(replay.coordinate, '<point>');
+    assert.equal(computerWireParams.safeParse(replay).success, false);
+  }
 });
 
 /** The two actions whose `text` is screen content rather than a closed-set name. */

@@ -355,7 +355,9 @@ export class RuntimeHostSessionObservationRegistry {
       lifecycle: "pending",
     };
     this.#registrations.set(observerId, registration);
-    target.once("destroyed", destroyedListener);
+    // The IPC renderer owner already releases every replica on destruction or reload.
+    // Direct callers without that owner still need their individual cleanup hook.
+    if (!this.#renderers.has(target.id)) target.once("destroyed", destroyedListener);
 
     const source = this.#source;
     if (!source) return registration.ready.promise;
@@ -445,7 +447,7 @@ export class RuntimeHostSessionObservationRegistry {
       deliveredFrom: resumeFrom ?? null,
     };
     this.#transcripts.set(consumerId, registration);
-    target.once('destroyed', destroyedListener);
+    if (!this.#renderers.has(target.id)) target.once('destroyed', destroyedListener);
     const source = this.#source;
     if (!source) return ready.promise;
     try {

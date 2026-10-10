@@ -128,6 +128,7 @@ export type SkillDeletionManifest = Readonly<Record<string, SkillDeletionArtifac
 
 type ArtifactDigest = SkillDeletionArtifactDigest;
 type ManagedManifest = Readonly<Record<(typeof MANAGED_FILES)[number], ArtifactDigest>>;
+type ReplacementManifest = Readonly<Record<string, ArtifactDigest>>;
 
 interface PublishIntent {
   readonly schemaVersion: 1;
@@ -141,8 +142,9 @@ interface ReplaceIntent {
   readonly schemaVersion: 1;
   readonly transactionId: string;
   readonly kind: 'replace-managed';
+  readonly purpose?: 'bundled-computer-refresh';
   readonly skillId: string;
-  readonly expected: ManagedManifest;
+  readonly expected: ReplacementManifest;
   readonly next: ManagedManifest;
 }
 
@@ -242,11 +244,20 @@ export class SkillCatalogTransactionWriter {
 
   replaceManagedSkill(
     skillId: string,
-    expected: ManagedSkillTransactionArtifacts,
+    expected: Omit<ManagedSkillTransactionArtifacts, 'baseline'> & {
+      readonly baseline?: string | Uint8Array;
+    },
     next: ManagedSkillTransactionArtifacts,
+    purpose?: 'bundled-computer-refresh',
   ): Promise<void> {
     assertSkillId(skillId);
-    const expectedFiles = managedArtifactFiles(expected);
+    if (purpose && skillId !== 'computer-use') {
+      throw persistenceFailed('Automatic bundled refresh targets only the Computer Use skill');
+    }
+    if (!purpose && expected.baseline === undefined) {
+      throw persistenceFailed('Managed replacement requires its installed baseline');
+    }
+    const expectedFiles = artifactFiles(expected);
     const nextFiles = managedArtifactFiles(next);
     return this.#runWithRoot(async (root) => {
       const prepared = await requiredPreparedRoot(root);
@@ -261,8 +272,9 @@ export class SkillCatalogTransactionWriter {
         schemaVersion: 1,
         transactionId,
         kind: 'replace-managed',
+        ...(purpose ? { purpose } : {}),
         skillId,
-        expected: manifestForBuffers(expectedFiles) as ManagedManifest,
+        expected: manifestForBuffers(expectedFiles),
         next: manifestForBuffers(nextFiles) as ManagedManifest,
       };
       await this.#executeNewTransaction(prepared, intent, async (transaction) => {
@@ -452,6 +464,27 @@ async function replayReplace(
     await verifyArtifactDirectory(retained === 'frozen' ? frozen : tombstone, intent.expected);
   }
 
+  if (
+    intent.purpose === 'bundled-computer-refresh' &&
+    nextStat &&
+    retainedOld.size === 0 &&
+    targetStat?.isDirectory() &&
+    !targetStat.isSymbolicLink()
+  ) {
+    // Read the full regular-file tree without suppressing unsafe paths or IO
+    // failures. Only a verified competing content/manifest edit is benign.
+    const liveManifest = await manifestDirectoryTree(target);
+    if (
+      !matchesManagedTreeManifest(liveManifest, intent.expected) &&
+      !matchesManagedTreeManifest(liveManifest, intent.next)
+    ) {
+      // An optional refresh has not moved the live directory yet. The owned
+      // staging generations were verified above, so discard only this intent
+      // and preserve the user's competing save instead of blocking startup.
+      await finishTransaction(root.transactions, transaction.directory);
+      return;
+    }
+  }
   const targetState = targetStat
     ? await classifyManagedTarget(target, intent.expected, intent.next)
     : undefined;
@@ -553,7 +586,7 @@ async function handoffDuplicateToGc(root: PreparedRoot, duplicate: string): Prom
 
 async function classifyManagedTarget(
   target: string,
-  expected: ManagedManifest,
+  expected: ReplacementManifest,
   next: ManagedManifest,
 ): Promise<'expected' | 'next' | 'both'> {
   const [expectedResult, nextResult] = await Promise.all([
@@ -569,9 +602,24 @@ async function classifyManagedTarget(
   );
 }
 
+function matchesManagedTreeManifest(
+  tree: SkillDeletionManifest,
+  expected: ReplacementManifest,
+): boolean {
+  const files = Object.keys(expected);
+  return (
+    Object.keys(tree).filter((name) => !name.endsWith('/')).length === files.length &&
+    Object.entries(tree).every(([name, value]) =>
+      name.endsWith('/')
+        ? files.some((file) => file.startsWith(name))
+        : expected[name] !== undefined && digestEquals(value, expected[name]),
+    )
+  );
+}
+
 async function matchArtifactDirectory(
   directory: string,
-  manifest: ManagedManifest,
+  manifest: ReplacementManifest,
 ): Promise<{ matches: true } | { matches: false; error: unknown }> {
   try {
     await verifyArtifactDirectory(directory, manifest);
@@ -805,11 +853,21 @@ function parseIntent(bytes: Buffer): TransactionIntent {
       'schemaVersion',
       'skillId',
       'transactionId',
+      ...('purpose' in value ? ['purpose'] : []),
     ]);
     assertSkillIdValue(value.skillId);
+    if (
+      'purpose' in value &&
+      (value.purpose !== 'bundled-computer-refresh' || value.skillId !== 'computer-use')
+    ) {
+      throw persistenceFailed('Managed replacement purpose is invalid');
+    }
     return {
       ...value,
-      expected: parseManagedManifest(value.expected),
+      expected:
+        value.purpose === 'bundled-computer-refresh'
+          ? parseBundledRefreshExpectedManifest(value.expected)
+          : parseManagedManifest(value.expected),
       next: parseManagedManifest(value.next),
     } as ReplaceIntent;
   }
@@ -830,6 +888,14 @@ function parseManagedManifest(value: unknown): ManagedManifest {
     throw persistenceFailed('Managed Skill transaction manifest is incomplete');
   }
   return parsed as ManagedManifest;
+}
+
+function parseBundledRefreshExpectedManifest(value: unknown): ReplacementManifest {
+  const parsed = parseManifest(value, new Set(MANAGED_FILES), true);
+  if (!parsed[SKILL_FILE] || !parsed[LOCK_FILE]) {
+    throw persistenceFailed('Bundled refresh manifest must contain the installed skill and lock');
+  }
+  return parsed;
 }
 
 function parseManifest(

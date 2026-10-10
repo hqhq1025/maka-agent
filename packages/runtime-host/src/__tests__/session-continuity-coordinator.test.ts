@@ -2191,6 +2191,56 @@ test('tool_result clears retained tool_result_preview so a later open does not s
   coordinator.close();
 });
 
+test('publishes Computer Use activity from durable content while keeping the result body local', async () => {
+  const coordinator = new SessionContinuityCoordinator(
+    HOST_EPOCH,
+    async () => canonical(),
+    new SessionAdmissionGate(),
+  );
+  const sink = new RecordingSink();
+  const connection = attachTestConnection(coordinator, 'connection-1', sink);
+  const opened = await open(coordinator, 'connection-1');
+  connection.activate(opened.subscriptionId);
+  const computerUse = {
+    toolCallId: 'tool-1',
+    action: 'double_click_element' as const,
+    target: { observationId: 'old-frame', appId: 'Fixture', elementId: 'button', label: 'Open' },
+    outcome: {
+      execution: 'attempted' as const,
+      ok: false,
+      error: 'outcome_unknown' as const,
+      effect: 'unverifiable' as const,
+    },
+  };
+  await coordinator.acceptRuntimeEvent(SESSION_ID, 'run-1', {
+    type: 'tool_result',
+    id: 'result-1',
+    turnId: 'turn-1',
+    ts: 2,
+    toolUseId: 'tool-1',
+    isError: true,
+    content: { kind: 'text', text: 'full native diagnostic', computerUse },
+  });
+  await waitFor(() => sink.frames.length === 1);
+  const frame = decodeHostFrame(JSON.parse(JSON.stringify(sink.frames[0])));
+  assert.ok(
+    'kind' in frame &&
+      frame.kind === 'subscription.session_event' &&
+      frame.event.type === 'tool_result',
+  );
+  assert.deepEqual(frame.event.computerUse, computerUse);
+  assert.equal(frame.event.status, 'errored');
+  assert.ok(!JSON.stringify(frame).includes('full native diagnostic'));
+  assert.throws(() =>
+    decodeHostFrame({
+      ...frame,
+      event: { ...frame.event, computerUse: { ...computerUse, toolCallId: 'another-call' } },
+    }),
+  );
+  connection.abort(opened.subscriptionId);
+  coordinator.close();
+});
+
 test('publishes only the minimal sandbox failure reason from a tool result', async () => {
   const coordinator = new SessionContinuityCoordinator(
     HOST_EPOCH,

@@ -224,8 +224,16 @@ export function fingerprintCuaSemanticAction(
   type: string,
   elementId?: string,
   value?: string,
+  coordinate?: readonly [number, number],
+  focus?: 'current',
 ): string {
-  return JSON.stringify([type, elementId, value]);
+  return JSON.stringify([
+    type,
+    elementId,
+    value,
+    ...(coordinate ? [coordinate] : []),
+    ...(focus ? [{ focus }] : []),
+  ]);
 }
 
 /**
@@ -258,6 +266,8 @@ export function bindCuaSemanticActionToObservation(
     type: string;
     elementId?: string;
     value?: string;
+    coordinate?: [number, number];
+    focus?: 'current';
     /** The observed frame of `elementId`, when the observation reported one. */
     elementFrame?: ComputerUseRect;
   },
@@ -265,7 +275,13 @@ export function bindCuaSemanticActionToObservation(
   const presentationScreenPoint = elementPresentationPoint(observation, input.elementFrame);
   return bindCuaAction(
     observation,
-    fingerprintCuaSemanticAction(input.type, input.elementId, input.value),
+    fingerprintCuaSemanticAction(
+      input.type,
+      input.elementId,
+      input.value,
+      input.coordinate,
+      input.focus,
+    ),
     observation.target,
     {
       ...(input.elementId ? { elementId: input.elementId } : {}),

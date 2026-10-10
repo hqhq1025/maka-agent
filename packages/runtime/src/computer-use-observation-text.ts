@@ -185,6 +185,13 @@ export function renderObservationText(
   for (const [element, depth] of walk(collapseStructuralWrappers(shown, options))) {
     lines.push(`${'\t'.repeat(depth)}${elementLine(element)}`);
   }
+  if (observation.accessibilityText) {
+    lines.push(
+      '',
+      'accessibility_text (read-only context; use element ids from the actionable listing):',
+      observation.accessibilityText,
+    );
+  }
   if (menu.length > 0) {
     lines.push(menuCaption(observation, menu));
     for (const [element, depth] of walk(dropSeparators(collapseMenuContainers(menu)))) {
@@ -464,6 +471,11 @@ function header(
   ];
   if (observation.windowTitle) parts.push(`window=${quote(observation.windowTitle)}`);
   parts.push(`elements=${elementCount}`);
+  if (observation.accessibilityUnavailable) {
+    parts.push(
+      'accessibility_unavailable=true(no usable controls were exposed; inspect the screenshot or observe again)',
+    );
+  }
   // Said in the header, beside the count it contradicts. A filtered tree that
   // does not announce itself is a tree the model reads as the whole window, and
   // "the control is not there" is the conclusion it draws.

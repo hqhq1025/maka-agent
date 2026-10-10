@@ -56,7 +56,7 @@ function backend(): CuDispatchBackend {
       return observation();
     },
     async runSemantic() {
-      // What maka-cu answers for a disabled element: refused, and `path: "none"`
+      // A disabled element is refused before dispatch, with `path: "none"`.
       // is its statement that nothing was dispatched (§6.5).
       return {
         outcome: {
@@ -107,6 +107,97 @@ test('the surviving frame is named in the ids the model was given', async () => 
     'the backend id space must not leak into what the model reads',
   );
 });
+
+for (const error of ['user_intervened', 'screen_locked', 'outcome_unknown'] as const) {
+  test(`a no-input ${error} refusal requires a fresh observation before recovery`, async () => {
+    const guarded = backend();
+    let guardActive = true;
+    let observationCalls = 0;
+    let captureCalls = 0;
+    let dispatchCalls = 0;
+    guarded.observeApp = async () => {
+      observationCalls += 1;
+      if (observationCalls > 1 && guardActive) throw new Error(error);
+      return observation();
+    };
+    guarded.captureObservation = async () => {
+      captureCalls += 1;
+      return observation();
+    };
+    guarded.runSemantic = async () => {
+      dispatchCalls += 1;
+      return guardActive
+        ? {
+            outcome: {
+              ok: false,
+              error,
+              message: 'guard refused the action',
+              messageIsAppTextFree: true,
+              evidence: { path: 'none', effect: 'unverifiable' },
+            },
+          }
+        : { outcome: { ok: true, tier: 'ax', verified: true } };
+    };
+    const tools = buildComputerUseTools({ backend: guarded });
+    const [tool] = tools;
+    const sessionId = `recovery-${error}`;
+    const context = {
+      abortSignal: new AbortController().signal,
+      sessionId,
+      turnId: 't',
+      toolCallId: 'c',
+    } as never;
+    const observed = (await tool.impl(
+      { action: 'observe', app: 'com.apple.TextEdit', include_screenshot: false },
+      context,
+    )) as { modelText?: string; text: string };
+    const observationId = /observation_id=(\S+)/.exec(observed.modelText ?? observed.text)![1]!;
+    const refused = (await tool.impl(
+      { action: 'click_element', observation_id: observationId, element_id: '1' },
+      context,
+    )) as { modelText?: string; text: string; error?: string };
+
+    assert.equal(refused.error, error);
+    for (const text of [refused.text, refused.modelText ?? refused.text]) {
+      assert.doesNotMatch(text, /is still current|window is as it was/);
+      assert.match(text, error === 'screen_locked' ? /unlock the screen/ : /action:"observe"/);
+    }
+    assert.equal(captureCalls, 0, 'a guard refusal must not trigger an automatic capture');
+    assert.equal(observationCalls, 1, 'a guard refusal must not trigger an automatic observe');
+
+    const oldToken = (await tool.impl(
+      { action: 'click_element', observation_id: observationId, element_id: '0' },
+      context,
+    )) as { error?: string };
+    assert.equal(
+      oldToken.error,
+      error === 'screen_locked' ? 'screen_locked' : 'reobserve_required',
+    );
+    assert.equal(dispatchCalls, 1, 'the old observation cannot authorize another mutation');
+
+    const stillGuarded = (await tool.impl(
+      { action: 'observe', app: 'com.apple.TextEdit', include_screenshot: false },
+      context,
+    )) as { error?: string };
+    assert.equal(stillGuarded.error, error);
+    guardActive = false;
+    if (error === 'screen_locked') tools.sessionEvents.screenUnlocked(sessionId);
+
+    const fresh = (await tool.impl(
+      { action: 'observe', app: 'com.apple.TextEdit', include_screenshot: false },
+      context,
+    )) as { modelText?: string; text: string; error?: string };
+    assert.equal(fresh.error, undefined);
+    const freshId = /observation_id=(\S+)/.exec(fresh.modelText ?? fresh.text)![1]!;
+    assert.notEqual(freshId, observationId);
+    const recovered = (await tool.impl(
+      { action: 'click_element', observation_id: freshId, element_id: '0' },
+      context,
+    )) as { error?: string };
+    assert.equal(recovered.error, undefined);
+    assert.equal(dispatchCalls, 2);
+  });
+}
 
 test('a refusal that did reach the window does not claim the frame survived', async () => {
   const dispatched = backend();

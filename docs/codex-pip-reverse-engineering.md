@@ -3,10 +3,10 @@ doc_id: codex-pip-reverse-engineering
 title: "Codex picture-in-picture reverse engineering"
 language: en
 source_language: en
-implementation_status: current
-document_status: current
+implementation_status: historical
+document_status: historical
 translation_status: source-only
-last_verified: 2026-09-11
+last_verified: 2026-10-06
 owners:
   - maka-backend
 ---
@@ -31,11 +31,17 @@ owners:
 
 # Codex picture-in-picture reverse engineering
 
-What Maka's Computer Use mirror copies from Codex, where each fact came from,
-and the four places Maka deliberately does something else. It keeps confirmed
+Historical record of what Maka's former Computer Use mirror copied from Codex,
+where each fact came from, and where that implementation differed. It keeps confirmed
 native facts separate from implementation inference, the same way
 [computer-use-cursor-provenance.md](./computer-use-cursor-provenance.md)
 does.
+
+The automatic floating mirror, its preload, motion implementation and interaction
+smoke script were removed during the Cua Driver 0.34.0 integration. The current
+product direction uses an optional in-window Computer sidebar. Paths and runtime
+claims below describe the retired implementation and inspected artifacts, not
+current Maka behavior; the numerical provenance remains for the historical record.
 
 ## Inspected artifacts
 
@@ -185,7 +191,7 @@ implementation lives in Chromium's `//chrome` browser layer
 (`PictureInPictureWindowManager`), which Electron does not have. That road is
 closed, not narrow.
 
-## What Maka copies
+## What the former Maka mirror copied
 
 - Child window of the app window, at normal level. Both of the mirror's original
   faults — floating above unrelated apps, and trailing a frame behind during a
@@ -202,7 +208,7 @@ closed, not narrow.
   pointer is inside it.
 - Only resizes are acted on. A move is the window server's job.
 
-## Where Maka does something else, and why
+## Where the former Maka mirror differed
 
 **Two controls, not three.** Codex's `close` dismisses one tile and `hide`
 dismisses the stack. Maka mirrors one window at a time, so those are the same
@@ -233,9 +239,9 @@ windows* — Codex registers several hosts, including `avatar-overlay`. Maka has
 one window, so there is nothing to move between. Cross-display works because the
 mirror is the app window's child and goes wherever that window goes.
 
-## Verification
+## Historical verification
 
-`scripts/pip-interaction-smoke.mjs` runs the real thing: a real parent window, a
+The now-removed `scripts/pip-interaction-smoke.mjs` ran a real parent window, a
 real child panel, the real preload and renderer, real input events. It asserts
 the child-window properties, the seat position, the carry-on-move, hover, a
 throw settling on the anchor it was aimed at, an app resize returning the mirror
@@ -249,13 +255,10 @@ rest cannot run.
 
 The physics and the anchor scoring were covered without a desktop in
 `apps/desktop/src/main/__tests__/computer-use-pip-motion.test.ts`; #2478
-deleted that test, which only ends the coverage it provided — nothing has
-taken its place. The module under test is untouched: `pip-motion.ts` is
+deleted that test. Before the PiP removal, `pip-motion.ts` remained
 byte-identical across the #3293 cursor replacement (implemented in #3456),
 which rebuilt the agent cursor engine and its glyphs — including the PiP
-glyph — without replacing the PiP window's motion constants. The dragging
-and settling springs and the throw factors transcribed above are still
-defined there and still drive `pip-window.ts`. Cursor provenance is tracked
-in computer-use-cursor-provenance.md, and it concerns the agent cursor only;
-the PiP window's motion model is a separate surface with no provenance
-change to record.
+glyph — without replacing the PiP window's motion constants. The Cua Driver
+integration subsequently removed `pip-motion.ts` and `pip-window.ts` together.
+Cursor provenance is tracked in computer-use-cursor-provenance.md; the retained
+agent cursor is a separate surface from the removed mirror's motion model.

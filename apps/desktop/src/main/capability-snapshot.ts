@@ -73,7 +73,7 @@ export function buildCapabilitySnapshotCollection(input: {
   const now = input.now ?? Date.now();
   const permissions = input.permissions.permissions;
   const capabilities: CapabilitySnapshot[] = [
-    computerUseCapability(input.computerUse, permissions, now),
+    computerUseCapability(input.computerUse, permissions, now, input.permissions.platform),
     staticCapability({
       id: 'activity_recorder',
       label: 'Activity Recorder',
@@ -127,6 +127,7 @@ function computerUseCapability(
   } | undefined,
   permissions: PermissionSnapshot['permissions'],
   now: number,
+  platform: NodeJS.Platform,
 ): CapabilitySnapshot {
   // Any selected executor is an executor. Naming one here made the capability
   // read `not_available` for a machine that had a working backend, merely a
@@ -141,10 +142,10 @@ function computerUseCapability(
       source: 'runtime',
       reason: input === undefined || input.backendId === 'none' ? 'cu_artifact_missing' : 'cu_backend_status',
     },
-    requiredPermissions: [
+    requiredPermissions: platform === 'darwin' ? [
       { id: 'accessibility', required: true, status: permissions.accessibility.status },
-      { id: 'screen_recording', required: true, status: permissions.screen_recording.status },
-    ],
+      { id: 'screen_recording', required: false, status: permissions.screen_recording.status },
+    ] : [],
     actionApproval: {
       state: 'required_scoped_lease',
       source: 'capability_policy',

@@ -39,6 +39,9 @@ export interface CuDispatchEvidence {
   path?: string;
   effect?: ComputerUseEffect;
   reason?: string;
+  requestedDelivery?: 'background' | 'foreground';
+  /** Native evidence only; never inferred from the requested delivery. */
+  actualDelivery?: 'background' | 'foreground' | 'not_applicable';
 }
 
 export type CuDispatchOutcome =
@@ -57,8 +60,7 @@ export type CuDispatchOutcome =
        * The message may be shown to the model.
        *
        * Set only by a backend that guarantees its diagnostics carry no text
-       * belonging to the observed application — `maka.cu/2` §1.2 makes that a
-       * protocol rule. Absent means withheld, so a backend that forgets is
+       * belonging to the observed application. Absent means withheld, so a backend that forgets is
        * quiet rather than leaky.
        */
       messageIsAppTextFree?: boolean;
@@ -163,6 +165,10 @@ export interface CuObservationDifference {
 }
 
 export interface CuObservation {
+  /** Pixels are valid, but the native accessibility walk found no usable controls. */
+  accessibilityUnavailable?: boolean;
+  /** Driver-provided AX text, including static nodes without actionable tokens. */
+  accessibilityText?: string;
   observationId: string;
   /**
    * §5.8 — how much of the menu bar this observation walked.
@@ -198,6 +204,7 @@ export interface CuObservation {
   appId: string;
   pid: number;
   windowId: number;
+  appName?: string;
   windowTitle?: string;
   /**
    * The name the caller used, when it was not the canonical one.
@@ -211,6 +218,10 @@ export interface CuObservation {
   appAlias?: string;
   capturedAt?: number;
   windowBounds?: { x: number; y: number; width: number; height: number };
+  /** Presentation-only visibility; never grants input or changes element identity. */
+  presentationVisibility?: 'visible' | 'unavailable';
+  /** Desktop-retained target instance, only for the independent preview consumer. */
+  presentationTargetLease?: string;
   sourceBoundsPx?: { x: number; y: number; width: number; height: number };
   zIndex?: number;
   /**
@@ -238,9 +249,19 @@ export interface CuObservation {
   screenshot?: CuScreenshot;
 }
 
-export type CuSemanticAction =
+export type CuInputTarget =
   | {
-      type: 'click_element';
+      elementId: string;
+      elementIdentity?: CuObservedElement['identity'];
+      coordinate?: never;
+      focus?: never;
+    }
+  | { coordinate: [number, number]; elementId?: never; elementIdentity?: never; focus?: never }
+  | { focus: 'current'; elementId?: never; elementIdentity?: never; coordinate?: never };
+
+export type CuSemanticAction = (
+  | {
+      type: 'click_element' | 'double_click_element';
       observationId: string;
       elementId: string;
       elementIdentity?: CuObservedElement['identity'];
@@ -259,6 +280,7 @@ export type CuSemanticAction =
       text: string;
       elementIdentity?: CuObservedElement['identity'];
     }
+  | ({ type: 'type'; observationId: string; text: string } & CuInputTarget)
   | {
       type: 'secondary_action';
       observationId: string;
@@ -273,15 +295,13 @@ export type CuSemanticAction =
        * The coordinate `scroll` aims at a pixel and needs a visible window to
        * anchor the conversion; this addresses the scroll area itself, which is
        * the difference that shows when the window is behind something else.
-       * `maka.cu/2` declares it (`{kind:"scroll", direction, pages}`) and
-       * cua-driver advertises `scroll` among its element actions, so both
-       * executors already speak it — this is the member that lets Maka say it.
+       * Cua Driver resolves the element token against the observed window.
        */
       type: 'scroll_element';
       observationId: string;
       elementId: string;
       direction: 'up' | 'down' | 'left' | 'right';
-      /** Pages, the unit both executors declare. Defaults to one. */
+      /** Whole pages. Defaults to one. */
       pages?: number;
       elementIdentity?: CuObservedElement['identity'];
     }
@@ -309,20 +329,22 @@ export type CuSemanticAction =
       size?: { width: number; height: number };
       elementIdentity?: CuObservedElement['identity'];
     }
-  | {
+  | ({
       type: 'press_key';
       observationId: string;
       key: string;
-      /** The control to focus before the key is posted, when the model named one. */
-      elementId?: string;
-      elementIdentity?: CuObservedElement['identity'];
-    };
+    } & CuInputTarget)
+) & { delivery?: 'background' | 'foreground' };
 
 export interface CuRunContext {
   sessionId: string;
   turnId: string;
   toolCallId: string;
+  /** Host-owned task permission, never a model argument. Absent means denied. */
+  foregroundAuthorized?: boolean;
   boundAction?: CuaBoundAction;
+  /** Called after native target checks, before input. Recheck guards after awaiting it. */
+  beforeNativeDispatch?: () => Promise<void>;
 }
 
 export interface CuPresentationFence {
@@ -346,6 +368,7 @@ export interface CuOverlayHookContext {
   sessionId: string;
   toolCallId: string;
   presentationScreenPoint?: CuPoint;
+  presentationVisibility?: 'visible' | 'unavailable';
   /**
    * The window this action is bound to, so a resting cursor can be ordered
    * directly above it. Absent when the action names no window, in which case
@@ -355,6 +378,8 @@ export interface CuOverlayHookContext {
 }
 
 export interface CuOverlayHook {
+  /** Present an accepted observation; Runtime does not await this hook or request another capture. */
+  onObservation?(observation: CuObservation, context: CuOverlayHookContext): void | Promise<void>;
   onActionBegin(
     action: CuPresentationAction,
     context: CuOverlayHookContext,
@@ -369,16 +394,26 @@ export interface CuOverlayHook {
 export type CuPresentationAction = { type: CuSemanticAction['type'] } | CuAction;
 
 /**
- * The host dispatch seam. Implemented in @maka/computer-use by the maka-cu
- * backend, which spawns the maka-cu executor and speaks `maka.cu/2` over stdio.
- * Alternative backends can plug in behind this same interface later.
+ * The host dispatch seam, implemented by the Desktop-owned Cua Driver SDK.
  */
 export interface CuDispatchBackend {
-  /** Live macOS TCC status. Called at EVERY action-start — cached "granted" is
-   *  insufficient because the user can revoke at any time (S12). */
-  preflight(signal: AbortSignal): Promise<{ accessibility: boolean; screenRecording: boolean }>;
+  /** Actions with a reachable executor implementation in this build. */
+  supportedActions?: readonly string[];
+  supportedWindowActions?: readonly string[];
+  /** Actions whose native schema supports explicit foreground delivery. */
+  supportedForegroundActions?: readonly string[];
+  /** Live host readiness. Rechecked before every action because permissions and
+   *  desktop services can change while a task is running. */
+  preflight(signal: AbortSignal): Promise<{
+    accessibility: boolean;
+    screenRecording: boolean;
+    /** Curated, platform-specific remediation for denied access, never raw system errors. */
+    accessibilityGuidance?: string;
+    screenRecordingGuidance?: string;
+  }>;
   /**
-   * Ask the native executor to show the Accessibility consent prompt.
+   * Ask the native executor to show the Accessibility consent prompt. Hosts
+   * without this consent mechanism omit the hook.
    *
    * This is separate from `preflight`: the latter runs before every action and
    * must stay free of presentation side effects. The tool layer invokes this

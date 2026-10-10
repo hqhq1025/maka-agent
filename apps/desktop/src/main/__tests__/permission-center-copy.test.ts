@@ -32,8 +32,8 @@ test('renders capability reason codes per locale', () => {
   const en = getCapabilityReasonCopy('en');
   assert.equal(zh.platform_credentials_missing, '未配置平台凭据');
   assert.equal(en.platform_credentials_missing, 'Platform credentials are not configured');
-  assert.equal(zh.cu_executor_recovering, 'maka-cu executor 正在启动或恢复。');
-  assert.equal(en.cu_executor_recovering, 'The maka-cu executor is starting or recovering.');
+  assert.equal(zh.cu_executor_recovering, '正在加载 Cua Driver。');
+  assert.equal(en.cu_executor_recovering, 'Loading Cua Driver.');
 });
 
 test('composes the computer-use backend status from snapshot facts per locale', () => {
@@ -41,14 +41,14 @@ test('composes the computer-use backend status from snapshot facts per locale', 
   const en = getPermissionCenterCopy('en');
   assert.equal(
     zh.cuBackendStatus(['辅助功能', '屏幕录制'], 'healthy'),
-    'maka-cu artifact 已通过本地完整性检查。等待辅助功能、屏幕录制权限。操作与截图 service 已就绪；按目标与动作类别授权后可操作本机应用。',
+    '等待辅助功能、屏幕录制权限。Cua Driver 已就绪；操作前仍会检查目标应用和操作授权。',
   );
   assert.equal(
     zh.cuBackendStatus([], 'not_run'),
-    'maka-cu artifact 已通过本地完整性检查。service 将在首次调用时启动；按目标与动作类别授权后可操作本机应用。',
+    'Cua Driver 将在首次电脑操作时加载，并检查桌面环境与权限。',
   );
   assert.equal(
     en.cuBackendStatus(['Accessibility'], 'degraded'),
-    'The maka-cu artifact passed the local integrity check. Waiting for Accessibility permission. The maka-cu service is starting or recovering.',
+    'Waiting for Accessibility permission. Cua Driver is not ready: it is loading, or the desktop environment or permissions need attention.',
   );
 });

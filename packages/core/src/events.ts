@@ -28,6 +28,7 @@
 
 import * as nodeCrypto from 'node:crypto';
 import type { ModelRetryDecision } from './model-failure.js';
+import type { ComputerUseActivity } from './computer-use.js';
 import { CONTEXT_OFFLOAD_ID_MAX_CODE_POINTS, type SessionContextRef } from './context-offload.js';
 import type {
   AdditionalPermissionRequest,
@@ -871,6 +872,7 @@ export interface ToolResultEvent extends BaseEvent, ToolActivityIdentity {
   modelProjection?: DurableToolResultProjection;
   /** The transport omitted durable result content; consumers must not treat the placeholder as authoritative. */
   contentOmitted?: true;
+  computerUse?: ComputerUseActivity;
   isError: boolean;
   content: ToolResultContent;
   durationMs?: number;
@@ -948,6 +950,7 @@ export type ToolResultContent =
       sandboxDenial?: SandboxDenialSignal;
       sandboxFailure?: SandboxBoundaryFailureSignal;
       uncertainOutcome?: ToolUncertainOutcomeSignal;
+      computerUse?: ComputerUseActivity;
     }
   | { kind: 'json'; value: unknown }
   | { kind: 'file_diff'; paths: string[]; diff: string }

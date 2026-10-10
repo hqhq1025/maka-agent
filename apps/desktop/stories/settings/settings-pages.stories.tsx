@@ -108,6 +108,7 @@ import { withScopedMakaBridge } from '../maka-bridge';
 import { getDailyReviewSettingsCopy } from '../../src/renderer/locales/settings-daily-review-copy';
 import { getExternalSessionImportCopy } from '../../src/renderer/locales/external-session-import-copy';
 import { getUsageSettingsCopy } from '../../src/renderer/locales/settings-usage-copy';
+import { getPermissionCenterCopy } from '../../src/renderer/locales/permission-center-copy';
 
 /**
  * Read from the copy table, not typed out again. This selector matched a
@@ -632,13 +633,13 @@ const capabilitySnapshot: CapabilitySnapshotCollection = {
         state: 'degraded',
         source: 'runtime_probe',
         lastCheckedAt: NOW - 5 * 60_000,
-        reason: 'maka-cu 未响应握手，已回落到只读观察模式。',
+        reason: 'cu_backend_unavailable',
       },
       osPermissions: [
         { id: 'accessibility', required: true, status: 'granted' },
         { id: 'screen_recording', required: true, status: 'not_determined' },
       ],
-      actionApproval: { state: 'required_per_action', source: 'capability_policy' },
+      actionApproval: { state: 'required_scoped_lease', source: 'capability_policy' },
     }),
     makeCapability({
       id: 'memory_write',
@@ -686,15 +687,15 @@ const healthSignals: HealthSignal[] = [
     relatedCapabilityId: 'computer_use',
   },
   {
-    id: 'probe:maka-cu',
-    label: 'maka-cu 运行态探测',
+    id: 'probe:cua-driver',
+    label: 'Cua Driver 运行态探测',
     scope: 'capability',
     layer: 'runtime_probe',
     status: 'warning',
     source: 'runtime_probe',
     checkedAt: NOW - 5 * 60_000,
     message: 'capability_degraded',
-    detail: { kind: 'capability_reason', reason: 'maka-cu service 启动失败、已退出或已停止。' },
+    detail: { kind: 'capability_reason', reason: 'cu_executor_start_failed' },
     relatedCapabilityId: 'computer_use',
     blocksCapability: true,
   },
@@ -3449,6 +3450,57 @@ export const PermissionCenterDiagnosticsExpanded: Story = {
         expect(Math.abs(labelMetrics.bottom - valueMetrics.bottom)).toBeLessThanOrEqual(1);
         expect(valueMetrics.fontSize).toBe(labelMetrics.fontSize);
       }
+    }
+  },
+};
+
+// Real path: Settings → Permissions → Computer Use → open Foreground access.
+export const PermissionCenterForegroundPolicy: Story = {
+  decorators: [withSettingsBridge],
+  render: () => <SettingsStory section="permissions" />,
+  play: async ({ canvasElement }) => {
+    const copy = getPermissionCenterCopy('zh-CN');
+    const canvas = within(canvasElement);
+    const selector = await canvas.findByRole('combobox', { name: copy.foregroundPolicy });
+    await waitFor(() => expect(selector).not.toBeDisabled());
+    for (const policy of ['never', 'allow', 'ask'] as const) {
+      await userEvent.click(selector);
+      await userEvent.click(await within(document.body).findByRole('option', { name: copy.foregroundPolicyOptions[policy] }));
+      await waitFor(() => {
+        expect(selector).toHaveTextContent(copy.foregroundPolicyOptions[policy]);
+        expect(storyClientSettings.computerUse.foregroundPolicy).toBe(policy);
+      });
+    }
+    await userEvent.click(selector);
+    const menu = await within(document.body).findByRole('listbox');
+    const bounds = menu.getBoundingClientRect();
+    expect(bounds.left).toBeGreaterThanOrEqual(0);
+    expect(bounds.right).toBeLessThanOrEqual(window.innerWidth);
+    expect(bounds.bottom).toBeLessThanOrEqual(window.innerHeight);
+  },
+};
+
+// Real path: Settings → Permissions while the selected Host is unavailable.
+// Local foreground policy must remain editable outside the Host interaction gate.
+export const PermissionCenterForegroundPolicyHostUnavailable: Story = {
+  decorators: [withGeneralUnavailableBridge],
+  render: () => <SettingsStory section="permissions" />,
+  play: async ({ canvasElement }) => {
+    const copy = getPermissionCenterCopy('zh-CN');
+    const canvas = within(canvasElement);
+    const selector = await canvas.findByRole('combobox', { name: copy.foregroundPolicy });
+    await waitFor(() => expect(selector).toBeEnabled());
+    const alert = await canvas.findByRole('alert');
+    await expect(alert).toHaveTextContent('Runtime Host');
+    expect(canvasElement.querySelector('[data-permission-id]')).toBeNull();
+    for (const policy of ['never', 'ask'] as const) {
+      await userEvent.click(selector);
+      await userEvent.click(await within(document.body).findByRole('option', { name: copy.foregroundPolicyOptions[policy] }));
+      await waitFor(() => {
+        expect(selector).toHaveTextContent(copy.foregroundPolicyOptions[policy]);
+        expect(storyClientSettings.computerUse.foregroundPolicy).toBe(policy);
+      });
+      await expect(alert).toBeVisible();
     }
   },
 };

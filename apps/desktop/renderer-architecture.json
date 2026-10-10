@@ -479,6 +479,7 @@
     },
     "src/renderer/features/workbar/index.ts": {
       "appShell": [
+        "ComputerUseConversationStatus",
         "WorkbarHost",
         "WorkbarProvider",
         "WorkbarShellRoot",
@@ -2909,14 +2910,17 @@
         "dependencyPaths": {
           "../../shared/settings-ownership.js": 1,
           "../application/contracts/session-catalog/catalog-sessions.js": 1,
+          "../application/contracts/settings-presentation/settings-section.js": 1,
           "../application/contracts/shell-layout-contract.js": 1,
           "../browser-storage": 1,
+          "../features/computer-use-settings/index.js": 1,
           "../features/connection-settings": 1,
           "../features/external-agent-settings/index.js": 1,
           "../features/session-bundle": 1,
           "../features/session-navigation": 1,
           "../locales/settings-navigation-copy.js": 1,
           "../locales/settings-shared-copy.js": 1,
+          "../platform/desktop/create-computer-use-settings-service.js": 1,
           "./about-settings-page": 1,
           "./appearance-settings-page": 1,
           "./bot-chat-settings-page": 1,
@@ -2936,7 +2940,6 @@
           "./settings-request-authority.js": 1,
           "./settings-resource-state.js": 1,
           "./settings-rows": 1,
-          "./settings-section": 1,
           "./settings-skeleton": 1,
           "./settings-snapshot-cache.js": 1,
           "./subagent-settings-page": 1,

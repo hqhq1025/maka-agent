@@ -48,10 +48,6 @@ const declarations = {
     size: {},
     reveal: showWindowInactive,
   },
-  pip: {
-    size: {},
-    reveal: showWindowInactive,
-  },
 } as const;
 
 export type AuxiliaryWindowId = keyof typeof declarations;

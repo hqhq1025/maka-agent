@@ -129,6 +129,7 @@ function loadToolGroupKind(
     id === 'computer_use'
     || id.endsWith('_desktop_computer_use')
     || normalizedLabel === 'computer use'
+    || hasTool('computer')
     || hasTool('maka_computer')
   ) return 'computer_use';
   if (

@@ -27,9 +27,10 @@ import type { GitReviewReadResult, GitReviewSnapshot } from '@maka/core/git-revi
 import type { SessionSummary, StoredMessage } from '@maka/core/session';
 import type { SessionTrace } from '@maka/core/session-trace';
 import type { ContextDiagnosticsResult } from '@maka/runtime-host/protocol';
-import { ChatSurfaceLayout, Composer, ToastProvider } from '@maka/ui';
-import { WorkbarServicesProvider } from '../src/renderer/features/workbar';
-import { WorkbarHostView, WorkbarSurface, useWorkbarLayoutState, type WorkbarHostModel } from '../src/renderer/features/workbar/stories';
+import { ChatSurfaceLayout, ChatView, ClientCapabilityPrompt, Composer, ToastProvider } from '@maka/ui';
+import { ComputerUseConversationStatus, WorkbarServicesProvider } from '../src/renderer/features/workbar';
+import type { ComputerUsePresentation } from '../src/shared/computer-use-presentation.js';
+import { WorkbarHostView, WorkbarSurface, useWorkbarLayoutState, useWorkbarServices, type WorkbarHostModel } from '../src/renderer/features/workbar/stories';
 import {
   createFakeWorkbarServices,
   createSessionWorkbarPanelsState,
@@ -38,6 +39,7 @@ import {
   createSessionWorkbarTabsState,
   openStaticSessionWorkbarTab,
   terminalSessionWorkbarTabId,
+  useComputerUsePresentation,
   type QuoteCompanionPanelState,
   type SessionWorkbarTab,
   type SessionWorkbarTabKind,
@@ -868,6 +870,8 @@ const unsubscribe = () => () => undefined;
  * varies, and everything else stays on the populated default.
  */
 function bridge(options: {
+  computerUse?: ComputerUsePresentation | null;
+  computerPreviewUnavailable?: boolean;
   trace?: SessionTrace;
   traceNextCursor?: string;
   traceFail?: boolean;
@@ -899,8 +903,32 @@ function bridge(options: {
   terminalWriteFails?: boolean;
 } = {}): Decorator {
   const browserState = options.browserState ?? EMPTY_BROWSER_STATE;
+  let computerState = options.computerUse ?? null;
+  const computerListeners = new Set<(state: ComputerUsePresentation | null) => void>();
+  const previewListeners = new Set<(state: import('../src/shared/computer-use-preview.js').ComputerUsePreviewStatus) => void>();
   let recentPendingReads = options.recentPendingReads ?? 0;
   const services = createFakeWorkbarServices({
+    computerUse: {
+      read: async () => computerState,
+      subscribe: (_sessionId, listener) => { computerListeners.add(listener); return () => { computerListeners.delete(listener); }; },
+      stop: async () => {
+        if (!computerState) return;
+        computerState = { ...computerState, state: 'stopped', revision: computerState.revision + 1, frame: undefined };
+        for (const listener of computerListeners) listener(computerState);
+      },
+    },
+    ...(options.computerUse ? { computerUsePreview: {
+      start: async (_sessionId: string, leaseId: string) => ({ leaseId, state: 'unavailable' as const,
+        reason: options.computerPreviewUnavailable ? 'permission_denied' as const : 'identity_unavailable' as const }),
+      updateBounds: async () => undefined,
+      stop: async (leaseId: string) => {
+        for (const listener of previewListeners) listener({ leaseId, state: 'stopped', reason: 'stopped' });
+      },
+      subscribe: (listener: (state: import('../src/shared/computer-use-preview.js').ComputerUsePreviewStatus) => void) => {
+        previewListeners.add(listener);
+        return () => { previewListeners.delete(listener); };
+      },
+    } } : {}),
     popupMenu: options.popupMenu ?? (async () => null),
     artifacts: {
       list: async () => options.artifactRecords ?? artifacts,
@@ -1032,6 +1060,7 @@ function bridge(options: {
       }),
       respondToSandboxBoundary: async () => undefined,
       respondToClientCapability: async () => undefined,
+      respondToInteractionByText: async () => ({ kind: 'unavailable' }),
       respondToUserQuestion: async () => undefined,
       respondToUserForm: async () => undefined,
       subscribeEvents: (_sessionId, handler, onSeeded, _onSeedError, onExecution) => {
@@ -1062,11 +1091,67 @@ function bridge(options: {
   );
 }
 
-/**
- * The AppShell grid the workbar really lives in, with an empty conversation
- * column.
- */
+function ComputerConversation({ onOpen, foregroundRequest = false }: { onOpen: () => void; foregroundRequest?: boolean }) {
+  const { computerUse } = useWorkbarServices();
+  const { presentation } = useComputerUsePresentation(SESSION_ID);
+  const [startedAt] = useState(() => Date.now() - 4_000);
+  const [foregroundDecision, setForegroundDecision] = useState<'allow' | 'deny' | null>(null);
+  if (!presentation) return null;
+  const stopping = presentation.state === 'stopping';
+  const active = presentation.state === 'running' || stopping || presentation.state === 'settled';
+  const unknown = presentation.outcome?.error === 'outcome_unknown';
+  const messages: StoredMessage[] = [
+    { type: 'user', id: 'computer-user', turnId: 'computer-turn', ts: startedAt, text: '在测试应用里点击计数按钮，并填入项目名称。' },
+    { type: 'turn_state', id: 'computer-started', turnId: 'computer-turn', ts: startedAt, status: 'running' },
+    { type: 'assistant', id: 'computer-assistant', turnId: 'computer-turn', ts: startedAt + 500, modelId: 'claude-sonnet-4-5', text: '已经找到测试应用的窗口。我会填写项目名称，再检查界面上的结果。' },
+    { type: 'tool_call', id: 'computer-call', turnId: 'computer-turn', ts: startedAt + 1_000, stepId: 'computer-assistant', toolName: 'computer', activityKind: 'computer', args: { action: 'set_value', observation_id: 'observation-1', element_id: 'e2', value: '<text>' } },
+  ];
+  if (!stopping) {
+    messages.push(
+      { type: 'tool_result', id: 'computer-result', turnId: 'computer-turn', ts: startedAt + 1_460, toolUseId: 'computer-call', isError: unknown, durationMs: 460, content: { kind: 'text', text: unknown
+        ? 'computer.set_value failed: outcome_unknown'
+        : 'computer.set_value ok via ax; dispatch effect=confirmed, reason=delivery:background' } },
+      { type: 'assistant', id: 'computer-progress', turnId: 'computer-turn', ts: startedAt + 2_000, modelId: 'claude-sonnet-4-5', text: unknown
+        ? '这次填写操作的结果还不能确认。我会先重新观察窗口，再决定下一步。'
+        : '项目名称已经填入。我会继续检查计数按钮和填写结果。' },
+    );
+  }
+  if (presentation.state === 'stopped') messages.push({ type: 'turn_state', id: 'computer-ended', turnId: 'computer-turn', ts: startedAt + 4_000, status: 'aborted', abortedAt: startedAt + 4_000, abortSource: 'renderer.stop_button' });
+  else if (presentation.state === 'completed') messages.push({ type: 'turn_state', id: 'computer-ended', turnId: 'computer-turn', ts: startedAt + 4_000, status: 'completed' });
+  // Host admission requests consent before publishing the foreground tool call.
+  if (foregroundRequest) messages.push({ type: 'assistant', id: 'computer-foreground-reason', turnId: 'computer-turn', ts: startedAt + 3_000, modelId: 'claude-sonnet-4-5', text: '测试应用的计数按钮需要窗口位于前台。接下来会先询问是否允许当前任务使用前台。' });
+  return (
+    <ChatSurfaceLayout composer={<>
+      <ComputerUseConversationStatus sessionId={SESSION_ID} onOpen={onOpen} />
+      {foregroundRequest && foregroundDecision === null && (
+        <ClientCapabilityPrompt
+          request={{ type: 'client_capability_request', id: 'computer-foreground-event', turnId: 'computer-turn', ts: startedAt + 3_100, requestId: 'computer-foreground-request', toolUseId: 'computer-foreground-call', capability: 'computer_use', scope: { kind: 'computer_use_foreground', authorityEpoch: 'desktop-policy-1' } }}
+          onRespond={({ decision }) => setForegroundDecision(decision)}
+          textResponseAvailable
+        />
+      )}
+      <Composer draftKey={SESSION_ID} onSend={(text) => {
+        // The story simulates the Host response; admission and native execution
+        // are verified by the separate composed Cua Driver fixture.
+        if (!foregroundRequest || foregroundDecision !== null) return;
+        if (text === '批准') setForegroundDecision('allow');
+        else if (text === '拒绝') setForegroundDecision('deny');
+        else return false;
+      }} onStop={() => { void computerUse?.stop(SESSION_ID); }}
+        streaming={active} stopPending={stopping} activeSession={TOOL_PICKER_SOURCE_SESSION}
+        activeModel="claude-sonnet-4-5" activeModelLabel="Sonnet 4.5" permissionMode="ask" />
+    </>}>
+      <ChatView scrollBehavior="auto" onNew={noop} activeSession={{ ...TOOL_PICKER_SOURCE_SESSION, name: '验证测试应用中的控件操作' }}
+        activeTurn={active ? { turnId: 'computer-turn' } : undefined} messages={messages} />
+    </ChatSurfaceLayout>
+  );
+}
+
+/** The AppShell grid the workbar really lives in, with an optional conversation. */
 function Workbar(props: {
+  computerConversation?: boolean;
+  computerForegroundRequest?: boolean;
+  initiallyCollapsed?: boolean;
   workspace?: 'session' | 'workhub';
   tab?: SessionWorkbarTabKind;
   /** Extra faces opened after `tab`, so the strip can be seen with several. */
@@ -1081,7 +1166,7 @@ function Workbar(props: {
   collapsible?: boolean;
   focusable?: boolean;
 }) {
-  const [collapsed, setCollapsed] = useState(false);
+  const [collapsed, setCollapsed] = useState(props.initiallyCollapsed ?? false);
   const [focused, setFocused] = useState(false);
   const emptyTabsState = createSessionWorkbarTabsState();
   let tab: SessionWorkbarTab | undefined;
@@ -1143,6 +1228,12 @@ function Workbar(props: {
         } as CSSProperties}
       >
         <div className="mainColumn">
+          {props.computerConversation ? (
+            <ComputerConversation foregroundRequest={props.computerForegroundRequest} onOpen={() => {
+                setPanels((state) => ({ ...state, right: openStaticSessionWorkbarTab(state.right, 'computer'), focusedPanel: 'right' }));
+                setCollapsed(false);
+              }} />
+          ) : null}
           {props.focusable && (
             <ChatSurfaceLayout composer={<div className="maka-session-composer-dock"><textarea aria-label="Session draft" placeholder="Ask about this file"
               style={{ display: 'block', position: 'relative', zIndex: 5, boxSizing: 'border-box', width: '100%', minHeight: 72, padding: 16, border: '1px solid var(--border)', borderRadius: 8, background: 'var(--background)', color: 'var(--foreground)' }} />
@@ -1236,6 +1327,85 @@ const meta = {
 export default meta;
 
 type Story = StoryObj<typeof meta>;
+
+// Real path: AppShell composer signal → manually opened Workbar Computer tab.
+// These are explicit service fixtures. No recorded app screenshots are embedded.
+const COMPUTER_PRESENTATION: ComputerUsePresentation = {
+  sessionId: SESSION_ID, revision: 1, state: 'settled', action: 'set_value', appName: 'Cua test fixture', updatedAt: NOW,
+  outcome: { ok: true, effect: 'confirmed', delivery: 'background' },
+};
+
+export const ComputerConversationFirst: Story = {
+  decorators: [bridge({ computerUse: COMPUTER_PRESENTATION })],
+  render: () => <Workbar tab="computer" computerConversation initiallyCollapsed collapsible />,
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    await waitFor(() => expect(canvas.getByText('在测试应用里点击计数按钮，并填入项目名称。')).toBeVisible());
+    await waitFor(() => expect(canvas.getByText('项目名称已经填入。我会继续检查计数按钮和填写结果。')).toBeVisible());
+    await userEvent.click(await canvas.findByRole('button', { name: '查看电脑 · Cua test fixture' }));
+    await expect(canvas.findByText('尚无可预览的截图')).resolves.toBeVisible();
+    await userEvent.click(canvas.getByRole('button', { name: '停止任务' }));
+    await waitFor(() => expect(canvas.queryByRole('button', { name: '停止任务' })).not.toBeInTheDocument());
+    await expect(canvas.findByText('已停止', { exact: true })).resolves.toBeVisible();
+  },
+};
+
+export const ComputerOutcomeUnknown: Story = {
+  decorators: [bridge({ computerUse: { ...COMPUTER_PRESENTATION, outcome: { ok: false, error: 'outcome_unknown' } } })],
+  render: () => <Workbar tab="computer" computerConversation collapsible />,
+};
+
+export const ComputerBackground: Story = {
+  decorators: [bridge({ computerUse: COMPUTER_PRESENTATION })],
+  render: () => <Workbar tab="computer" computerConversation collapsible />,
+};
+
+export const ComputerBackgroundCollapsed: Story = {
+  decorators: [bridge({ computerUse: COMPUTER_PRESENTATION })],
+  render: () => <Workbar tab="computer" computerConversation initiallyCollapsed collapsible />,
+};
+
+export const ComputerPreviewUnavailable: Story = {
+  decorators: [bridge({ computerUse: COMPUTER_PRESENTATION, computerPreviewUnavailable: true })],
+  render: () => <Workbar tab="computer" computerConversation collapsible />,
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    await userEvent.click(await canvas.findByRole('button', { name: '开始实时预览' }));
+    await expect(canvas.findByText('实时预览暂不可用')).resolves.toBeVisible();
+    await expect(canvas.findByText('请检查系统的辅助功能与屏幕录制权限，然后重新打开预览。')).resolves.toBeVisible();
+    await expect(canvas.findByRole('button', { name: '停止任务' })).resolves.toBeVisible();
+  },
+};
+
+// Real path: a task requests foreground delivery; the composer shows the separate
+// task-scoped consent prompt. The prior action's background evidence stays unchanged.
+export const ComputerForegroundRequest: Story = {
+  decorators: [bridge({ computerUse: COMPUTER_PRESENTATION })],
+  render: () => <Workbar tab="computer" computerConversation computerForegroundRequest initiallyCollapsed collapsible />,
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    await expect(canvas.findByRole('heading', { name: '允许当前任务使用前台？' })).resolves.toBeVisible();
+    await expect(canvas.findByRole('button', { name: '保持后台' })).resolves.toBeVisible();
+    await expect(canvas.findByRole('button', { name: '允许此任务使用前台' })).resolves.toBeVisible();
+    await expect(canvas.findByText('允许后，当前任务后续的前台操作将不再询问。你可以随时停止任务。')).resolves.toBeVisible();
+    expect(canvas.queryByText('上次操作方式 · 前台')).not.toBeInTheDocument();
+  },
+};
+
+export const ComputerStopping: Story = {
+  decorators: [bridge({ computerUse: { ...COMPUTER_PRESENTATION, state: 'stopping' } })],
+  render: () => <Workbar tab="computer" computerConversation collapsible />,
+};
+
+export const ComputerAtColumnFloor: Story = {
+  decorators: [bridge({ computerUse: COMPUTER_PRESENTATION })],
+  render: () => <Workbar tab="computer" width={320} />,
+};
+
+export const ComputerEmpty: Story = {
+  decorators: [bridge({ computerUse: null })],
+  render: () => <Workbar tab="computer" />,
+};
 
 // Real path: sidebar → a session → expand an empty workbar. The picker is the
 // workbar's empty content, composed entirely from Astryx List primitives.

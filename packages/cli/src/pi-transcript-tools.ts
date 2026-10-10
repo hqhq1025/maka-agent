@@ -841,6 +841,7 @@ function toolInputSummary(entry: MakaPiToolEntry): string {
       }
       break;
     }
+    case 'computer':
     case 'maka_computer': {
       const line = computerCallSummary(obj);
       if (line) return line;
@@ -867,7 +868,7 @@ function toolInputSummary(entry: MakaPiToolEntry): string {
  * What one Computer Use call did, for the row that names it.
  *
  * Every other tool's row is legible from its name plus one headline argument.
- * This tool's name is `Maka Computer` for observing a window, clicking a
+ * This tool was named `Maka Computer` for observing a window, clicking a
  * button and observing again alike, so ten calls in a turn printed ten
  * identical headers; the generic fallback then spelled the arguments out as
  * `action: … / approvalClass: … / rememberForTurnAllowed: …`, which names the

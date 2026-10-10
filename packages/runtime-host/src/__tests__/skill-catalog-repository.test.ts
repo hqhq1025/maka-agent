@@ -28,6 +28,7 @@ import { RuntimeHostProtocolError } from '../protocol/errors.js';
 import assert from 'node:assert/strict';
 import { execFile } from 'node:child_process';
 import { createHash } from 'node:crypto';
+import { writeFileSync } from 'node:fs';
 import { chmod, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -36,8 +37,13 @@ import { promisify } from 'node:util';
 import {
   BUNDLED_SKILL_CATALOG,
   buildStarterSkillTemplate,
+  createBundledSkillLock,
   createManagedSkillLock,
+  MANAGED_SKILL_BASELINE_RELATIVE_PATH,
 } from '@maka/runtime/skills';
+import previousComputerBundle from './fixtures/computer-use-previous-bundle.json' with {
+  type: 'json',
+};
 import { decodeHostFrame, isSkillCatalogProjectRootLexicallyAbsolute } from '../protocol/index.js';
 import type {
   SkillCatalogGovernanceItem,
@@ -57,6 +63,172 @@ import {
 
 const roots = new Set<string>();
 const execFileAsync = promisify(execFile);
+
+test('Host recovery refreshes an unchanged shipped computer skill before invocation', async () => {
+  const fixture = await createFixture();
+  const source = BUNDLED_SKILL_CATALOG.find((entry) => entry.id === 'computer-use');
+  assert.ok(source);
+  const directory = await installPreviousComputerBundle(fixture.root);
+  const oldBytes = await readFile(join(directory, 'SKILL.md'), 'utf8');
+  assert.match(oldBytes, /required-tools:\n  - maka_computer/);
+  const statePath = join(fixture.root, '.maka', 'skills-state.json');
+  await mkdir(join(fixture.root, '.maka'), { recursive: true });
+  const preferences = stateFile('workspace:legacy:computer-use', true, true, '2026-01-01');
+  await writeFile(statePath, preferences);
+  const repository = fixture.repository();
+
+  await repository.recover();
+  assert.equal(await readFile(join(directory, 'SKILL.md'), 'utf8'), source.body);
+  assert.equal(
+    await readFile(join(directory, MANAGED_SKILL_BASELINE_RELATIVE_PATH), 'utf8'),
+    source.body,
+  );
+  assert.equal(await readFile(statePath, 'utf8'), preferences);
+  const inventory = await repository.readCanonicalModelInventory({ projectRoot: fixture.project });
+  const skill = inventory.inventory.find((entry) => entry.ref === 'workspace:legacy:computer-use');
+  assert.ok(skill);
+  assert.deepEqual(skill.requiredTools, ['computer']);
+  assert.equal(skill.pinned, true);
+  const invocable = await repository.queryInvocable(
+    { kind: 'start' },
+    { projectRoot: fixture.project },
+    { toolNames: new Set(['computer']) },
+  );
+  assert.equal(invocable.kind, 'page');
+  if (invocable.kind === 'page')
+    assert.ok(invocable.items.some((entry) => entry.ref === skill.ref));
+  const lock = await readFile(join(directory, 'skill.lock.json'), 'utf8');
+  assert.equal(JSON.parse(lock).installedAt, '2026-01-01');
+  await repository.recover();
+  assert.equal(await readFile(join(directory, 'skill.lock.json'), 'utf8'), lock);
+});
+
+test('bundled computer refresh preserves customized, untrusted and altered-baseline installations', async () => {
+  for (const change of ['content', 'lock', 'baseline', 'extra-file'] as const) {
+    const fixture = await createFixture();
+    const directory = await installPreviousComputerBundle(fixture.root);
+    const path = join(
+      directory,
+      change === 'extra-file'
+        ? 'USER.md'
+        : change === 'content'
+          ? 'SKILL.md'
+          : change === 'lock'
+            ? 'skill.lock.json'
+            : MANAGED_SKILL_BASELINE_RELATIVE_PATH,
+    );
+    await writeFile(
+      path,
+      change === 'lock' ? '{"sourceType":"bundled"}\n' : 'Customized content\n',
+    );
+    const paths = ['SKILL.md', 'skill.lock.json', MANAGED_SKILL_BASELINE_RELATIVE_PATH];
+    const before = await Promise.all(paths.map((name) => readFile(join(directory, name), 'utf8')));
+    await fixture.repository().recover();
+    assert.deepEqual(
+      await Promise.all(paths.map((name) => readFile(join(directory, name), 'utf8'))),
+      before,
+      change,
+    );
+  }
+});
+
+test('refreshing a disabled bundled computer skill preserves its disabled preference', async () => {
+  const fixture = await createFixture();
+  await installPreviousComputerBundle(fixture.root);
+  const statePath = join(fixture.root, '.maka', 'skills-state.json');
+  await mkdir(join(fixture.root, '.maka'), { recursive: true });
+  const preferences = stateFile('workspace:legacy:computer-use', false, true, '2026-01-01');
+  await writeFile(statePath, preferences);
+  const repository = fixture.repository();
+  const inventory = await repository.readCanonicalModelInventory({ projectRoot: fixture.project });
+  const skill = inventory.inventory.find((entry) => entry.ref === 'workspace:legacy:computer-use');
+  assert.ok(skill);
+  assert.deepEqual(skill.requiredTools, ['computer']);
+  assert.equal(skill.enabled, false);
+  assert.equal(skill.pinned, true);
+  assert.equal(await readFile(statePath, 'utf8'), preferences);
+});
+
+test('the historical Desktop two-file bundled install refreshes and recovers before invocation', async () => {
+  for (const interrupt of [undefined, 'after_managed_freeze'] as const) {
+    const fixture = await createFixture();
+    const source = BUNDLED_SKILL_CATALOG.find((entry) => entry.id === 'computer-use');
+    assert.ok(source);
+    const directory = await installPreviousComputerBundle(fixture.root, false);
+    await assert.rejects(readFile(join(directory, MANAGED_SKILL_BASELINE_RELATIVE_PATH)), {
+      code: 'ENOENT',
+    });
+    const repository = fixture.repository(
+      interrupt
+        ? {
+            failpoint(point) {
+              if (point === interrupt) throw new Error('interrupted');
+            },
+          }
+        : undefined,
+    );
+    if (interrupt) await assert.rejects(repository.recover());
+    else await repository.recover();
+    const reopened = fixture.repository();
+    await reopened.recover();
+    await reopened.recover();
+    const inventory = await reopened.readCanonicalModelInventory({ projectRoot: fixture.project });
+    const skill = inventory.inventory.find(
+      (entry) => entry.ref === 'workspace:legacy:computer-use',
+    );
+    assert.ok(skill);
+    assert.deepEqual(skill.requiredTools, ['computer']);
+    assert.equal(await readFile(join(directory, 'SKILL.md'), 'utf8'), source.body);
+    assert.equal(
+      await readFile(join(directory, MANAGED_SKILL_BASELINE_RELATIVE_PATH), 'utf8'),
+      source.body,
+    );
+  }
+});
+
+test('a local edit after bundled refresh intent is preserved by the replacement transaction', async () => {
+  const fixture = await createFixture();
+  const directory = await installPreviousComputerBundle(fixture.root);
+  const contentPath = join(directory, 'SKILL.md');
+  const customized = `${previousComputerBundle.body}\nUser customization\n`;
+  const repository = fixture.repository({
+    failpoint(point) {
+      if (point === 'after_intent') writeFileSync(contentPath, customized);
+    },
+  });
+  await repository.recover();
+  assert.equal(await readFile(contentPath, 'utf8'), customized);
+  const reopened = fixture.repository();
+  await reopened.recover();
+  await reopened.recover();
+  assert.equal(await readFile(contentPath, 'utf8'), customized);
+  const inventory = await reopened.readCanonicalModelInventory({ projectRoot: fixture.project });
+  assert.ok(inventory.inventory.some((entry) => entry.ref === 'workspace:legacy:computer-use'));
+});
+
+async function installPreviousComputerBundle(root: string, baseline = true): Promise<string> {
+  const source = BUNDLED_SKILL_CATALOG.find((entry) => entry.id === 'computer-use');
+  assert.ok(source);
+  const contentSha256 = `sha256:${createHash('sha256').update(previousComputerBundle.body).digest('hex')}`;
+  assert.equal(
+    contentSha256,
+    'sha256:ef548414fbd3d88fc40e6be1a84ddb345a38b6651b20aaa502bcb9afdf457051',
+  );
+  assert.ok(source.legacyContentSha256.includes(contentSha256));
+  const directory = await createSkill(join(root, 'skills'), source.id, previousComputerBundle.body);
+  if (baseline) {
+    await mkdir(join(directory, '.maka', 'baseline'), { recursive: true });
+    await writeFile(
+      join(directory, MANAGED_SKILL_BASELINE_RELATIVE_PATH),
+      previousComputerBundle.body,
+    );
+  }
+  await writeFile(
+    join(directory, 'skill.lock.json'),
+    JSON.stringify(createBundledSkillLock({ ...source, contentSha256 }, '2026-01-01')),
+  );
+  return directory;
+}
 
 afterEach(async () => {
   await Promise.all([...roots].map((root) => rm(root, { recursive: true, force: true })));

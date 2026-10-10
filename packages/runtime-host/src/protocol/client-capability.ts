@@ -18,6 +18,7 @@
  */
 
 import { TOOL_ACTIVITY_KINDS, type ToolActivityKind } from '@maka/core/events';
+import { isComputerUseActivity, type ComputerUseActivity } from '@maka/core/computer-use';
 import {
   decodeInteractionAnswer,
   projectInteractionFormRequest,
@@ -76,6 +77,11 @@ export type ClientCapabilityContentBlock =
 export interface ClientCapabilityCallResult {
   readonly content: ClientCapabilityContentBlock[];
   readonly structuredContent?: unknown;
+  /** Executor error code, separate from model-facing diagnostics. */
+  readonly error?: string;
+  /** Safe persisted summary; interpreted only for trusted native Computer Use. */
+  readonly summary?: string;
+  readonly computerUse?: ComputerUseActivity;
 }
 
 export type ClientCapabilityAffinity = 'call' | 'turn' | 'session';
@@ -219,7 +225,13 @@ export interface ClientCapabilityAcceptedFrame {
 
 export type ClientCapabilityAdmissionEvidence =
   | { readonly kind: 'none' }
-  | { readonly kind: 'browser_url'; readonly url: string };
+  | { readonly kind: 'browser_url'; readonly url: string }
+  | {
+      readonly kind: 'computer_use';
+      readonly delivery: 'background' | 'foreground';
+      readonly foregroundPolicy: 'never' | 'ask' | 'allow';
+      readonly authorityEpoch: string;
+    };
 
 export interface ClientCapabilityRejectedFrame {
   readonly kind: 'client.capability.rejected';
@@ -585,6 +597,29 @@ function decodeClientCapabilityAdmissionEvidence(
         kind: evidence.kind,
         url: requireString(evidence.url, 'url', 16_384),
       };
+    case 'computer_use':
+      assertExactKeys(evidence, 'Computer Use admission evidence', [
+        'kind',
+        'delivery',
+        'foregroundPolicy',
+        'authorityEpoch',
+      ]);
+      if (evidence.delivery !== 'background' && evidence.delivery !== 'foreground') {
+        throw invalidProtocolFrame('Invalid Computer Use delivery');
+      }
+      if (
+        evidence.foregroundPolicy !== 'never' &&
+        evidence.foregroundPolicy !== 'ask' &&
+        evidence.foregroundPolicy !== 'allow'
+      ) {
+        throw invalidProtocolFrame('Invalid Computer Use foreground policy');
+      }
+      return {
+        kind: evidence.kind,
+        delivery: evidence.delivery,
+        foregroundPolicy: evidence.foregroundPolicy,
+        authorityEpoch: requireEntityId(evidence.authorityEpoch, 'authorityEpoch'),
+      };
     default:
       throw invalidProtocolFrame('Unknown Client Capability admission evidence kind');
   }
@@ -693,13 +728,30 @@ export function decodeClientCapabilityHostFrame(value: unknown): ClientCapabilit
 
 export function decodeClientCapabilityResult(value: unknown): ClientCapabilityCallResult {
   const record = requireRecord(value, 'Client Capability result');
-  assertOptionalExactKeys(record, 'Client Capability result', ['content'], ['structuredContent']);
+  assertOptionalExactKeys(
+    record,
+    'Client Capability result',
+    ['content'],
+    ['structuredContent', 'error', 'summary', 'computerUse'],
+  );
   if (!Array.isArray(record.content) || record.content.length > 256) {
     throw invalidProtocolFrame('Invalid Client Capability result content');
   }
   const content = record.content.map(decodeContentBlock);
+  if (record.computerUse !== undefined && !isComputerUseActivity(record.computerUse)) {
+    throw invalidProtocolFrame('Invalid Computer Use activity');
+  }
   return {
     content,
+    ...(record.computerUse === undefined
+      ? {}
+      : { computerUse: structuredClone(record.computerUse) }),
+    ...(Object.hasOwn(record, 'error')
+      ? { error: requireString(record.error, 'Client Capability result error', 128) }
+      : {}),
+    ...(Object.hasOwn(record, 'summary')
+      ? { summary: requireString(record.summary, 'Client Capability result summary', 200_000) }
+      : {}),
     ...(Object.hasOwn(record, 'structuredContent')
       ? {
           structuredContent: decodeJsonValue(record.structuredContent, 'structuredContent'),

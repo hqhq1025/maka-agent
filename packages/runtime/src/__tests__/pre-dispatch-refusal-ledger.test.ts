@@ -270,7 +270,7 @@ const REFUSAL_PATHS: Array<{
     drive: async (h) => {
       const runtime = runtimeFor(h);
       const tool: MakaTool = {
-        name: 'maka_computer',
+        name: 'computer',
         description: 'test',
         categoryHint: 'computer_use',
         parameters: z.object({

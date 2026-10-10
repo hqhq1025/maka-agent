@@ -42,7 +42,7 @@ export type DesktopWorkbarBridge = Pick<
   | 'shellRuns'
   | 'transcripts'
 > &
-  Partial<Pick<MakaBridge, 'workBoard'>>;
+  Partial<Pick<MakaBridge, 'workBoard' | 'computerUse' | 'computerUsePreview'>>;
 
 export interface DesktopWorkbarServiceDependencies {
   readSettledMessages: typeof readSettledMessagesFrom;
@@ -111,6 +111,8 @@ export function createDesktopWorkbarServices(
   };
 
   return {
+    ...(bridge.computerUse ? { computerUse: bridge.computerUse } : {}),
+    ...(bridge.computerUsePreview ? { computerUsePreview: bridge.computerUsePreview } : {}),
     reviewBaseBranchPreference: createReviewBaseBranchPreferences(),
     popupMenu: (input) => bridge.appWindow.popupMenu(input),
     review: {
@@ -213,6 +215,8 @@ export function createDesktopWorkbarServices(
         bridge.sessions.respondToSandboxBoundary(sessionId, response),
       respondToClientCapability: (sessionId, response) =>
         bridge.sessions.respondToClientCapability(sessionId, response),
+      respondToInteractionByText: (sessionId, response) =>
+        bridge.sessions.respondToInteractionByText(sessionId, response),
       respondToUserQuestion: (sessionId, response) =>
         bridge.sessions.respondToUserQuestion(sessionId, response),
       respondToUserForm: (sessionId, response) =>

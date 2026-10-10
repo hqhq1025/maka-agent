@@ -1487,18 +1487,18 @@ export const ComputerUseObservability: Story = {
             tools: [
               {
                 toolUseId: 'tool-cu-observe',
-                toolName: 'mcp__desktop_computer_use__maka_computer',
+                toolName: 'mcp__desktop_computer_use__computer',
                 activityKind: 'computer',
-                displayName: 'Maka Computer',
+                displayName: 'Computer',
                 status: 'completed',
                 args: { action: 'observe', app: '计算器', window_id: 7 },
                 durationMs: 728,
               },
               {
                 toolUseId: 'tool-cu-sequence',
-                toolName: 'mcp__desktop_computer_use__maka_computer',
+                toolName: 'mcp__desktop_computer_use__computer',
                 activityKind: 'computer',
-                displayName: 'Maka Computer',
+                displayName: 'Computer',
                 status: 'running',
                 args: {
                   action: 'element_sequence',

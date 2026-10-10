@@ -127,6 +127,7 @@ const EMBEDDED_COMPONENT_LICENSES = new Map([
   ],
 ]);
 const MIT_COPYRIGHT_OVERRIDES = new Map([
+  ['@trycua/cua-driver@0.34.0', 'Copyright (c) 2025 Cua AI, Inc.'],
   // The published tarball omits the monorepo-root LICENSE.
   ['@earendil-works/pi-tui@0.84.4', 'Copyright (c) 2025 Mario Zechner'],
   ['@earendil-works/pi-tui@0.85.1', 'Copyright (c) 2025 Mario Zechner'],
@@ -266,7 +267,36 @@ function readLicenseFiles(directory) {
     .sort((left, right) => left.name.localeCompare(right.name));
 }
 
+// The MIT platform crates carry Maka patches. MPL-2.0 Category B bridge/runtime
+// components remain separate and unchanged, with source availability in notices.
+// Do not broaden the project's source-license allowlist for an SDK dependency.
+function cuaBinaryLicense(packageKey, license) {
+  return (
+    (license === 'MIT AND MPL-2.0' &&
+      /^@trycua\/cua-driver-(darwin-(arm64|x64)|linux-(arm64|x64)-gnu|win32-(arm64|x64)-msvc)@0\.34\.0$/.test(
+        packageKey,
+      )) ||
+    (license === 'MPL-2.0' &&
+      /^@ubjs\/(core|node|node-(darwin-(arm64|x64)|linux-(arm64|x64)-(gnu|musl)|win32-(arm64|x64)-msvc))@0\.31\.0-3$/.test(
+        packageKey,
+      ))
+  );
+}
+
 function overrideLicenseText(packageKey, selectedLicense) {
+  if (cuaBinaryLicense(packageKey, selectedLicense)) {
+    const root = join(repoRoot, 'apps/desktop/resources/licenses/cua-driver');
+    const mpl = readFileSync(join(root, 'LICENSE-MPL-2.0.txt'), 'utf8');
+    const source =
+      '\nCorresponding source: https://github.com/trycua/cua/tree/b0968e1b12834e485dda68789541a3cc57664a9f/libs/cua-driver/rust\nMaka modifies the MIT-licensed macOS and Windows platform crates. Patch source and build instructions: patches/cua-driver/ in the Maka source tree. The MPL-2.0 bridge/runtime components remain unchanged.\nNode runtime: https://github.com/jhugman/uniffi-bindgen-react-native (0.31.0-3); Cua modifications: scripts/build-node-runtime.mjs at the Cua release tag.\n';
+    return (
+      (selectedLicense === 'MIT AND MPL-2.0'
+        ? readFileSync(join(root, 'LICENSE-MIT.txt'), 'utf8') + '\n'
+        : '') +
+      mpl +
+      source
+    );
+  }
   if (selectedLicense === 'Apache-2.0' && APACHE_TEXT_OVERRIDE_KEYS.has(packageKey)) {
     const rootLicense = readFileSync(join(repoRoot, 'LICENSE'), 'utf8');
     // `split` returns the whole string when the delimiter is absent, which
@@ -397,7 +427,7 @@ function renderNotice() {
       throw new Error(`${packageKey}: missing SPDX license metadata`);
     }
     const selectedLicense = LICENSE_SELECTIONS.get(declaredLicense) ?? declaredLicense;
-    if (!ALLOWED_LICENSES.has(selectedLicense)) {
+    if (!ALLOWED_LICENSES.has(selectedLicense) && !cuaBinaryLicense(packageKey, selectedLicense)) {
       throw new Error(
         `${packageKey}: license ${declaredLicense} does not resolve to an approved license`,
       );

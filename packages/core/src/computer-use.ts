@@ -26,6 +26,7 @@
  */
 
 import { redactSecrets } from './redaction.js';
+import { defineObjectShape, hasExactShape, isRecord } from './record-schema.js';
 
 export const COMPUTER_USE_ERROR_CODES = [
   'permission_missing',
@@ -169,6 +170,7 @@ export type CuActionType = (typeof CU_ACTION_TYPES)[number];
  */
 export const CU_SEMANTIC_ACTION_TYPES = [
   'click_element',
+  'double_click_element',
   'set_value',
   'select_text',
   'secondary_action',
@@ -212,7 +214,7 @@ export const COMPUTER_USE_SEMANTIC_ACTIONS = [
 ] as const;
 
 /**
- * Every action name the `maka_computer` tool accepts from a model, in wire
+ * Every action name the `computer` tool accepts from a model, in wire
  * order.
  */
 export const CU_TOOL_ACTION_TYPES = [...COMPUTER_USE_SEMANTIC_ACTIONS, ...CU_ACTION_TYPES] as const;
@@ -267,6 +269,7 @@ export interface ComputerUseScreenFrame {
 export const COMPUTER_USE_DISPATCH_TIERS = [
   'ax',
   'semantic-background',
+  'semantic-foreground',
   'coordinate-background',
 ] as const;
 
@@ -275,6 +278,86 @@ export type ComputerUseDispatchTier = (typeof COMPUTER_USE_DISPATCH_TIERS)[numbe
 export const COMPUTER_USE_EFFECTS = ['confirmed', 'unverifiable', 'suspected_noop'] as const;
 
 export type ComputerUseEffect = (typeof COMPUTER_USE_EFFECTS)[number];
+
+/** Executor-owned transcript metadata, separate from model arguments and observations. */
+export interface ComputerUseActivity {
+  toolCallId: string;
+  action: CuToolActionType;
+  /** A snapshot from the bound observation, never a later lookup of the element id. */
+  target?: {
+    observationId: string;
+    appId: string;
+    appName?: string;
+    windowTitle?: string;
+    elementId?: string;
+    role?: string;
+    label?: string;
+  };
+  outcome: {
+    /** An attempt does not confirm an effect. Proven path:none refusals are not_started. */
+    execution: 'not_started' | 'attempted';
+    ok: boolean;
+    error?: ComputerUseErrorCode;
+    effect?: ComputerUseEffect;
+    verified?: boolean;
+    reason?: 'foreground_authorized_reobserve';
+  };
+}
+
+const ACTIVITY_SHAPE = defineObjectShape<ComputerUseActivity>()(
+  ['toolCallId', 'action', 'outcome'],
+  ['target'],
+);
+const ACTIVITY_TARGET_SHAPE = defineObjectShape<NonNullable<ComputerUseActivity['target']>>()(
+  ['observationId', 'appId'],
+  ['appName', 'windowTitle', 'elementId', 'role', 'label'],
+);
+const ACTIVITY_OUTCOME_SHAPE = defineObjectShape<ComputerUseActivity['outcome']>()(
+  ['execution', 'ok'],
+  ['error', 'effect', 'verified', 'reason'],
+);
+
+export function isComputerUseActivity(value: unknown): value is ComputerUseActivity {
+  const bounded = (text: unknown, limit: number) =>
+    typeof text === 'string' && text.length > 0 && text.length <= limit;
+  if (
+    !isRecord(value) ||
+    !hasExactShape(value, ACTIVITY_SHAPE) ||
+    !bounded(value.toolCallId, 256) ||
+    typeof value.action !== 'string' ||
+    !isCuToolAction(value.action) ||
+    !isRecord(value.outcome) ||
+    !hasExactShape(value.outcome, ACTIVITY_OUTCOME_SHAPE)
+  )
+    return false;
+  const outcome = value.outcome;
+  if (
+    (outcome.execution !== 'not_started' && outcome.execution !== 'attempted') ||
+    typeof outcome.ok !== 'boolean' ||
+    (outcome.error !== undefined && (!isComputerUseErrorCode(outcome.error) || outcome.ok)) ||
+    (outcome.effect !== undefined &&
+      !(COMPUTER_USE_EFFECTS as readonly unknown[]).includes(outcome.effect)) ||
+    (outcome.verified !== undefined && typeof outcome.verified !== 'boolean') ||
+    (outcome.reason !== undefined &&
+      (outcome.reason !== 'foreground_authorized_reobserve' ||
+        outcome.execution !== 'not_started' ||
+        outcome.ok ||
+        outcome.error !== 'reobserve_required'))
+  )
+    return false;
+  if (value.target === undefined) return true;
+  const target = value.target;
+  return (
+    isRecord(target) &&
+    hasExactShape(target, ACTIVITY_TARGET_SHAPE) &&
+    bounded(target.observationId, 256) &&
+    bounded(target.appId, 256) &&
+    ['appName', 'windowTitle', 'elementId', 'label'].every(
+      (key) => target[key] === undefined || bounded(target[key], 256),
+    ) &&
+    (target.role === undefined || bounded(target.role, 64))
+  );
+}
 
 export interface ComputerUseDispatchEvidence {
   effect?: ComputerUseEffect;
@@ -310,11 +393,8 @@ export type ComputerUseActionOutcome =
        * The message may be shown to the model.
        *
        * Set only by a backend that guarantees its diagnostics carry no text
-       * belonging to the observed application. `maka.cu/2` §1.2 makes that a
-       * protocol rule: `error.message` is a fixed sentence chosen by
-       * `error.code`, and application text is confined to the declared
-       * observation fields. cua-driver made no such promise, which is why the
-       * message was withheld from every backend alike.
+       * belonging to the observed application. The adapter maps native errors
+       * into fixed codes; upstream free text is not safe to expose by default.
        *
        * Withholding it costs more than it protects. The executor writes "say
        * Backspace or ForwardDelete rather than delete"; the model was handed
@@ -479,10 +559,14 @@ const MODEL_CALL_NAMED_ARGS = new Set([
  * go through `redactSecrets` and a length bound like every other plain value.
  */
 const MODEL_CALL_PLAIN_VALUES: ReadonlyMap<string, ReadonlySet<string>> = new Map([
+  ['click_element', new Set(['delivery'])],
+  ['double_click_element', new Set(['delivery'])],
+  ['set_value', new Set(['delivery'])],
+  ['type', new Set(['delivery', 'focus'])],
   // `query` and `menu` name what to look at, not what was found there.
   ['observe', new Set(['include_screenshot', 'query', 'menu'])],
   ['screenshot', new Set(['include_screenshot'])],
-  ['scroll_element', new Set(['scroll_direction', 'scroll_amount'])],
+  ['scroll_element', new Set(['scroll_direction', 'scroll_amount', 'delivery'])],
   // The verb, from the enum the schema publishes. `position` and `size` are
   // semantic window geometry and are handled below.
   ['window_action', new Set(['window_action'])],
@@ -490,10 +574,10 @@ const MODEL_CALL_PLAIN_VALUES: ReadonlyMap<string, ReadonlySet<string>> = new Ma
   // before the screen shows it.
   ['wait', new Set(['duration', 'wait_for_text', 'wait_for_text_gone'])],
   // The key name, from the set of key names the executor accepts.
-  ['press_key', new Set(['text'])],
+  ['press_key', new Set(['text', 'delivery', 'focus'])],
   ['key', new Set(['text'])],
   // The element action name, from the closed set the observation lists.
-  ['secondary_action', new Set(['text'])],
+  ['secondary_action', new Set(['text', 'delivery'])],
 ]);
 
 /**
@@ -669,6 +753,7 @@ export function computerUseModelCallArgs(args: unknown): ComputerUseModelCallArg
 const KEYBOARD_ACTIONS = new Set(['type', 'key', 'press_key']);
 const SEMANTIC_ACTIONS = new Set([
   'click_element',
+  'double_click_element',
   'set_value',
   'select_text',
   'secondary_action',

@@ -1,0 +1,40 @@
+{
+  "version": "0.34.0",
+  "sourceCommit": "b0968e1b12834e485dda68789541a3cc57664a9f",
+  "sourceSha256": "1e49c80ac7a3df30ffec0aa81e2d3b7105f191ce39760da91d6290c55767a05a",
+  "rustToolchain": "1.97.1",
+  "platforms": {
+    "darwin": {
+      "packageSuffix": "darwin",
+      "library": "libcua_driver_sdk.dylib",
+      "patches": [
+        {
+          "file": "macos-sheet-observation.patch",
+          "sha256": "a0ccda2bd8be25c7f05bbac6a12ee2b4fbf34ef3356e9503b357b5f0d396fe55",
+          "directory": "."
+        },
+        {
+          "file": "macos-sheet-input.patch",
+          "sha256": "0798d0b83ecac8ac95248508c65d3cba173ef9035fe683bfce4d0db6f376a0bb",
+          "directory": "."
+        }
+      ]
+    },
+    "win32": {
+      "packageSuffix": "win32",
+      "library": "cua_driver_sdk.dll",
+      "patches": [
+        {
+          "file": "windows-owned-dialog.patch",
+          "sha256": "3f0e8cfb7aacbf5f87fac2c941ea7ec454422c9d5aaa6a187328b317afae5753",
+          "directory": "."
+        },
+        {
+          "file": "windows-foreground-child.patch",
+          "sha256": "089296d731bebcc31aa24d497f6985665c5820a6386a09f7c49aab9b4626d464",
+          "directory": "libs/cua-driver/rust"
+        }
+      ]
+    }
+  }
+}

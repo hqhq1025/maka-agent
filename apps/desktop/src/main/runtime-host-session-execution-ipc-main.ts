@@ -44,7 +44,7 @@ import {
   SESSION_SNAPSHOT_MAX_CHARS,
 } from '@maka/core/session-reference';
 import { type PermissionMode } from '@maka/core/permission';
-import { decodeInteractionFormResponse } from '@maka/core/interaction';
+import { decodeInteractionFormResponse, INTERACTION_AUTHORIZATION_TEXT_MAX_BYTES } from '@maka/core/interaction';
 import { type SandboxBoundaryResponse } from '@maka/core/sandbox-boundary';
 import type { AttachmentApprovalRegistry } from "./attachment-approval.js";
 import {
@@ -113,6 +113,7 @@ async function retryDispatchedCommand<T>(
 type RuntimeHostSessionExecutionClient = Pick<
   DesktopRuntimeHostClient,
   | "answerInteraction"
+  | "respondToInteractionByText"
   | "compactContext"
   | "copySession"
   | "getSession"
@@ -167,6 +168,7 @@ async function submitMessageWithReconnect(
 
 export interface RuntimeHostSessionExecutionIpcDeps {
   client: RuntimeHostSessionExecutionClient;
+  authorizeTextResponse(event: IpcMainInvokeEvent): boolean;
   observer: RuntimeHostSessionObserver;
   attachmentApprovals: AttachmentApprovalRegistry;
   emitSessionsChanged: (
@@ -709,6 +711,36 @@ export function registerRuntimeHostSessionExecutionIpc(
         answer: { kind: "question", answers: response.answers },
       });
       deps.observer.publishInteractionAnswer(answered, pending);
+    },
+  );
+  ipcMain.handle(
+    "sessions:respondToInteractionByText",
+    async (event, sessionId: string, input: unknown) => {
+      if (!deps.authorizeTextResponse(event)) throw new Error('Interaction text response requires a trusted Desktop renderer');
+      if (!input || typeof input !== 'object') throw new Error('Invalid interaction text response');
+      const response = input as { requestId?: unknown; text?: unknown };
+      if (typeof response.requestId !== 'string' || !response.requestId
+        || typeof response.text !== 'string') {
+        throw new Error('Invalid interaction text response');
+      }
+      if (!response.text.trim() || Buffer.byteLength(response.text, 'utf8') > INTERACTION_AUTHORIZATION_TEXT_MAX_BYTES) {
+        return { kind: 'unrecognized' };
+      }
+      const pending = await deps.observer.readInteraction(sessionId, response.requestId);
+      if (!pending || pending.request.kind !== 'client_capability'
+        || pending.request.target.capability !== 'computer_use') return { kind: 'unavailable' };
+      if (!deps.authorizeTextResponse(event)) throw new Error('Interaction text response renderer changed');
+      const result = await deps.client.respondToInteractionByText({
+        sessionId, interactionId: response.requestId, text: response.text,
+      });
+      if (result.kind !== 'answered') return result;
+      const answered = result.snapshot;
+      if (answered.sessionId !== sessionId || answered.interactionId !== response.requestId
+        || answered.outcome.kind !== 'client_capability_decision') {
+        throw new Error('Host answered a different interaction');
+      }
+      deps.observer.publishInteractionAnswer(answered, pending);
+      return { kind: 'answered', decision: answered.outcome.decision };
     },
   );
   ipcMain.handle(

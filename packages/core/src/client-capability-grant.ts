@@ -26,6 +26,7 @@ export type ClientCapabilityGrantCapability = 'browser' | 'computer_use' | 'desk
 export type ClientCapabilityGrantScope =
   | { readonly kind: 'browser_origin'; readonly origin: string }
   | { readonly kind: 'capability' }
+  | { readonly kind: 'computer_use_foreground'; readonly authorityEpoch: string }
   | { readonly kind: 'mcp_tool'; readonly serverId: string; readonly toolName: string };
 
 export interface ClientCapabilityGrantTarget {
@@ -71,6 +72,9 @@ const BROWSER_ORIGIN_SCOPE_SHAPE = defineObjectShape<
 const CAPABILITY_SCOPE_SHAPE = defineObjectShape<
   Extract<ClientCapabilityGrantScope, { kind: 'capability' }>
 >()(['kind'], []);
+const COMPUTER_USE_FOREGROUND_SCOPE_SHAPE = defineObjectShape<
+  Extract<ClientCapabilityGrantScope, { kind: 'computer_use_foreground' }>
+>()(['kind', 'authorityEpoch'], []);
 const MCP_TOOL_SCOPE_SHAPE = defineObjectShape<
   Extract<ClientCapabilityGrantScope, { kind: 'mcp_tool' }>
 >()(['kind', 'serverId', 'toolName'], []);
@@ -95,7 +99,9 @@ export function decodeClientCapabilityGrantTarget(value: unknown): ClientCapabil
   const scope = decodeClientCapabilityGrantScope(record.scope);
   if (
     (capability === 'browser' && scope.kind !== 'browser_origin') ||
-    (capability === 'computer_use' && scope.kind !== 'capability') ||
+    (capability === 'computer_use' &&
+      scope.kind !== 'capability' &&
+      scope.kind !== 'computer_use_foreground') ||
     ((capability === 'desktop_mcp' || capability === 'mcp') && scope.kind !== 'mcp_tool')
   ) {
     throw new Error('Client Capability Session Grant scope does not match capability');
@@ -136,6 +142,8 @@ export function clientCapabilityScopeIdentity(scope: ClientCapabilityGrantScope)
       return scope.origin;
     case 'capability':
       return '*';
+    case 'computer_use_foreground':
+      return `computer_use_foreground\0${scope.authorityEpoch}`;
     case 'mcp_tool':
       return `${scope.serverId}\0${scope.toolName}`;
   }
@@ -162,6 +170,14 @@ function decodeClientCapabilityGrantScope(value: unknown): ClientCapabilityGrant
         throw new Error('Invalid capability scope fields');
       }
       return Object.freeze({ kind: 'capability' });
+    case 'computer_use_foreground':
+      if (!hasExactShape(record, COMPUTER_USE_FOREGROUND_SCOPE_SHAPE)) {
+        throw new Error('Invalid Computer Use foreground scope fields');
+      }
+      return Object.freeze({
+        kind: 'computer_use_foreground',
+        authorityEpoch: safeId(record.authorityEpoch, 'scope.authorityEpoch'),
+      });
     case 'mcp_tool':
       if (!hasExactShape(record, MCP_TOOL_SCOPE_SHAPE)) {
         throw new Error('Invalid MCP tool scope fields');

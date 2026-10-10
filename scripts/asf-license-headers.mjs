@@ -110,13 +110,16 @@ const commentStyles = {
  */
 const coveredExtensions = new Map([
   ['.astro', 'astro'],
+  ['.cc', 'block'],
   ['.cjs', 'block'],
   ['.css', 'block'],
+  ['.h', 'block'],
   ['.html', 'html'],
   ['.js', 'block'],
   ['.jsonc', 'slash'],
   ['.md', 'html'],
   ['.mjs', 'block'],
+  ['.mm', 'block'],
   ['.mts', 'block'],
   ['.nsh', 'hash'],
   ['.ps1', 'hash'],
@@ -186,6 +189,8 @@ export const exclusionRules = [
       'Third-party license and notice texts redistributed with the product. An ASF header on any of them would assert ASF provenance over content ASF does not own. The upstream texts additionally have to stay byte-identical to what their projects published, and the aggregated notices are generator output that a hand-written header would not survive.',
     matches: isOneOf(
       'apps/desktop/resources/licenses/cargo/THIRD_PARTY_NOTICES.txt',
+      'apps/desktop/resources/licenses/cua-driver/LICENSE-MIT.txt',
+      'apps/desktop/resources/licenses/cua-driver/LICENSE-MPL-2.0.txt',
       'apps/desktop/resources/licenses/npm/THIRD_PARTY_NOTICES.txt',
       'apps/desktop/resources/licenses/renderer/ALLOGO_LICENSE.txt',
       'apps/desktop/resources/licenses/renderer/SIMPLE_ICONS_LICENSE.md',

@@ -1,0 +1,173 @@
+--- a/crates/platform-windows/src/input/inject.rs
++++ b/crates/platform-windows/src/input/inject.rs
+@@ -115,7 +115,7 @@
+ /// whether `target` actually became foreground.
+ pub(crate) unsafe fn force_foreground_attached(target: HWND) -> bool {
+     let cur = GetForegroundWindow();
+-    if cur == target {
++    if crate::win32::foreground_matches_exact_window(target.0 as usize as u64, cur.0 as usize as u64) {
+         return true;
+     }
+     let my_tid = GetCurrentThreadId();
+@@ -129,7 +129,10 @@
+     if attached {
+         let _ = AttachThreadInput(my_tid, cur_tid, false);
+     }
+-    GetForegroundWindow() == target
++    crate::win32::foreground_matches_exact_window(
++        target.0 as usize as u64,
++        GetForegroundWindow().0 as usize as u64,
++    )
+ }
+ 
+ /// Retry an explicit visible foreground transition after a reserved no-name
+--- a/crates/platform-windows/src/input/keyboard.rs
++++ b/crates/platform-windows/src/input/keyboard.rs
+@@ -567,7 +567,11 @@
+ fn wait_for_exact_foreground(target: HWND, timeout: Duration) -> bool {
+     let deadline = Instant::now() + timeout;
+     loop {
+-        if unsafe { GetForegroundWindow() } == target {
++        let actual = unsafe { GetForegroundWindow() };
++        if crate::win32::foreground_matches_exact_window(
++            target.0 as usize as u64,
++            actual.0 as usize as u64,
++        ) {
+             return true;
+         }
+         if Instant::now() >= deadline {
+--- a/crates/platform-windows/src/win32/mod.rs
++++ b/crates/platform-windows/src/win32/mod.rs
+@@ -8,7 +8,8 @@
+ pub use installed_apps::{list_installed_apps, InstalledApp};
+ pub(crate) use windows::{
+     capture_foreground_target, find_window_by_pid_and_handle,
+-    foreground_matches_target_or_owned_window, list_windows_via_win32, list_windows_win32_first,
++    foreground_matches_exact_window, foreground_matches_target_or_owned_window,
++    list_windows_via_win32, list_windows_win32_first,
+     lookup_window_for_pid, resolve_uwp_app_pid, window_owner_pid, PidWindowLookup,
+ };
+ pub use windows::{list_windows, resolve_uwp_host_window, WindowInfo};
+--- a/crates/platform-windows/src/win32/windows.rs
++++ b/crates/platform-windows/src/win32/windows.rs
+@@ -25,8 +25,9 @@
+ use windows::Win32::Foundation::{BOOL, HWND, LPARAM, RECT, TRUE};
+ use windows::Win32::Graphics::Dwm::{DwmGetWindowAttribute, DWMWA_EXTENDED_FRAME_BOUNDS};
+ use windows::Win32::UI::WindowsAndMessaging::{
+-    EnumChildWindows, EnumWindows, GetClassNameW, GetWindow, GetWindowRect, GetWindowTextLengthW,
+-    GetWindowTextW, GetWindowThreadProcessId, IsIconic, IsWindow, IsWindowVisible, GW_OWNER,
++    EnumChildWindows, EnumWindows, GetAncestor, GetClassNameW, GetWindow, GetWindowRect,
++    GetWindowTextLengthW, GetWindowTextW, GetWindowThreadProcessId, IsIconic, IsWindow,
++    IsWindowVisible, GA_ROOT, GW_OWNER,
+ };
+ 
+ #[derive(Debug, Clone)]
+@@ -175,6 +176,23 @@
+     (thread_id != 0 && pid != 0).then_some(pid)
+ }
+ 
++/// Match the exact HWND, or its same-process child when the target is a root.
++/// Keep child targets exact; normalizing both HWNDs would admit sibling controls.
++pub(crate) fn foreground_matches_exact_window(target: u64, actual: u64) -> bool {
++    let Some(pid) = window_owner_pid(target) else {
++        return false;
++    };
++    if window_owner_pid(actual) != Some(pid) {
++        return false;
++    }
++    if target == actual {
++        return true;
++    }
++    let target = HWND(target as *mut _);
++    let actual = HWND(actual as *mut _);
++    unsafe { GetAncestor(target, GA_ROOT) == target && GetAncestor(actual, GA_ROOT) == target }
++}
++
+ #[derive(Clone, Copy, Debug)]
+ struct PostActionForegroundRelation {
+     exact_match: bool,
+@@ -240,7 +258,8 @@
+ 
+ /// Verify the foreground before or after an exact-target global input action.
+ ///
+-/// The requested HWND must become foreground before input is sent. The action
++/// The requested HWND, or its same-process child for a root target, must become
++/// foreground before input is sent. The action
+ /// may then legitimately open a same-process owned popup or modal, so the
+ /// post-action check accepts that transient only when it is still a live,
+ /// visible HWND and its complete `GW_OWNER` chain reaches the exact target.
+@@ -264,7 +283,7 @@
+         });
+ 
+     post_action_foreground_allowed(PostActionForegroundRelation {
+-        exact_match: target.hwnd == actual,
++        exact_match: foreground_matches_exact_window(target.hwnd, actual),
+         target_identity_live: current_target_pid == Some(target.pid),
+         target_gone: current_target_pid.is_none(),
+         actual_live: actual_pid.is_some(),
+@@ -372,6 +391,65 @@
+         PostActionForegroundRelation, WindowInfo,
+     };
+     use std::sync::atomic::{AtomicUsize, Ordering};
++
++    #[test]
++    fn native_foreground_child_requires_the_same_exact_root() {
++        use windows::core::w;
++        use windows::Win32::Foundation::HWND;
++        use windows::Win32::UI::WindowsAndMessaging::{
++            CreateWindowExW, DestroyWindow, GetDesktopWindow, WS_CHILD, WS_EX_NOACTIVATE,
++            WS_POPUP, WS_VISIBLE,
++        };
++        struct OwnedWindow(HWND);
++        impl Drop for OwnedWindow {
++            fn drop(&mut self) {
++                unsafe { let _ = DestroyWindow(self.0); }
++            }
++        }
++        unsafe {
++            let root = OwnedWindow(CreateWindowExW(WS_EX_NOACTIVATE, w!("STATIC"),
++                w!("Foreground root regression"), WS_POPUP | WS_VISIBLE,
++                20, 20, 200, 160, None, None, None, None).unwrap());
++            let child = OwnedWindow(CreateWindowExW(WS_EX_NOACTIVATE, w!("STATIC"),
++                w!("Child"), WS_CHILD | WS_VISIBLE,
++                0, 0, 80, 40, root.0, None, None, None).unwrap());
++            let sibling = OwnedWindow(CreateWindowExW(WS_EX_NOACTIVATE, w!("STATIC"),
++                w!("Sibling"), WS_CHILD | WS_VISIBLE,
++                0, 50, 80, 40, root.0, None, None, None).unwrap());
++            let other = OwnedWindow(CreateWindowExW(WS_EX_NOACTIVATE, w!("STATIC"),
++                w!("Other root"), WS_POPUP | WS_VISIBLE,
++                240, 20, 200, 160, None, None, None, None).unwrap());
++            let other_child = OwnedWindow(CreateWindowExW(WS_EX_NOACTIVATE, w!("STATIC"),
++                w!("Other child"), WS_CHILD | WS_VISIBLE,
++                0, 0, 80, 40, other.0, None, None, None).unwrap());
++            let modal = OwnedWindow(CreateWindowExW(WS_EX_NOACTIVATE, w!("STATIC"),
++                w!("Owned modal"), WS_POPUP | WS_VISIBLE,
++                40, 40, 120, 80, root.0, None, None, None).unwrap());
++            let raw = |window: &OwnedWindow| window.0.0 as usize as u64;
++            let exact = super::foreground_matches_exact_window;
++            assert!(exact(raw(&root), raw(&root)));
++            assert!(exact(raw(&root), raw(&child)));
++            assert!(exact(raw(&child), raw(&child)));
++            assert!(!exact(raw(&child), raw(&sibling)));
++            assert!(!exact(raw(&child), raw(&root)));
++            assert!(!exact(raw(&root), raw(&other)));
++            assert!(!exact(raw(&root), raw(&other_child)));
++            assert!(!exact(raw(&root), raw(&modal)));
++            assert!(!exact(raw(&root), GetDesktopWindow().0 as usize as u64));
++            assert!(!exact(raw(&root), 0));
++            assert!(!exact(0, raw(&child)));
++
++            let bound = super::capture_foreground_target(raw(&root)).unwrap();
++            assert!(super::foreground_matches_target_or_owned_window(bound, raw(&child)));
++            assert!(super::foreground_matches_target_or_owned_window(bound, raw(&modal)));
++            assert!(!super::foreground_matches_target_or_owned_window(bound, raw(&other_child)));
++
++            let child_id = raw(&child);
++            drop(child);
++            assert!(!exact(raw(&root), child_id));
++            assert!(!super::foreground_matches_target_or_owned_window(bound, child_id));
++        }
++    }
+ 
+     #[test]
+     fn untitled_owned_dialog_is_discoverable_and_exactly_addressable() {

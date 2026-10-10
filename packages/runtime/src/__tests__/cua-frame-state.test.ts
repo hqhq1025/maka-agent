@@ -42,6 +42,31 @@ function observation() {
 }
 
 describe('CuaFrameState', () => {
+  test('current-focus claims are distinct from element and screenshot-point claims', () => {
+    const state = createState();
+    const frame = state.observe(observation());
+    const focused = bindCuaSemanticActionToObservation(frame, {
+      type: 'type',
+      value: 'hello',
+      focus: 'current',
+    });
+    const element = bindCuaSemanticActionToObservation(frame, {
+      type: 'type',
+      value: 'hello',
+      elementId: '5',
+    });
+    const point = bindCuaSemanticActionToObservation(frame, {
+      type: 'type',
+      value: 'hello',
+      coordinate: [0, 0],
+    });
+    assert.equal(state.claimAction(focused).ok, true);
+    assert.equal(state.retireAction(focused).ok, true);
+    assert.equal(state.claimAction(focused).ok, false);
+    assert.equal(state.claimAction(element).ok, true);
+    assert.equal(state.claimAction(point).ok, true);
+    assert.equal(focused.presentationScreenPoint, undefined);
+  });
   test('creates a new frame identity for every observation', () => {
     const state = createState();
 
@@ -193,6 +218,26 @@ describe('CuaFrameState', () => {
     // The point of keeping the frame: the model can address something else with
     // the observation it already has, which is the round trip being saved.
     assert.deepEqual(state.claimAction(bind('7')), { ok: true });
+  });
+
+  test('single and double click effects on one element have distinct retirement identities', () => {
+    const state = createState();
+    const frame = state.observe(observation());
+    const bind = (type: 'click_element' | 'double_click_element') =>
+      bindCuaSemanticActionToObservation(frame, { type, elementId: '2' }) as NonNullable<
+        ReturnType<typeof bindCuaSemanticActionToObservation>
+      >;
+    const single = bind('click_element');
+    const double = bind('double_click_element');
+    assert.notEqual(single.actionFingerprint, double.actionFingerprint);
+    assert.equal(state.claimAction(single).ok, true);
+    assert.equal(state.retireAction(single).ok, true);
+    assert.deepEqual(state.claimAction(double), { ok: true });
+    assert.equal(state.retireAction(double).ok, true);
+    assert.deepEqual(state.claimAction(bind('double_click_element')), {
+      ok: false,
+      reason: 'retired_action',
+    });
   });
 
   test('the same action is not offered twice after being retired', () => {

@@ -1,0 +1,187 @@
+--- a/libs/cua-driver/rust/crates/platform-macos/src/ax/exact_target.rs
++++ b/libs/cua-driver/rust/crates/platform-macos/src/ax/exact_target.rs
+@@ -75,6 +75,67 @@
+         CFRelease(current as CFTypeRef);
+     }
+     resolved
++}
++
++/// Accept the legacy parent-window binding, or an exact sheet on the element's
++/// own parent chain. A sibling sheet and a guessed window id never match.
++///
++/// # Safety
++///
++/// `element` must remain valid for the duration of the call.
++pub unsafe fn element_is_in_window(element: AXUIElementRef, window_id: u32) -> bool {
++    element_ancestry_in_window(element, window_id) == ElementAncestry::ProvenDescendant
++}
++
++unsafe fn element_ancestry_in_window(element: AXUIElementRef, window_id: u32) -> ElementAncestry {
++    let owning_window = element_window_id(element);
++    if owning_window == Some(window_id) {
++        return ElementAncestry::ProvenDescendant;
++    }
++    let exact_sheet = has_exact_sheet_ancestor(
++        RetainedElement::retain(element as usize),
++        window_id,
++        MAX_ANCESTRY_DEPTH,
++        |element| copy_string_attr(element.as_ptr() as AXUIElementRef, "AXRole"),
++        |element| {
++            copy_element_attr(element.as_ptr() as AXUIElementRef, "AXParent").map(|parent| {
++                let retained = RetainedElement::retain(parent as usize);
++                CFRelease(parent as CFTypeRef);
++                retained
++            })
++        },
++        |element| ax_get_window_id(element.as_ptr() as AXUIElementRef),
++    );
++    if exact_sheet {
++        ElementAncestry::ProvenDescendant
++    } else if owning_window.is_some() {
++        ElementAncestry::OutsideTargetWindow
++    } else {
++        ElementAncestry::Unproven
++    }
++}
++
++fn has_exact_sheet_ancestor<E>(
++    start: E,
++    requested_window: u32,
++    max_depth: usize,
++    role: impl Fn(&E) -> Option<String>,
++    parent: impl Fn(&E) -> Option<E>,
++    window_id: impl Fn(&E) -> Option<u32>,
++) -> bool {
++    let mut current = start;
++    for _ in 0..max_depth {
++        match role(&current).as_deref() {
++            Some("AXSheet") if window_id(&current) == Some(requested_window) => return true,
++            Some("AXWindow") | Some("AXApplication") | None => return false,
++            _ => {}
++        }
++        current = match parent(&current) {
++            Some(next) => next,
++            None => return false,
++        };
++    }
++    false
+ }
+ 
+ /// Map a window-role AX element to the CGWindowID of the top-level window it
+@@ -142,7 +203,7 @@
+ /// Caller must `CFRelease` the returned element.
+ pub unsafe fn focused_element_in_window(pid: i32, window_id: u32) -> Option<AXUIElementRef> {
+     let element = focused_element_of_pid(pid)?;
+-    if element_window_id(element) == Some(window_id) {
++    if element_is_in_window(element, window_id) {
+         Some(element)
+     } else {
+         CFRelease(element as CFTypeRef);
+@@ -237,11 +298,7 @@
+             super::enablement::ensure_chromium_ax_enabled(pid, app);
+             let records = ax_window_records(app, pid, window_id);
+             let app_hidden = copy_bool_attr(app, "AXHidden");
+-            let element = element_ptr.map(|ptr| match element_window_id(ptr as AXUIElementRef) {
+-                Some(id) if id == window_id => ElementAncestry::ProvenDescendant,
+-                Some(_) => ElementAncestry::OutsideTargetWindow,
+-                None => ElementAncestry::Unproven,
+-            });
++            let element = element_ptr.map(|ptr| element_ancestry_in_window(ptr as AXUIElementRef, window_id));
+             CFRelease(app as CFTypeRef);
+             (records, app_hidden, element)
+         }
+@@ -269,7 +326,7 @@
+ 
+ #[cfg(test)]
+ mod tests {
+-    use super::{count_competing_keyboard_destinations, resolve_owning_window, AxWindowRecord};
++    use super::{count_competing_keyboard_destinations, has_exact_sheet_ancestor, resolve_owning_window, AxWindowRecord};
+ 
+     /// A fake AX node: (role, AXParent index, CGWindowID).
+     type FakeNode = (&'static str, Option<usize>, Option<u32>);
+@@ -284,6 +341,52 @@
+         )
+     }
+ 
++    fn sheet_ancestor(tree: &[FakeNode], start: usize, target: u32) -> bool {
++        has_exact_sheet_ancestor(
++            start, target, 40,
++            |&index| Some(tree[index].0.to_owned()),
++            |&index| tree[index].1,
++            |&index| tree[index].2,
++        )
++    }
++
++    #[test]
++    fn explicit_sheet_target_preserves_parent_binding_without_accepting_siblings() {
++        let tree = [
++            ("AXWindow", None, Some(594)),
++            ("AXSheet", Some(0), Some(611)),
++            ("AXTextField", Some(1), None),
++            ("AXSheet", Some(0), Some(612)),
++        ];
++        assert_eq!(resolve(&tree, 1), Some(594), "parent snapshots keep their existing binding");
++        assert!(sheet_ancestor(&tree, 2, 611));
++        assert!(!sheet_ancestor(&tree, 2, 612));
++        assert!(!sheet_ancestor(&tree, 0, 611));
++    }
++
++    #[test]
++    fn moved_element_cannot_keep_its_previous_sheet_binding() {
++        let mut tree = [
++            ("AXWindow", None, Some(594)),
++            ("AXSheet", Some(0), Some(611)),
++            ("AXTextField", Some(1), None),
++            ("AXSheet", Some(0), Some(612)),
++        ];
++        assert!(sheet_ancestor(&tree, 2, 611));
++        tree[2].1 = Some(3);
++        assert!(!sheet_ancestor(&tree, 2, 611));
++        assert!(sheet_ancestor(&tree, 2, 612));
++    }
++
++    #[test]
++    fn sheet_ancestry_requires_the_exact_role_and_id_and_stops_at_a_window() {
++        assert!(!sheet_ancestor(&[("AXGroup", None, Some(611))], 0, 611));
++        assert!(!sheet_ancestor(&[("AXSheet", None, None)], 0, 611));
++        let tree = [("AXWindow", Some(1), Some(594)), ("AXSheet", None, Some(611))];
++        assert!(!sheet_ancestor(&tree, 0, 611));
++        assert!(!sheet_ancestor(&[("AXGroup", Some(0), None)], 0, 611));
++    }
++
+     #[test]
+     fn window_maps_to_itself() {
+         assert_eq!(resolve(&[("AXWindow", None, Some(167))], 0), Some(167));
+--- a/libs/cua-driver/rust/crates/platform-macos/src/tools/mod.rs
++++ b/libs/cua-driver/rust/crates/platform-macos/src/tools/mod.rs
+@@ -432,16 +432,13 @@
+                 return false;
+             };
+             let rect = crate::ax::bindings::element_screen_rect(focused);
+-            let focused_window = if require_window {
+-                crate::ax::exact_target::element_window_id(focused)
+-            } else {
+-                Some(wid)
+-            };
++            let in_window = !require_window
++                || crate::ax::exact_target::element_is_in_window(focused, wid);
+             core_foundation::base::CFRelease(focused as core_foundation::base::CFTypeRef);
+             let Some(rect) = rect else {
+                 return false;
+             };
+-            focused_window == Some(wid) && point_within_rect(rect, screen_x, screen_y)
++            in_window && point_within_rect(rect, screen_x, screen_y)
+         }
+     })
+     .await
+--- a/libs/cua-driver/rust/crates/platform-macos/src/tools/click.rs
++++ b/libs/cua-driver/rust/crates/platform-macos/src/tools/click.rs
+@@ -1066,7 +1066,7 @@
+                     // Require proven ancestry in the requested window before
+                     // acting; otherwise fall through to the routed pixel path
+                     // (already gated for this exact window).
+-                    if crate::ax::exact_target::element_window_id(element) != Some(hit_test_wid) {
++                    if !crate::ax::exact_target::element_is_in_window(element, hit_test_wid) {
+                         CFRelease(element as _);
+                         return Ok(false);
+                     }

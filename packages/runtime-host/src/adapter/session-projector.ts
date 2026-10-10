@@ -691,6 +691,7 @@ function projectSessionEvent(
     type: 'tool_result',
     ...base,
     contentOmitted: true,
+    ...(event.computerUse ? { computerUse: structuredClone(event.computerUse) } : {}),
     isError: event.status === 'errored',
     content: {
       kind: 'text',

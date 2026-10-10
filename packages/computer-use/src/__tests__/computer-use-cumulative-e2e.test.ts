@@ -98,6 +98,7 @@ function overlayRecorder() {
     sessionId: string;
     x?: number;
     y?: number;
+    pulse?: boolean;
   }> = [];
   const sink: OverlayCursorSink = {
     ensure() {},
@@ -121,6 +122,7 @@ function overlayRecorder() {
         sessionId: input.sessionId,
         x: input.screenX,
         y: input.screenY,
+        pulse: input.pulse,
       });
     },
     cancel(input) {
@@ -154,6 +156,9 @@ describe('Computer Use cross-layer deterministic contract', () => {
         dispatches.push({ action, context: runContext });
         assert.equal(runContext.boundAction?.target.pid, 100);
         assert.equal(runContext.boundAction?.target.windowId, 10);
+        assert.equal(overlay.events.length, 0, 'the cursor waits for native admission');
+        await runContext.beforeNativeDispatch?.();
+        assert.equal(overlay.events.at(-1)?.type, 'move');
         revision += 1;
         return {
           outcome: {
@@ -211,6 +216,7 @@ describe('Computer Use cross-layer deterministic contract', () => {
         sessionId: 'session-1',
         x: 300,
         y: 200,
+        pulse: true,
       },
     ]);
 
@@ -226,7 +232,7 @@ describe('Computer Use cross-layer deterministic contract', () => {
     assert.equal(dispatches.length, 1);
   });
 
-  test('typed target change and unknown outcome both cancel, while unknown requires re-observation', async () => {
+  test('target change cancels; unknown delivery keeps a neutral marker and requires re-observation', async () => {
     const overlay = overlayRecorder();
     let mode: 'target_change' | 'unknown' = 'target_change';
     const backend: CuDispatchBackend = {
@@ -239,7 +245,8 @@ describe('Computer Use cross-layer deterministic contract', () => {
       async run() {
         throw new Error('non-semantic dispatch is not expected');
       },
-      async runSemantic() {
+      async runSemantic(_action, _signal, runContext) {
+        if (mode === 'unknown') await runContext.beforeNativeDispatch?.();
         return mode === 'target_change'
           ? {
               outcome: {
@@ -300,7 +307,8 @@ describe('Computer Use cross-layer deterministic contract', () => {
       context({ turnId: 'turn-2', toolCallId: 'unknown' }),
     );
     assert.equal(tools.sessionEvents.snapshot('session-1').status, 'reobserve_required');
-    assert.equal(overlay.events.at(-1)?.type, 'cancel');
+    assert.equal(overlay.events.at(-1)?.type, 'complete');
+    assert.equal(overlay.events.at(-1)?.pulse, false);
   });
 
   test('explicit session cleanup fences late work and persisted projection omits private UI content', async () => {

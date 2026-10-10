@@ -1272,6 +1272,119 @@ describe('HostInteractionCoordinator', () => {
   });
 });
 
+test('text approval cannot answer unrelated or ambiguously pending interactions', async () => {
+  await withStore(async ({ store }) => {
+    const coordinator = createCoordinator(store);
+    const owner = coordinator.bindRun(RUN);
+    const target = {
+      providerId: 'provider-1',
+      contractId: 'contract-1',
+      serverId: 'desktop_computer_use',
+      toolName: 'computer',
+      capability: 'computer_use',
+      scope: { kind: 'capability' },
+    } as const;
+    const pending = coordinator.requestClientCapabilityApproval({
+      ...RUN,
+      toolCallId: 'computer-call',
+      target,
+    });
+    const request = await waitPending();
+    await owner.acceptUserQuestionRequest({
+      request: questionEvent('other-question', 10),
+      continuation: questionContinuation('other-question'),
+    });
+    for (const interactionId of [request.requestId, 'other-question', 'nonexistent']) {
+      assert.deepEqual(
+        await coordinator.handlers['interaction.respondByText'](
+          { sessionId: RUN.sessionId, interactionId, text: '批准' },
+          connection(),
+        ),
+        { ok: true, result: { kind: 'unavailable' } },
+      );
+    }
+    assert.equal((await store.readInteraction(request.requestId))?.outcome, undefined);
+    assert.deepEqual(
+      await coordinator.handlers['interaction.respondByText'](
+        { sessionId: 'other-session', interactionId: request.requestId, text: '批准' },
+        connection(),
+      ),
+      { ok: true, result: { kind: 'unavailable' } },
+    );
+    await coordinator.handlers['interaction.answer'](
+      {
+        sessionId: RUN.sessionId,
+        interactionId: 'other-question',
+        answer: { kind: 'question', answers: ['Yes'] },
+      },
+      connection(),
+    );
+    assert.deepEqual(
+      await coordinator.handlers['interaction.respondByText'](
+        { sessionId: RUN.sessionId, interactionId: request.requestId, text: '批准' },
+        connection(),
+      ).then((result) => result.ok && result.result.kind),
+      'answered',
+    );
+    assert.equal(await pending, 'allow');
+
+    const browserPending = coordinator.requestClientCapabilityApproval({
+      ...RUN,
+      toolCallId: 'browser-call',
+      target: {
+        ...target,
+        capability: 'browser',
+        scope: { kind: 'browser_origin', origin: 'https://example.com' },
+      },
+    });
+    const browser = await waitPending();
+    assert.deepEqual(
+      await coordinator.handlers['interaction.respondByText'](
+        { sessionId: RUN.sessionId, interactionId: browser.requestId, text: '批准' },
+        connection(),
+      ),
+      { ok: true, result: { kind: 'unavailable' } },
+    );
+    await coordinator.handlers['interaction.answer'](
+      {
+        sessionId: RUN.sessionId,
+        interactionId: browser.requestId,
+        answer: { kind: 'client_capability', decision: 'deny' },
+      },
+      connection(),
+    );
+    assert.equal(await browserPending, 'deny');
+    const stoppedPending = coordinator.requestClientCapabilityApproval({
+      ...RUN,
+      toolCallId: 'stopped-call',
+      target,
+    });
+    const stopped = await waitPending();
+    const rejected = assert.rejects(stoppedPending);
+    await owner.close('turn_stopped');
+    await rejected;
+    assert.deepEqual(
+      await coordinator.handlers['interaction.respondByText'](
+        { sessionId: RUN.sessionId, interactionId: stopped.requestId, text: '批准' },
+        connection(),
+      ),
+      { ok: true, result: { kind: 'unavailable' } },
+    );
+    owner.release();
+    await coordinator.close();
+
+    async function waitPending() {
+      for (let index = 0; index < 100; index += 1) {
+        const requests = await store.listPending(RUN);
+        const request = requests.find((item) => item.request.kind === 'client_capability');
+        if (request) return request;
+        await new Promise<void>((resolve) => setImmediate(resolve));
+      }
+      throw new Error('Expected a published capability request');
+    }
+  });
+});
+
 function createCoordinator(
   store: InteractiveInteractionStoreWriterFacade,
   overrides: Partial<HostInteractionCoordinatorOptions> = {},

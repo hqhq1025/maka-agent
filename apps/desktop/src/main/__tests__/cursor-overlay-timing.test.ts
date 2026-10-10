@@ -82,6 +82,9 @@ async function makeOverlayHarness() {
     atMs: number;
   }> = [];
   const translations: Array<readonly [number, number]> = [];
+  const opacity: number[] = [];
+  const timers = new Map<number, { callback: () => void; due: number }>();
+  let nextTimer = 0;
   let onMove: ((payload: MovePayload) => void) | undefined;
   let onComplete: ((payload: CompletePayload) => void) | undefined;
   let onReset: ((payload: ResetPayload) => void) | undefined;
@@ -112,7 +115,7 @@ async function makeOverlayHarness() {
     set shadowBlur(_value: number) {},
     set shadowOffsetX(_value: number) {},
     set shadowOffsetY(_value: number) {},
-    set globalAlpha(_value: number) {},
+    set globalAlpha(value: number) { opacity.push(value); },
   };
   const canvas = {
     width: 0,
@@ -144,6 +147,12 @@ async function makeOverlayHarness() {
     window: windowObject,
     document: { getElementById: () => canvas },
     performance: { now: () => nowMs },
+    setTimeout(callback: () => void, delay: number) {
+      const id = ++nextTimer;
+      timers.set(id, { callback, due: nowMs + delay });
+      return id;
+    },
+    clearTimeout(id: number) { timers.delete(id); },
     requestAnimationFrame(callback: FrameCallback) {
       frames.push(callback);
       return frames.length;
@@ -155,6 +164,13 @@ async function makeOverlayHarness() {
   return {
     reports,
     translations,
+    opacity,
+    elapse(atMs: number) {
+      nowMs = atMs;
+      for (const [id, timer] of timers) {
+        if (timer.due <= atMs) { timers.delete(id); timer.callback(); }
+      }
+    },
     move(payload: MovePayload, atMs: number) {
       nowMs = atMs;
       onMove?.(payload);
@@ -255,4 +271,35 @@ test('interrupting a move aligns the old motion without replaying time into the 
     'elapsed time before replacement is applied only to the interrupted motion',
   );
   assert.ok(model.motionProgress() < CURSOR_CLOSE_ENOUGH.progress);
+});
+
+test('first appearance is visible before input is released and an idle marker fades away', async () => {
+  const harness = await makeOverlayHarness();
+  harness.move({ actionId: 'first', x: 200, y: 100 }, 0);
+  harness.frame(0);
+  assert.equal(harness.reports.length, 0, 'an invisible first frame must not release input');
+  harness.frame(160);
+  assert.ok(harness.reports.some(({ phase }) => phase === 'readyForInteraction'));
+  assert.equal(harness.opacity.at(-1), 1);
+  harness.complete({ actionId: 'first', x: 200, y: 100 }, 200);
+  harness.frame(200);
+  harness.elapse(1100);
+  harness.frame(1100);
+  harness.frame(1190);
+  assert.ok(harness.opacity.at(-1)! < 1 && harness.opacity.at(-1)! > 0);
+  const lastPaint = harness.translations.length;
+  harness.frame(1290);
+  assert.equal(harness.translations.length, lastPaint, 'the faded marker paints no cursor');
+});
+
+test('a new action cancels the old idle fade and stale completion cannot revive it', async () => {
+  const harness = await settleInitialHotspot();
+  harness.move({ actionId: 'next', x: 400, y: 300, instant: true }, 850);
+  harness.frame(850);
+  harness.elapse(1000);
+  harness.complete({ actionId: 'initial', x: 20, y: 20 }, 1000);
+  harness.complete({ actionId: 'next', x: 400, y: 300 }, 1000);
+  harness.frame(1000);
+  assert.deepEqual(harness.translations.at(-1), [400, 300]);
+  assert.equal(harness.opacity.at(-1), 1);
 });

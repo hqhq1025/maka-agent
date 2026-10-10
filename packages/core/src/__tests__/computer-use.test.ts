@@ -26,6 +26,20 @@ import {
 } from '../computer-use.js';
 
 describe('Computer Use foundation contract', () => {
+  test('double click is a semantic mutation with an exact model-visible action', () => {
+    const args = {
+      action: 'double_click_element',
+      observation_id: 'frame-7',
+      element_id: 'e2',
+      app: 'Fixture',
+      delivery: 'foreground',
+    };
+    const summary = computerUseApprovalSummary(args);
+    assert.equal(summary.action, 'double_click_element');
+    assert.equal(summary.approvalClass, 'semantic_mutation');
+    assert.equal(summary.rememberForTurnAllowed, true);
+    assert.deepEqual(computerUseModelCallArgs(args), args);
+  });
   test('classifies read, screenshot, keyboard, and semantic approval', () => {
     assert.strictEqual(
       computerUseApprovalSummary({ action: 'list_apps' }).approvalClass,

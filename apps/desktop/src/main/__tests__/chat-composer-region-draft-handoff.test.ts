@@ -67,6 +67,7 @@ async function mountRegion(): Promise<{
     activeId: string | undefined,
     newTaskDraftKey: string,
     newTaskSendPending?: boolean,
+    activeInteraction?: import('@maka/ui').ComposerInteraction,
   ): Promise<void>;
 }> {
   const { document, window } = parseHTML('<div id="root"></div>');
@@ -132,6 +133,7 @@ async function mountRegion(): Promise<{
     activeId: string | undefined,
     newTaskDraftKey: string,
     newTaskSendPending = false,
+    activeInteraction?: import('@maka/ui').ComposerInteraction,
   ) => {
     await act(async () => {
       root.render(
@@ -150,11 +152,12 @@ async function mountRegion(): Promise<{
 
               active: true,
               onboardingComposerHidden: false,
-              activeInteraction: undefined,
+              activeInteraction,
               activeId,
               contextUsageSessionId: activeId,
               newTaskDraftKey,
               newTaskSendPending,
+              sendBlocked: Boolean(activeInteraction),
               stopPending: false,
               respondToSandboxBoundary: () => {},
               respondToClientCapability: () => {},
@@ -186,6 +189,33 @@ test('hands off only the unresolved new-task draft while a Session is open', asy
   await render(undefined, 'new-task:local:project-1');
 
   assert.equal(composer.current?.getText(), 'new task draft');
+});
+
+test('Computer Use permission keeps ordinary composer visible and its Send usable', async () => {
+  const { composer, render } = await mountRegion();
+  const request: import('@maka/ui').ComposerInteraction = {
+    type: 'client_capability_request', id: 'request', turnId: 'turn', ts: 1,
+    requestId: 'request', toolUseId: 'tool', capability: 'computer_use',
+    scope: { kind: 'computer_use_foreground', authorityEpoch: 'epoch' },
+  };
+  await render('session', 'new-task', false, request);
+  await act(async () => composer.current?.setDraft('session', 'approve'));
+  const form = document.querySelector('form.composer');
+  assert.ok(form);
+  assert.equal(form.hasAttribute('hidden'), false);
+  const send = form.querySelector('button[aria-label="Send"]');
+  assert.ok(send);
+  assert.equal(send.hasAttribute('disabled'), false, 'executor hold must not block the pending answer');
+  await render('session', 'new-task', true, request);
+  const pendingSend = document.querySelector('form.composer button[aria-label="Send"]');
+  assert.ok(pendingSend);
+  assert.equal(pendingSend.getAttribute('aria-disabled'), 'true');
+  await render('session', 'new-task', false, {
+    type: 'sandbox_boundary_request', id: 'sandbox', turnId: 'turn', ts: 1,
+    requestId: 'sandbox', toolUseId: 'tool', justification: 'Read a file.',
+    expansion: { filesystem: { entries: [{ path: '/file', access: 'read', scope: 'exact' }] } },
+  });
+  assert.equal(document.querySelector('form.composer')?.hasAttribute('hidden'), true);
 });
 
 test('carries the visible new-task draft when the target Project changes', async () => {

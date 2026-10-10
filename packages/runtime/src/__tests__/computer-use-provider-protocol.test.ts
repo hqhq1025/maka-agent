@@ -302,7 +302,7 @@ describe('Anthropic-compatible Computer Use product loops', () => {
       assert.deepEqual(toolResults, [{ isError: false }, { isError: false }, { isError: false }]);
       assert.deepEqual(
         (requestBodies[0].tools as Array<{ name: string }>).map((tool) => tool.name),
-        ['maka_computer'],
+        ['computer'],
       );
       if (provider.expectedThinking) {
         for (const body of requestBodies) {
@@ -699,7 +699,7 @@ describe('OpenAI-compatible product loops', () => {
           id: 'call-recovered',
           turnId: previousTurnId,
           ts: 3,
-          toolName: 'maka_computer',
+          toolName: 'computer',
           args: { action: 'list_apps' },
           stepId: 'stored-step-recovered',
         },
@@ -979,7 +979,7 @@ describe('OpenAI-compatible product loops', () => {
       (requestBodies[0]!.tools as Array<{ function?: { name?: string } }>).map(
         (tool) => tool.function?.name,
       ),
-      ['maka_computer'],
+      ['computer'],
     );
     assertOpenAiReasoningAndToolPair(requestBodies[1]?.messages, 1);
     assertOpenAiReasoningAndToolPair(requestBodies[2]?.messages, 2);
@@ -1264,7 +1264,7 @@ function respondAnthropicStream(
       content_block: {
         type: 'tool_use',
         id: `toolu-${step}`,
-        name: 'maka_computer',
+        name: 'computer',
         input: toolInput,
       },
     });
@@ -1328,7 +1328,7 @@ function respondOpenAiStream(
             id: `call-${step}`,
             type: 'function',
             function: {
-              name: 'maka_computer',
+              name: 'computer',
               arguments: JSON.stringify(toolInput),
             },
           },

@@ -473,6 +473,7 @@ function projectLiveTurnEvent(
       ...projectToolActivityIdentity(event),
       status: toolResultActivityStatus(event.isError, event.content),
       result: event.contentOmitted ? base.result : event.content,
+      ...(event.computerUse ? { computerUse: event.computerUse } : {}),
       ...(event.durationMs !== undefined ? { durationMs: event.durationMs } : {}),
     };
     nextStep = {

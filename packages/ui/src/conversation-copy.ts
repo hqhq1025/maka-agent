@@ -185,10 +185,19 @@ export interface ConversationCopy {
     title: string;
     browser: (origin: string) => string;
     computerUse: string;
+    foregroundTitle: string;
+    computerUseForeground: string;
+    foregroundNotice: string;
+    allowForeground: string;
+    keepBackground: string;
     desktopMcp: (serverId: string, toolName: string) => string;
     sessionNotice: string;
     reject: string;
     allowSession: string;
+    textResponseHint: string;
+    textAllowed: string;
+    textDenied: string;
+    textUnavailable: string;
   };
   questions: {
     otherAriaLabel: string;
@@ -501,7 +510,16 @@ const CONVERSATION_COPY = {
     clientCapability: {
       title: '允许使用客户端能力？',
       browser: (origin) => `允许 Browser 操作 ${origin}`,
-      computerUse: '允许 Computer Use 操作这台 Mac',
+      computerUse: '允许 Computer Use 查看和操作这台电脑上的应用。',
+      foregroundTitle: '允许当前任务使用前台？',
+      computerUseForeground: '此操作需要将目标应用带到前台，可能暂时影响你正在使用的窗口。',
+      foregroundNotice: '允许后，当前任务后续的前台操作将不再询问。你可以随时停止任务。',
+      textResponseHint: '也可以在下方回复“批准”或“拒绝”，回应当前请求。',
+      textAllowed: '已批准当前电脑权限请求',
+      textDenied: '已拒绝当前电脑权限请求',
+      textUnavailable: '当前权限请求已变化，回复仍保留在输入框中。',
+      allowForeground: '允许此任务使用前台',
+      keepBackground: '保持后台',
       desktopMcp: (serverId, toolName) => `允许调用 ${serverId} 的 ${toolName} 工具`,
       sessionNotice: '允许后，本任务中相同范围的后续操作将不再询问。',
       reject: '拒绝',
@@ -626,7 +644,16 @@ const CONVERSATION_COPY = {
     clientCapability: {
       title: '允許使用用戶端能力？',
       browser: (origin) => `允許 Browser 操作 ${origin}`,
-      computerUse: '允許 Computer Use 操作這台 Mac',
+      computerUse: '允許 Computer Use 檢視和操作這台電腦上的應用程式。',
+      foregroundTitle: '允許目前任務使用前景？',
+      computerUseForeground: '此操作需要將目標應用程式帶到前景，可能暫時影響你正在使用的視窗。',
+      foregroundNotice: '允許後，目前任務後續的前景操作將不再詢問。你可以隨時停止任務。',
+      textResponseHint: '也可以在下方回覆「批准」或「拒絕」，回應目前請求。',
+      textAllowed: '已批准目前電腦權限請求',
+      textDenied: '已拒絕目前電腦權限請求',
+      textUnavailable: '目前權限請求已變更，回覆仍保留在輸入框中。',
+      allowForeground: '允許此任務使用前景',
+      keepBackground: '保持背景',
       desktopMcp: (serverId, toolName) => `允許呼叫 ${serverId} 的 ${toolName} 工具`,
       sessionNotice: '允許後，本任務中相同範圍的後續操作將不再詢問。',
       reject: '拒絕',
@@ -748,7 +775,16 @@ const CONVERSATION_COPY = {
     clientCapability: {
       title: 'Allow this client capability?',
       browser: (origin) => `Allow Browser to operate ${origin}`,
-      computerUse: 'Allow Computer Use to operate this Mac',
+      computerUse: 'Allow Computer Use to view and operate applications on this computer.',
+      foregroundTitle: 'Allow foreground access for this task?',
+      computerUseForeground: 'This action needs to bring the target application to the foreground and may temporarily interrupt the window you are using.',
+      foregroundNotice: 'Subsequent foreground actions in this task will not ask again. You can stop the task at any time.',
+      textResponseHint: 'You can also reply “approve” or “deny” below to answer this request.',
+      textAllowed: 'Computer permission request approved',
+      textDenied: 'Computer permission request denied',
+      textUnavailable: 'The permission request changed. Your reply is still in the composer.',
+      allowForeground: 'Allow foreground for this task',
+      keepBackground: 'Keep in background',
       desktopMcp: (serverId, toolName) => `Allow ${toolName} from ${serverId}`,
       sessionNotice: 'Matching operations will be allowed for the rest of this task.',
       reject: 'Reject',

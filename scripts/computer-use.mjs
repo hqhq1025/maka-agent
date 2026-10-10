@@ -18,63 +18,26 @@
  * under the License.
  */
 
-import { fileURLToPath } from 'node:url';
-
 const commands = {
-  prepare: { module: 'prepare.mjs' },
-  'real-ax': {
-    module: 'real-ax-launcher.mjs',
-    options: {
-      '--scenario': 'MAKA_CU_AX_MODEL_SCENARIO',
-      '--provider': 'MAKA_CU_MODEL_PROVIDER',
-    },
-  },
-  'real-model': {
-    module: 'real-model.mjs',
-    options: {
-      '--scenario': 'MAKA_CU_E2E_SCENARIO',
-      '--provider': 'MAKA_CU_PROVIDER',
-    },
-  },
-  'restart-soak': { module: 'process-restart-launcher.mjs' },
-  'provider-matrix': { module: 'provider-matrix.mjs' },
+  'verify-release': 'verify-release.mjs',
+  'prepare-platform': 'prepare-platform.mjs',
+  'platform-smoke': 'platform-smoke.mjs',
 };
 
-const [commandName, ...commandArgs] = process.argv.slice(2);
-if (!commandName || commandName === 'help' || commandName === '--help' || commandName === '-h') {
-  process.stdout.write(
-    `Usage: node scripts/computer-use.mjs <command> [options]\n\nCommands:\n${Object.keys(commands)
-      .map((name) => `  ${name}`)
-      .join('\n')}\n`,
-  );
-  process.exit(0);
-}
+const [command, ...args] = process.argv.slice(2);
+if (!command || ['help', '--help', '-h'].includes(command)) {
+  console.log(`Computer Use embeds official Cua Driver 0.34.0 from npm ci.
 
-const command = commands[commandName];
-if (!command) {
-  process.stderr.write(`Unknown Computer Use command: ${commandName}\n`);
-  process.exit(1);
-}
+Commands:
+  verify-release    Verify the SDK and macOS arm64 release archive digests.
+  prepare-platform Bundle the built Maka adapter for the platform fixture.
+  platform-smoke   Run the owned Linux/Windows native fixture.
 
-const forwardedArgs = [];
-for (let index = 0; index < commandArgs.length; index += 1) {
-  const argument = commandArgs[index];
-  const [optionName, inlineValue] = argument.split('=', 2);
-  const environmentName = command.options?.[optionName];
-  if (!environmentName) {
-    forwardedArgs.push(argument);
-    continue;
-  }
-  const value = inlineValue ?? commandArgs[++index];
-  if (!value || value.startsWith('--')) {
-    throw new Error(`${optionName} requires a value`);
-  }
-  process.env[environmentName] = value;
+See scripts/cua-driver-spike/README.md for build prerequisites, display setup,
+macOS Electron validation, ASAR validation, and acceptance limitations.`);
+} else if (Object.hasOwn(commands, command) && args.length === 0) {
+  await import(new URL(`./cua-driver-spike/${commands[command]}`, import.meta.url).href);
+} else {
+  console.error('Unknown Computer Use command or arguments. Run npm run computer-use -- help.');
+  process.exitCode = 1;
 }
-
-process.argv = [
-  process.argv[0],
-  fileURLToPath(new URL(`./computer-use/${command.module}`, import.meta.url)),
-  ...forwardedArgs,
-];
-await import(`./computer-use/${command.module}`);

@@ -35,6 +35,33 @@ import {
   UI_FONT_SIZE_MIN,
 } from '../settings.js';
 
+test('foreground policy defaults to asking and remains explicit across settings updates', () => {
+  assert.equal(createDefaultSettings().computerUse.foregroundPolicy, 'ask');
+  for (const foregroundPolicy of ['never', 'ask', 'allow'] as const) {
+    const saved = normalizeSettings({ computerUse: { foregroundPolicy } });
+    assert.equal(saved.computerUse.foregroundPolicy, foregroundPolicy);
+    assert.equal(
+      mergeSettings(saved, { appearance: { theme: 'dark' } }).computerUse.foregroundPolicy,
+      foregroundPolicy,
+    );
+  }
+  for (const computerUse of [
+    undefined,
+    null,
+    {},
+    { foregroundPolicy: 'invalid' },
+    { foregroundPolicy: true },
+  ]) {
+    assert.equal(normalizeSettings({ computerUse }).computerUse.foregroundPolicy, 'ask');
+  }
+  assert.equal(
+    mergeSettings(createDefaultSettings(), {
+      computerUse: { foregroundPolicy: 'invalid' as never },
+    }).computerUse.foregroundPolicy,
+    'ask',
+  );
+});
+
 test('defaults new sessions to bypass while preserving saved choices and rejecting invalid modes', () => {
   assert.equal(createDefaultSettings().chatDefaults.permissionMode, 'bypass');
   assert.equal(normalizeSettings({}).chatDefaults.permissionMode, 'bypass');

@@ -131,6 +131,7 @@ export interface DesktopRuntimeHostCandidateDeps {
   readonly resizeImage: (bytes: Uint8Array) => Promise<Uint8Array>;
   /** Native file dialogs for moving a Session in or out as a bundle. */
   readonly mainWindowController: {
+    isMainRenderer(contents: import('electron').WebContents): boolean;
     showSaveDialog(options: {
       title?: string;
       defaultPath?: string;
@@ -809,7 +810,7 @@ export async function createDesktopRuntimeHostCandidate(
         deps.nativeCapabilities,
         {
           hostPathAccess: usesHostWorkspace ? "none" : "cwd",
-          ...(usesHostWorkspace ? { clientCwd: deps.workspaceRoot } : {}),
+          clientCwd: deps.workspaceRoot,
           releaseResourcesOnClose: false,
           targetScope: scope,
           nativeSessionId: (sessionId) =>
@@ -935,6 +936,8 @@ export async function createDesktopRuntimeHostCandidate(
           {
             client,
             observer: sessionObserver,
+            authorizeTextResponse: (event) => deps.mainWindowController.isMainRenderer(event.sender)
+              && !event.sender.isDestroyed() && event.senderFrame === event.sender.mainFrame,
             attachmentApprovals: deps.attachmentApprovals,
             emitSessionsChanged,
             stat: deps.stat,

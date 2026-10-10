@@ -72,6 +72,7 @@ import {
   INTERACTION_MAX_PENDING_PER_SESSION,
   SESSION_ATTENTION_BODY_MAX_BYTES,
   type InteractionAnswerInput,
+  type InteractionRespondByTextInput,
   type SessionAttention,
   type SessionInteractionProjection,
 } from '../protocol/index.js';
@@ -90,6 +91,7 @@ import {
 import type { InteractionOperationHandlerMap } from './operation-dispatcher.js';
 import { type SessionAdmissionLease, SessionAdmissionGate } from './session-admission-gate.js';
 import type { SessionPresenceReader } from './session-presence.js';
+import { classifyComputerUseAuthorizationText } from './computer-use-authorization-text.js';
 
 export interface HostInteractionCoordinatorOptions {
   readonly store: InteractiveInteractionStoreWriterFacade;
@@ -167,6 +169,8 @@ interface LiveClientCapabilityEntry extends LiveEntryBase {
   readonly decision: Promise<'allow' | 'deny'>;
   readonly resolve: (decision: 'allow' | 'deny') => void;
   readonly reject: (error: unknown) => void;
+  readonly providerSignal?: AbortSignal;
+  readonly callerSignal?: AbortSignal;
 }
 
 type LiveStoredEntry = LiveQuestionEntry | LiveFormEntry | LiveClientCapabilityEntry;
@@ -220,6 +224,7 @@ export class HostInteractionCoordinator implements RuntimeInteractionAuthority {
   readonly handlers: InteractionOperationHandlerMap = {
     'interaction.query': (input) => this.#query(input.sessionId, input.interactionId),
     'interaction.answer': (input) => this.#answer(input),
+    'interaction.respondByText': (input) => this.#respondByText(input),
   };
 
   readonly #store: InteractiveInteractionStoreWriterFacade;
@@ -388,6 +393,8 @@ export class HostInteractionCoordinator implements RuntimeInteractionAuthority {
       decision,
       resolve: resolveDecision,
       reject: rejectDecision,
+      providerSignal: input.providerSignal,
+      callerSignal: input.callerSignal,
     });
     const close = (reason: InteractionClosureReason) => {
       void this.#closeClientCapabilityApproval(requestId, reason).catch(rejectDecision);
@@ -927,6 +934,75 @@ export class HostInteractionCoordinator implements RuntimeInteractionAuthority {
     );
   }
 
+  #respondByText(
+    input: InteractionRespondByTextInput,
+  ): ReturnType<InteractionOperationHandlerMap['interaction.respondByText']> {
+    return observed(
+      (async () => {
+        this.#throwIfPoisoned();
+        return this.#sessionAdmission.run(input.sessionId, async (admission) => {
+          this.#throwIfPoisoned();
+          const unavailable = { ok: true, result: { kind: 'unavailable' } } as const;
+          if ((await this.#sessions.probeSessionRemoval(input.sessionId)).kind !== 'present') {
+            return unavailable;
+          }
+          const record = await this.#readInteraction(input.interactionId);
+          if (
+            !record ||
+            record.outcome ||
+            record.request.sessionId !== input.sessionId ||
+            record.request.request.kind !== 'client_capability' ||
+            record.request.request.target.capability !== 'computer_use' ||
+            (record.request.request.target.scope.kind !== 'capability' &&
+              record.request.request.target.scope.kind !== 'computer_use_foreground')
+          )
+            return unavailable;
+          const entry = this.#live.get(input.interactionId);
+          if (
+            !entry ||
+            entry.kind !== 'client_capability' ||
+            entry.phase !== 'live' ||
+            (entry.request !== record.request &&
+              !isDeepStrictEqual(entry.request, record.request)) ||
+            !entry.run.bound ||
+            entry.run.released ||
+            entry.run.closure ||
+            entry.providerSignal?.aborted ||
+            entry.callerSignal?.aborted
+          )
+            return unavailable;
+          const pending = await this.#readPending({ sessionId: input.sessionId });
+          const boundaries = await this.#readPendingSandboxBoundaries(input.sessionId);
+          if (
+            pending.length !== 1 ||
+            pending[0]?.requestId !== input.interactionId ||
+            boundaries.length !== 0
+          ) {
+            return unavailable;
+          }
+          const decision = classifyComputerUseAuthorizationText(record.request.request, input.text);
+          if (!decision) return { ok: true, result: { kind: 'unrecognized' } } as const;
+          // Do not re-enter Session admission through #answer. Commit and resume
+          // the exact same continuation used by a button, under this lease.
+          if (entry.run.closure || entry.providerSignal?.aborted || entry.callerSignal?.aborted) {
+            return unavailable;
+          }
+          const answered = await this.#answerClientCapability(
+            record,
+            { kind: 'client_capability', decision },
+            admission,
+            input.text,
+          );
+          if (!answered.ok) return unavailable;
+          return { ok: true, result: { kind: 'answered', snapshot: answered.result } } as const;
+        });
+      })().catch((error: unknown) => {
+        if (isExpectedRuntimeError(error)) throw error;
+        throw this.#poison(error);
+      }),
+    );
+  }
+
   /** Only forwards an actual answer collected by a Host-owned WorkHub question tool. */
   answerDelegatedQuestion(
     input: InteractionAnswerInput,
@@ -1082,6 +1158,7 @@ export class HostInteractionCoordinator implements RuntimeInteractionAuthority {
     record: InteractionRecord,
     answer: InteractionAnswerInput['answer'],
     admission: SessionAdmissionLease,
+    responseText?: string,
   ) {
     if (record.outcome) return answerOutcome(recordWithOutcome(record), answer);
     if (
@@ -1094,7 +1171,10 @@ export class HostInteractionCoordinator implements RuntimeInteractionAuthority {
       return operationConflict('Interaction answer does not match the pending request');
     }
     const entry = this.#requireLiveClientCapability(record.request);
-    const canonical = clientCapabilityCanonicalOutcome(answer, this.#now());
+    const canonical = {
+      ...clientCapabilityCanonicalOutcome(answer, this.#now()),
+      ...(responseText === undefined ? {} : { responseText }),
+    };
     const grant: ClientCapabilitySessionGrant | undefined =
       answer.decision === 'allow'
         ? {

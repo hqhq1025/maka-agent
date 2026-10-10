@@ -125,6 +125,7 @@ export async function packageMacos({
   await run('npm', ['run', 'clean']);
   await run('npm', ['run', 'build']);
   await run('npm', ['run', 'build:runtime-host-peer']);
+  await run('node', ['native/desktop-window-identity/build.mjs', targetArch]);
   await run('npm', ['run', 'check:runtime-host-peer-notices']);
   await run('npm', ['run', 'check:release']);
   await remove(target.releaseDirectory, { recursive: true, force: true });

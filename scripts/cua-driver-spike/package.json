@@ -1,0 +1,15 @@
+{
+  "name": "maka-cua-driver-spike",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "smoke": "node smoke.mjs"
+  },
+  "dependencies": {
+    "@trycua/cua-driver": "https://github.com/trycua/cua/releases/download/cua-driver-rs-v0.34.0/trycua-cua-driver-0.34.0.tgz",
+    "@trycua/cua-driver-darwin-arm64": "https://github.com/trycua/cua/releases/download/cua-driver-rs-v0.34.0/trycua-cua-driver-darwin-arm64-0.34.0.tgz"
+  },
+  "overrides": {
+    "@trycua/cua-driver-darwin-arm64": "$@trycua/cua-driver-darwin-arm64"
+  }
+}

@@ -134,6 +134,18 @@ describe('Runtime Host bootstrap protocol', () => {
     assert.ok(RUNTIME_HOST_COMPATIBILITY_EPOCH > 22);
   });
 
+  test('publishes a new compatibility epoch for Computer Use foreground authority', () => {
+    assert.ok(RUNTIME_HOST_COMPATIBILITY_EPOCH > 205);
+  });
+
+  test('publishes a new compatibility epoch for direct-user text authorization provenance', () => {
+    assert.ok(RUNTIME_HOST_COMPATIBILITY_EPOCH > 206);
+  });
+
+  test('publishes a new compatibility epoch for native computer tool identity', () => {
+    assert.ok(RUNTIME_HOST_COMPATIBILITY_EPOCH > 207);
+  });
+
   test('publishes a new compatibility epoch for durable external turn origins', () => {
     assert.ok(RUNTIME_HOST_COMPATIBILITY_EPOCH > 189);
   });
@@ -666,6 +678,21 @@ describe('Runtime Host bootstrap protocol', () => {
         ...identity,
         type: 'tool_result',
         status: 'errored',
+        computerUse: {
+          toolCallId: identity.toolUseId,
+          action: 'double_click_element',
+          outcome: {
+            execution: 'not_started',
+            ok: false,
+            error: 'reobserve_required',
+            reason: 'foreground_authorized_reobserve',
+          },
+        },
+      },
+      {
+        ...identity,
+        type: 'tool_result',
+        status: 'errored',
         sandboxFailureReason: 'sandbox_boundary_required',
       },
       {
@@ -849,7 +876,7 @@ describe('Runtime Host bootstrap protocol', () => {
       ts: 1,
       toolUseId: 'tool-1',
       type: 'tool_start' as const,
-      toolName: 'maka_computer',
+      toolName: 'computer',
     };
     assert.doesNotThrow(() =>
       decodeHostFrame({ ...envelope, event: { ...start, activityKind: 'computer' } }),
@@ -2378,7 +2405,7 @@ test('Client Capability tool descriptors preserve only known activity kinds', ()
         tools: [
           {
             serverId: 'desktop_computer_use',
-            name: 'maka_computer',
+            name: 'computer',
             inputSchema: { type: 'object' },
             activityKind: 'computer',
           },
@@ -2419,7 +2446,7 @@ test('Client Capability tuple schemas accept only boolean or schema additionalIt
         tools: [
           {
             serverId: 'desktop_computer_use',
-            name: 'maka_computer',
+            name: 'computer',
             inputSchema: {
               type: 'object',
               properties: {

@@ -809,6 +809,8 @@ export interface DesktopSessionUsageSummary extends UsageSummaryV2 {
 }
 
 export interface MakaBridge {
+  computerUse: import('../shared/computer-use-presentation.js').ComputerUsePresentationBridge;
+  computerUsePreview: import('../shared/computer-use-preview.js').ComputerUsePreviewBridge;
   clientPlugins: {
     snapshot(): Promise<MakaClientPluginSnapshot>;
     remoteCall(
@@ -1329,6 +1331,11 @@ export interface MakaBridge {
       sessionId: string,
       response: ClientCapabilityResponse,
     ): Promise<void>;
+    respondToInteractionByText(
+      sessionId: string,
+      response: { readonly requestId: string; readonly text: string },
+    ): Promise<{ readonly kind: 'answered'; readonly decision: 'allow' | 'deny' }
+      | { readonly kind: 'unrecognized' | 'unavailable' }>;
     respondToUserQuestion(sessionId: string, response: UserQuestionResponse): Promise<void>;
     respondToUserForm(sessionId: string, response: InteractionFormResponse): Promise<void>;
     saveConversationToFile(input: {

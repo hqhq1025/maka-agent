@@ -99,7 +99,7 @@ test('publishes self-described session-affine Browser and Computer Use offers', 
         offerId: 'desktop_computer_use',
         version: '0',
         affinity: 'session',
-        toolNames: ['maka_computer'],
+        toolNames: ['computer'],
         serverIds: ['desktop_computer_use'],
         activityKinds: ['computer'],
       },
@@ -142,6 +142,45 @@ test('remote providers do not request Host paths and use a Client-owned cwd', as
     () => call(provider, capabilityFrame({ cwd: '/srv/host-project' })),
     /does not accept a Host path/,
   );
+});
+
+test('local Computer Use stays path-independent while Browser retains Host workspace access', async () => {
+  const received: Array<{ capability: string; cwd: string }> = [];
+  const provider = createDesktopNativeCapabilityProvider(
+    {
+      browserTools: [tool('browser_navigate', z.object({ url: z.string() }), async (_args, context) => {
+        received.push({ capability: 'browser', cwd: context.cwd });
+        return 'ok';
+      })],
+      resolveBrowserUrl: () => 'https://example.com/',
+      releaseBrowserSession() {},
+      computerUseTools: computerTools(async (_args, context) => {
+        received.push({ capability: 'computer', cwd: context.cwd });
+        return { text: 'ok' };
+      }),
+      releaseDesktopInteractionSession() {},
+    },
+    { clientCwd: '/desktop/workspace' },
+  );
+  try {
+    assert.equal(provider.offers().find((offer) => offer.offerId === 'desktop_browser')?.hostPathAccess, 'cwd');
+    assert.equal(provider.offers().find((offer) => offer.offerId === 'desktop_computer_use')?.hostPathAccess, 'none');
+    await call(provider, computerFrame({ cwd: undefined }), (evidence) => {
+      assert.equal(evidence.kind, 'computer_use');
+      if (evidence.kind === 'computer_use') assert.equal(evidence.delivery, 'background');
+    });
+    await call(provider, capabilityFrame({ cwd: '/host/project' }));
+    await assert.rejects(
+      () => call(provider, computerFrame({ cwd: '/host/project' })),
+      /does not accept a Host path/,
+    );
+    assert.deepEqual(received, [
+      { capability: 'computer', cwd: '/desktop/workspace' },
+      { capability: 'browser', cwd: '/host/project' },
+    ]);
+  } finally {
+    await provider.close();
+  }
 });
 
 test('publishes the real Computer Use schema through the Client Capability protocol', () => {
@@ -734,6 +773,7 @@ test('watches Computer Use turns without widening Browser lifecycle', async () =
       releaseDesktopInteractionSession() {},
     },
     {
+      clientCwd: '/desktop/workspace',
       onSessionUsed: (sessionId) => usedSessions.push(sessionId),
       onDesktopInteractionTurnUsed: (sessionId, turnId) =>
         computerUseTurns.push([sessionId, turnId]),
@@ -789,7 +829,7 @@ test('projects Computer Use screenshots and releases all native resources for a 
     },
     computerUseTools,
     releaseDesktopInteractionSession: (sessionId) => computerUseTools.clearSession(sessionId),
-  });
+  }, { clientCwd: '/desktop/workspace' });
 
   await provider.releaseSession('manual-session');
   assert.deepEqual(browserReleased, ['manual-session']);
@@ -809,6 +849,7 @@ test('projects Computer Use screenshots and releases all native resources for a 
 
   const completed = await call(provider, computerFrame({ sessionId: 'completed-session', arguments: {} }));
   assert.deepEqual(completed, {
+    summary: 'captured',
     content: [
       { type: 'text', text: 'captured' },
       { type: 'image', data: 'aW1hZ2U=', mimeType: 'image/png' },
@@ -1318,7 +1359,7 @@ function computerTools(
   const tools = (impl
     ? [
         {
-          ...tool('maka_computer', z.object({ wait: z.boolean().optional() }), impl),
+          ...tool('computer', z.object({ wait: z.boolean().optional() }), impl),
           activityKind: 'computer' as const,
           toModelOutput: ({ output }: { output: unknown }) => {
             const result = output as {
@@ -1384,8 +1425,9 @@ function computerFrame(overrides: Partial<ClientCapabilityCallFrame> = {}): Clie
   return capabilityFrame({
     offerId: 'desktop_computer_use',
     serverId: 'desktop_computer_use',
-    toolName: 'maka_computer',
+    toolName: 'computer',
     arguments: {},
+    cwd: undefined,
     ...overrides,
   });
 }

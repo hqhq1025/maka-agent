@@ -38,39 +38,46 @@ import {
 } from '../skills.js';
 
 describe('shared bundled skill catalog', () => {
-  it('trusts the Computer Use lock shipped immediately before the current bundled body', () => {
-    const source = getBundledSkillSource('computer-use');
-    assert.ok(source);
-    const previousHash = 'sha256:64aa2ef2d608e15792cc04eff7204731671b6b18818964ba95c65f53c694db62';
+  for (const previousHash of [
+    'sha256:64aa2ef2d608e15792cc04eff7204731671b6b18818964ba95c65f53c694db62',
+    'sha256:ef548414fbd3d88fc40e6be1a84ddb345a38b6651b20aaa502bcb9afdf457051',
+    'sha256:e8d6f1e44dfb61d23f34b9293670050759b22293dbef7cb59cf84c34c37d8330',
+    'sha256:31173a7ba1bd273ebe2aa4f4bd09bdae758588e5c6d8816401216a0ebc1ac304',
+    'sha256:263948135eaf959a2dc01501733cea85b9b39812a4d45797f6afa9ec4938bfd7',
+  ]) {
+    it(`trusts the unchanged previous Computer Use body ${previousHash}`, () => {
+      const source = getBundledSkillSource('computer-use');
+      assert.ok(source);
 
-    assert.equal(source.legacyContentSha256.includes(previousHash), true);
-    assert.deepEqual(
-      validateSkillLock({
-        lock: {
-          schemaVersion: 1,
-          id: source.id,
+      assert.equal(source.legacyContentSha256.includes(previousHash), true);
+      assert.deepEqual(
+        validateSkillLock({
+          lock: {
+            schemaVersion: 1,
+            id: source.id,
+            sourceType: 'bundled',
+            sourceName: source.sourceName,
+            sourceVersion: source.sourceVersion,
+            contentSha256: previousHash,
+            installedAt: '2026-09-02T00:00:00.000Z',
+          },
+          skillId: source.id,
+          currentContentSha256: previousHash,
+        }),
+        {
           sourceType: 'bundled',
           sourceName: source.sourceName,
           sourceVersion: source.sourceVersion,
-          contentSha256: previousHash,
           installedAt: '2026-09-02T00:00:00.000Z',
+          contentSha256: previousHash,
+          userModified: false,
+          validationStatus: 'ok',
+          validationCodes: [],
+          managedUpdateStatus: 'not_managed',
         },
-        skillId: source.id,
-        currentContentSha256: previousHash,
-      }),
-      {
-        sourceType: 'bundled',
-        sourceName: source.sourceName,
-        sourceVersion: source.sourceVersion,
-        installedAt: '2026-09-02T00:00:00.000Z',
-        contentSha256: previousHash,
-        userModified: false,
-        validationStatus: 'ok',
-        validationCodes: [],
-        managedUpdateStatus: 'not_managed',
-      },
-    );
-  });
+      );
+    });
+  }
 
   it('constructs and validates managed provenance and update status', () => {
     const installedHash = `sha256:${'1'.repeat(64)}`;

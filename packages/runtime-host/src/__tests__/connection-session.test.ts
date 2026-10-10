@@ -1670,6 +1670,7 @@ function createHandlers(queryTurn: TurnQueryHandler): RuntimeHostComposition['ha
     'turn.interrupt': async () => unavailable,
     'interaction.query': async () => interactionUnavailable,
     'interaction.answer': async () => interactionUnavailable,
+    'interaction.respondByText': async () => interactionUnavailable,
     'subscription.open': async () => subscriptionUnavailable,
     'subscription.close': async () => subscriptionUnavailable,
     'session.todo.query': async () => sessionTodoUnavailable,

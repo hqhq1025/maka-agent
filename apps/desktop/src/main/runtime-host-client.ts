@@ -1390,6 +1390,12 @@ export class DesktopRuntimeHostClient {
     return this.request("interaction.answer", input);
   }
 
+  respondToInteractionByText(
+    input: OperationInput<"interaction.respondByText">,
+  ): Promise<OperationOutput<"interaction.respondByText">> {
+    return this.request("interaction.respondByText", input);
+  }
+
   queryInteraction(
     input: OperationInput<"interaction.query">,
   ): Promise<OperationOutput<"interaction.query">> {

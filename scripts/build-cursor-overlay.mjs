@@ -65,8 +65,24 @@ export async function buildCursorOverlay({ logLevel = 'info' } = {}) {
     logLevel,
   });
   await copyFile(join(srcOverlay, 'cursor-overlay.html'), join(outDir, 'cursor-overlay.html'));
+  await copyFile(
+    join(srcOverlay, 'computer-use-preview.html'),
+    join(outDir, 'computer-use-preview.html'),
+  );
+  await copyFile(
+    join(srcOverlay, 'computer-use-preview.js'),
+    join(outDir, 'computer-use-preview.js'),
+  );
+  await esbuild.build({
+    entryPoints: [join(srcOverlay, 'computer-use-preview-preload.ts')],
+    bundle: true,
+    format: 'cjs',
+    platform: 'node',
+    external: ['electron'],
+    outfile: join(outDir, 'computer-use-preview-preload.cjs'),
+    logLevel,
+  });
   await buildPermissionOverlay({ logLevel });
-  await buildComputerUsePip({ logLevel });
   return outDir;
 }
 
@@ -96,39 +112,6 @@ async function buildBrowserDialogDesignTokens() {
     `${astryxTokens}\n${makaTokens.slice(0, tokenEnd)}`,
     'utf8',
   );
-}
-
-/**
- * The Computer Use picture-in-picture mirror. Same shape as the cursor overlay
- * — module page bundle + CJS preload + verbatim html — sharing `dist/overlay`
- * so one `build:overlay` step covers all three panels.
- *
- * Its preload is receive-only and narrower than the cursor overlay's: the
- * mirror displays frames main hands it and has nothing to report back.
- */
-export async function buildComputerUsePip({ logLevel = 'info' } = {}) {
-  await mkdir(outDir, { recursive: true });
-  await esbuild.build({
-    entryPoints: [join(srcOverlay, 'pip.ts')],
-    bundle: true,
-    format: 'esm',
-    platform: 'browser',
-    target: 'chrome120',
-    outfile: join(outDir, 'pip.js'),
-    plugins: [jsToTs],
-    logLevel,
-  });
-  await esbuild.build({
-    entryPoints: [join(srcOverlay, 'pip-preload.ts')],
-    bundle: true,
-    format: 'cjs',
-    platform: 'node',
-    external: ['electron'],
-    outfile: join(outDir, 'pip-preload.cjs'),
-    logLevel,
-  });
-  await copyFile(join(srcOverlay, 'pip.html'), join(outDir, 'pip.html'));
-  return outDir;
 }
 
 /**

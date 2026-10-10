@@ -22,6 +22,8 @@ import { createTestToolRuntime } from './execution-boundary-test-helpers.js';
 import assert from 'node:assert/strict';
 import { describe, test } from 'node:test';
 import type { LlmConnection } from '@maka/core/llm-connections';
+import type { ComputerUseActivity } from '@maka/core/computer-use';
+import type { ToolResultEvent } from '@maka/core/events';
 
 import type { SessionHeader } from '@maka/core/session';
 
@@ -92,6 +94,73 @@ describe('ToolRuntime argument ownership', () => {
     }
     assert.equal(providerArgs.content, 'provider');
   });
+});
+
+describe('ToolRuntime Computer Use metadata ownership', () => {
+  for (const variant of [
+    { activityKind: 'tool', resultCallId: 'tool-1', accepted: false },
+    { activityKind: 'computer', resultCallId: 'another-call', accepted: false },
+    { activityKind: 'computer', resultCallId: 'tool-1', accepted: true },
+  ] as const) {
+    test(`${variant.activityKind} canonical text with ${variant.resultCallId}`, async () => {
+      const runtime = createTestToolRuntime({
+        sessionId: 'session-1',
+        header: testHeader(),
+        connection: testConnection(),
+        modelId: 'test-model',
+        newId: nextId(),
+        now: () => 1,
+        getPermissionPauseTarget: () => null,
+      });
+      const computerUse: ComputerUseActivity = {
+        toolCallId: variant.resultCallId,
+        action: 'click_element',
+        target: { observationId: 'observation-1', appId: 'app-1', label: 'Save' },
+        outcome: { execution: 'attempted', ok: true, effect: 'confirmed', verified: true },
+      };
+      const raw = { kind: 'text' as const, text: 'Original result', computerUse };
+      const events: ToolResultEvent[] = [];
+      let projectedRaw: unknown;
+      await runtime.settleToolCall({
+        tool: {
+          name: 'Read',
+          activityKind: variant.activityKind,
+          description: 'Return a canonical tool result',
+          parameters: {},
+          impl: async () => raw,
+          toModelOutput: ({ output }) => {
+            projectedRaw = output;
+            return { type: 'text', value: 'Original model projection' };
+          },
+        },
+        turnId: 'turn-1',
+        toolCallId: 'tool-1',
+        input: {},
+        abortSignal: new AbortController().signal,
+        eventSink: {
+          push: (event) => {
+            if (event.type === 'tool_result') events.push(event);
+          },
+          pushAndWaitUntilConsumed: async (event) => {
+            if (event.type === 'tool_result') events.push(event);
+          },
+        },
+      });
+      assert.equal(events.length, 1);
+      const event = events[0]!;
+      assert.equal(event.content.kind, 'text');
+      if (event.content.kind !== 'text') assert.fail('Expected canonical text');
+      assert.deepEqual(event.content.computerUse, variant.accepted ? computerUse : undefined);
+      assert.deepEqual(event.computerUse, variant.accepted ? computerUse : undefined);
+      assert.deepEqual(projectedRaw, raw, 'normalizing transcript metadata preserves model input');
+      assert.deepEqual(
+        raw.computerUse,
+        computerUse,
+        'normalization does not mutate the tool result',
+      );
+      assert.notEqual(event.content, raw, 'canonical text is copied before metadata is normalized');
+    });
+  }
 });
 
 function observeAndMutate(

@@ -433,7 +433,7 @@ test('a trusted composition can preserve provider-owned activity semantics', () 
     fakeProvider(
       [
         boundTool(
-          descriptor('desktop_computer_use', 'maka_computer'),
+          descriptor('desktop_computer_use', 'computer'),
           binding('desktop-computer-binding'),
         ),
       ],

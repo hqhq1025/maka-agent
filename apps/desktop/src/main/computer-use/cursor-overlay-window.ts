@@ -93,6 +93,10 @@ export interface CreateCursorOverlayControllerDeps {
   htmlPath?: string;
   onDisplayFrame?: (input: { actionId: string; completedAt: number; displayedAt: number }) => void;
   subscribeDisplayChanges?: (cb: () => void) => () => void;
+  /** Current Desktop ownership/lock state, also checked on late renderer callbacks. */
+  mayPresent?: (sessionId: string) => boolean;
+  /** Native desktop coordinates to Electron DIP; undefined means no global overlay. */
+  resolveScreenPoint?: (point: { x: number; y: number }) => { x: number; y: number } | undefined;
 }
 
 export interface CursorOverlayController {
@@ -209,6 +213,8 @@ export function createCursorOverlayController(
   const htmlPath = deps.htmlPath ?? join(overlayAssetDir, 'cursor-overlay.html');
   const subscribeDisplayChanges = deps.subscribeDisplayChanges
     ?? defaultSubscribeDisplayChanges;
+  const mayPresent = deps.mayPresent ?? (() => true);
+  const resolveScreenPoint = deps.resolveScreenPoint ?? defaultResolveScreenPoint;
 
   let win: CursorOverlayWindowLike | null = null;
   let sessionId: string | null = null;
@@ -336,6 +342,7 @@ export function createCursorOverlayController(
 
   function ensure(nextSessionId: string): void {
     if (typeof nextSessionId !== 'string' || nextSessionId.length === 0) return;
+    if (!mayPresent(nextSessionId)) { teardown(); return; }
     if (win && !win.isDestroyed() && sessionId === nextSessionId) return;
     // Different session (or dead window) → supersede so no orphan survives.
     if (win) teardown();
@@ -382,6 +389,7 @@ export function createCursorOverlayController(
     });
     w.onReady(() => {
       if (win !== w) return; // superseded during load
+      if (!mayPresent(nextSessionId)) { teardown(); return; }
       ready = true;
       w.send('overlay:reset', {
         sessionId: nextSessionId,
@@ -402,6 +410,7 @@ export function createCursorOverlayController(
         || !presentation
         || payload.actionId !== presentation.actionId
       ) return;
+      if (!mayPresent(nextSessionId)) { teardown(); return; }
       if (payload.phase === 'readyForInteraction') presentation.ready();
       else {
         const completed = presentation;
@@ -440,7 +449,18 @@ export function createCursorOverlayController(
     ) {
       return { readyForInteraction: Promise.resolve(), finished: Promise.resolve() };
     }
+    const point = resolveScreenPoint({ x: input.screenX, y: input.screenY });
+    if (!point || !mayPresent(input.sessionId)) {
+      clearForSession(input.sessionId);
+      return { readyForInteraction: Promise.resolve(), finished: Promise.resolve() };
+    }
     ensure(input.sessionId);
+    if (!win) return { readyForInteraction: Promise.resolve(), finished: Promise.resolve() };
+    if (point.x < bounds.x || point.x >= bounds.x + bounds.width
+      || point.y < bounds.y || point.y >= bounds.y + bounds.height) {
+      clearForSession(input.sessionId);
+      return { readyForInteraction: Promise.resolve(), finished: Promise.resolve() };
+    }
     settlePresentation();
     actionId = input.actionId;
     restTargetWindowId = resolveRestTarget(input.targetWindowId);
@@ -454,8 +474,8 @@ export function createCursorOverlayController(
     // Screen → window-local so the renderer paints at origin (0,0).
     push('overlay:move', {
       actionId: input.actionId,
-      x: input.screenX - bounds.x,
-      y: input.screenY - bounds.y,
+      x: point.x - bounds.x,
+      y: point.y - bounds.y,
       kind: input.kind,
       pressed: input.pressed === true,
       ...(input.instant === true ? { instant: true } : {}),
@@ -467,6 +487,9 @@ export function createCursorOverlayController(
     if (typeof input.sessionId !== 'string' || input.sessionId.length === 0) return;
     if (!Number.isFinite(input.screenX) || !Number.isFinite(input.screenY)) return;
     if (input.sessionId !== sessionId) return;
+    if (input.actionId !== actionId) return;
+    const point = resolveScreenPoint({ x: input.screenX, y: input.screenY });
+    if (!point || !mayPresent(input.sessionId)) { clearForSession(input.sessionId); return; }
     if (presentation && input.actionId !== presentation.actionId) return;
     actionId = input.actionId;
     // The landing is the last thing that happens before the cursor sinks, and
@@ -493,8 +516,8 @@ export function createCursorOverlayController(
     }
     push('overlay:complete', {
       actionId: input.actionId,
-      x: input.screenX - bounds.x,
-      y: input.screenY - bounds.y,
+      x: point.x - bounds.x,
+      y: point.y - bounds.y,
       kind: input.kind,
       pulse: input.pulse,
     });
@@ -503,7 +526,8 @@ export function createCursorOverlayController(
   function cancel(input: CursorCancelInput): void {
     if (typeof input.sessionId !== 'string' || input.sessionId.length === 0) return;
     if (input.sessionId !== sessionId || input.actionId !== actionId) return;
-    push('overlay:cancel', { actionId: input.actionId });
+    // A refusal must not leave the last target looking active.
+    teardown();
   }
 
   function clearForSession(id: string): void {
@@ -593,6 +617,22 @@ function defaultSubscribeDisplayChanges(cb: () => void): () => void {
     screen.removeListener('display-removed', removed);
     screen.removeListener('display-metrics-changed', changed);
   };
+}
+
+function defaultResolveScreenPoint(point: { x: number; y: number }): { x: number; y: number } | undefined {
+  // Wayland does not grant an ordinary Electron window global positioning or
+  // ordering over another app. The execution path remains usable without it.
+  if (process.platform === 'linux'
+    && (process.env.WAYLAND_DISPLAY || process.env.XDG_SESSION_TYPE === 'wayland')) return undefined;
+  const { screen } = requireElectron('electron') as typeof import('electron');
+  const dip = process.platform === 'win32'
+    ? screen.screenToDipPoint({ x: Math.round(point.x), y: Math.round(point.y) })
+    : point;
+  // A union bounding box includes gaps between displays; no cursor belongs in
+  // those gaps, even if its native point is finite.
+  return screen.getAllDisplays().some(({ bounds: display }) => dip.x >= display.x
+    && dip.x < display.x + display.width && dip.y >= display.y
+    && dip.y < display.y + display.height) ? dip : undefined;
 }
 
 function sameRect(a: Rectangle, b: Rectangle): boolean {

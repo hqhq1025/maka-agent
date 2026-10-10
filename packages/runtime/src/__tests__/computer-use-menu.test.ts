@@ -45,7 +45,7 @@ function element(
   return { elementId, role, ...extra };
 }
 
-/** A window with a menu bar beside it, shaped the way maka-cu reports one. */
+/** A window with an optional menu bar beside it. */
 function observation(overrides: Partial<CuObservation> = {}): CuObservation {
   return {
     observationId: 'obs_1',

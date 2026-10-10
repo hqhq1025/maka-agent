@@ -82,7 +82,7 @@ test('Computer Use snapshots execution args and persists the model-facing projec
     },
   });
   const tool: MakaTool = {
-    name: 'maka_computer',
+    name: 'computer',
     description: 'test',
     parameters: {},
     categoryHint: 'computer_use',
@@ -179,7 +179,7 @@ test('the record a model reads back is the call it made, in the names the tool a
     getPermissionPauseTarget: () => null,
   });
   const tool: MakaTool = {
-    name: 'maka_computer',
+    name: 'computer',
     description: 'test',
     parameters: {},
     categoryHint: 'computer_use',
@@ -258,7 +258,7 @@ test('Computer Use persists which element a call targeted', async () => {
     getPermissionPauseTarget: () => null,
   });
   const tool: MakaTool = {
-    name: 'maka_computer',
+    name: 'computer',
     description: 'test',
     parameters: {},
     categoryHint: 'computer_use',
@@ -371,7 +371,7 @@ test('the model reads its own call back in the names the tool accepts', async ()
     },
   });
   const tool: MakaTool = {
-    name: 'maka_computer',
+    name: 'computer',
     description: 'test',
     parameters: {},
     categoryHint: 'computer_use',
@@ -428,7 +428,7 @@ test('Computer Use validation failures still persist a redacted call and result'
     },
   });
   const tool: MakaTool = {
-    name: 'maka_computer',
+    name: 'computer',
     description: 'test',
     parameters: {},
     categoryHint: 'computer_use',

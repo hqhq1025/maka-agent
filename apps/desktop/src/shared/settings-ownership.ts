@@ -59,6 +59,7 @@ export function clientOwnedSettingsPatch(
     ...(personalization ? { personalization } : {}),
     ...(patch.notifications ? { notifications: patch.notifications } : {}),
     ...(patch.workHub ? { workHub: patch.workHub } : {}),
+    ...(patch.computerUse ? { computerUse: patch.computerUse } : {}),
     ...(patch.projects ? { projects: patch.projects } : {}),
     ...(patch.system ? { system: patch.system } : {}),
   };
@@ -102,6 +103,7 @@ export function projectClientOwnedSettings(
     projects: client.projects,
     notifications: client.notifications,
     workHub: client.workHub,
+    computerUse: client.computerUse,
     system: client.system,
   };
 }

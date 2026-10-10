@@ -59,7 +59,7 @@ import * as Conversation from './features/conversation';
 import { deriveWorkspaceReadinessRecovery } from './workspace-readiness-recovery';
 import { AgentGraphPanel } from './agent-graph-panel';
 import { ChatComposerRegion } from './chat-composer-region';
-import { WorkbarHost, WorkbarProvider, WorkbarShellRoot, type WorkbarShellProjection } from './features/workbar';
+import { ComputerUseConversationStatus, WorkbarHost, WorkbarProvider, WorkbarShellRoot, type WorkbarShellProjection } from './features/workbar';
 import { AppUpdateProvider } from './features/app-update/index.js';
 import * as Goals from './features/goals';
 import * as ModuleHub from './features/module-hub';
@@ -1364,6 +1364,9 @@ function AppShellContent({
                 hidden={workHubActive || !sessionsSelected}
                 composer={
                   <>
+                    {sessionsSelected && !sharedSessionActive && !workHubActive ? (
+                      <ComputerUseConversationStatus sessionId={ownerActiveId} onOpen={() => commands.openTool('computer', 'right')} />
+                    ) : null}
                     {ownerActiveId ? (
                       <Conversation.ConversationMessageConsumer surface={SessionCollaboration.SessionTurnRequestApprovalForSession}
                         sessionId={ownerActiveId}
@@ -1392,14 +1395,9 @@ function AppShellContent({
                           >
                             {(guest) => (
                               <Conversation.ConversationComposerRegion surface={ChatComposerRegion}
-                  workspacePicker={workspacePicker}
-                  guest={guest}
+                  {...{ workspacePicker, guest, onboardingComposerHidden, boundaryUnreadableNotice, activeId,
+                    executorTarget, onExecutorTargetChange, LiveContextUsageProbe, modelSwitchHasHistory }}
                   active={sessionsSelected}
-                  onboardingComposerHidden={
-                    onboardingComposerHidden
-                  }
-                  boundaryUnreadableNotice={boundaryUnreadableNotice}
-                  activeId={activeId}
                   newTaskDraftKey={currentNewTaskDraftKey}
                   respondToClientCapability={commands.respondToClientCapability}
                   directoryPickerEnabled={Boolean(canStageComposerContext && directoryHostId)}
@@ -1413,13 +1411,10 @@ function AppShellContent({
                   contextPickEnabled={canStageComposerContext}
                   executorComposer={{ selection: executor, taskSubmissionHardBlocked, connectionCount: connections.length, onSetup: () => openSettingsSection('external-agents'), onNewTask: openNewTaskSurface }}
                   activeSession={activeSessionForView}
-                  {...{ executorTarget, onExecutorTargetChange }}
                   usageModel={activeModel}
                   usageRoute={activeSessionForModelControls}
                   onOpenContextUsage={() => commands.toggleTool('inspector')}
-                  LiveContextUsageProbe={LiveContextUsageProbe}
                   contextUsageSessionId={ownerActiveId}
-                  modelSwitchHasHistory={modelSwitchHasHistory}
                   renderProviderMark={(type) => <ProviderBrandMark type={type} />}
                   onModelChange={(input) => activeId ? void setSessionModel(activeId, input) : undefined}
                   onThinkingLevelChange={(level) => {
@@ -1456,8 +1451,8 @@ function AppShellContent({
                 {sessionsSelected ? (
                   <Conversation.ConversationTranscriptRegion surface={ChatMessageSurface}
                 activeSession={activeSessionForView}
-                userLabel={userLabel}
-                memoryActive={memoryActive}
+                {...{ userLabel, memoryActive, revisionNavigation, sessionHealthNotice, workspaceReadinessRecovery,
+                  showOnboardingHero, onboardingState, connections }}
                 onOpenMemorySettings={sharedSessionActive ? undefined : () => openSettingsSection('memory')}
                 onTurnFooterAction={sharedSessionActive ? undefined : composerSubmission.handleTurnFooterAction}
                 onEditUserMessage={sharedSessionActive ? undefined : composerSubmission.beginEditUserMessage}
@@ -1472,7 +1467,6 @@ function AppShellContent({
                     : undefined
                 }
                 scrollBehavior={readScrollMotionBehavior()}
-                revisionNavigation={revisionNavigation}
                 onRevisionNavigate={openSessionInChat}
                 onNew={createSession}
                 onPromptSuggestion={composerEditing.appendText}
@@ -1495,16 +1489,11 @@ function AppShellContent({
                       }
                     : undefined
                 }
-                sessionHealthNotice={sessionHealthNotice}
                 localInteractionAvailable={activeBoundarySurface.localInteractionAvailable}
-                workspaceReadinessRecovery={workspaceReadinessRecovery}
-                showOnboardingHero={showOnboardingHero}
-                onboardingState={onboardingState}
                 onOpenSettings={openSettingsSection}
                 onOpenConnectionDetail={openConnectionDetail}
                 onAddProvider={openProviderCreate}
                 onBrowseProviders={openProviderCatalog}
-                connections={connections}
                 onRefreshConnections={refreshConnections}
                 onSkip={async () => {
                   try {

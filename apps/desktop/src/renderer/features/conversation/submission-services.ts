@@ -90,6 +90,11 @@ export interface ComposerSubmissionServices {
   ): Promise<DesktopSessionSummary>;
   respondToSandboxBoundary(sessionId: string, response: SandboxBoundaryResponse): Promise<void>;
   respondToUserQuestion(sessionId: string, response: UserQuestionResponse): Promise<void>;
+  respondToInteractionByText(
+    sessionId: string,
+    response: { readonly requestId: string; readonly text: string },
+  ): Promise<{ readonly kind: 'answered'; readonly decision: 'allow' | 'deny' }
+    | { readonly kind: 'unrecognized' | 'unavailable' }>;
 }
 
 const context = createServicesContext<ComposerSubmissionServices>('ComposerSubmissionServicesProvider');

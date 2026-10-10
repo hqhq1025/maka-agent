@@ -373,6 +373,7 @@ test("keeps synthetic E2E interactions visible through Host hydration and retire
         },
       }),
       observer,
+      authorizeTextResponse: () => true,
       attachmentApprovals: createAttachmentApprovalRegistry(),
       emitSessionsChanged() {},
       stat: async () => ({ size: 0 }),
@@ -470,6 +471,43 @@ test('answers a Client Capability approval through the existing Interaction auth
       answer: { kind: 'client_capability', decision: 'allow' },
     },
   ]);
+  await observer.close();
+});
+
+test('text responses forward exact pending Computer Use authority and publish the actual answer', async () => {
+  const pending = {
+    schemaVersion: 1 as const, interactionId: 'computer-1', sessionId: 'session-1', turnId: 'turn-1', runId: 'run-1',
+    revision: 1 as const, status: 'pending' as const, outcome: null,
+    request: { kind: 'client_capability' as const, toolUseId: 'tool-1', target: {
+      providerId: 'provider', contractId: 'contract', serverId: 'computer', toolName: 'click', capability: 'computer_use' as const,
+      scope: { kind: 'computer_use_foreground' as const, authorityEpoch: 'epoch' },
+    } },
+  };
+  const calls: unknown[] = [];
+  const observer = observerWithSnapshot({ interactions: { pending: [pending] } });
+  const ipc = ipcHarness();
+  let wrongIdentity = false;
+  let authorized = true;
+  registerExecutionIpc({ observer, authorizeTextResponse: () => authorized, client: executionClient({ respondToInteractionByText: async (input) => {
+    calls.push(input);
+    return { kind: 'answered', snapshot: { ...pending, interactionId: wrongIdentity ? 'different' : pending.interactionId,
+      revision: 2, status: 'answered', outcome: { kind: 'client_capability_decision', decision: 'allow', committedAt: 2 } } };
+  } }) }, ipc);
+  assert.deepEqual(await ipc.invoke('sessions:respondToInteractionByText', 'session-1', { requestId: 'computer-1', text: '批准' }),
+    { kind: 'answered', decision: 'allow' });
+  assert.deepEqual(calls, [{ sessionId: 'session-1', interactionId: 'computer-1', text: '批准' }]);
+  assert.deepEqual(await ipc.invoke('sessions:respondToInteractionByText', 'session-1', { requestId: 'stale', text: '批准' }),
+    { kind: 'unavailable' });
+  assert.equal(calls.length, 1, 'a stale request never reaches Host');
+  assert.deepEqual(await ipc.invoke('sessions:respondToInteractionByText', 'session-1', { requestId: 'computer-1', text: '' }), { kind: 'unrecognized' });
+  assert.deepEqual(await ipc.invoke('sessions:respondToInteractionByText', 'session-1', { requestId: 'computer-1', text: '批'.repeat(342) }), { kind: 'unrecognized' });
+  assert.equal(calls.length, 1, 'oversized UTF8 text never reaches Host');
+  authorized = false;
+  await assert.rejects(ipc.invoke('sessions:respondToInteractionByText', 'session-1', { requestId: 'computer-1', text: '批准' }), /trusted Desktop renderer/);
+  assert.equal(calls.length, 1, 'untrusted renderer never reaches Host');
+  authorized = true;
+  wrongIdentity = true;
+  await assert.rejects(ipc.invoke('sessions:respondToInteractionByText', 'session-1', { requestId: 'computer-1', text: '批准' }), /different interaction/);
   await observer.close();
 });
 
@@ -2268,6 +2306,7 @@ function executionClient(overrides: Partial<ExecutionClient>): ExecutionClient {
   >;
   return {
     answerInteraction: unavailable,
+    respondToInteractionByText: unavailable,
     compactContext: unavailable,
     copySession: unavailable,
     getSession: unavailable,
@@ -2411,6 +2450,7 @@ function registerExecutionIpc(
   return registerRuntimeHostSessionExecutionIpc(
     {
       observer,
+      authorizeTextResponse: () => true,
       attachmentApprovals: createAttachmentApprovalRegistry(),
       emitSessionsChanged() {},
       stat: async () => ({ size: 0 }),
@@ -2499,7 +2539,7 @@ test('renderer reload releases old observations without accumulating destroyed l
   const ipc = observationIpcHarness(registry);
   for (let i = 0; i < 20; i++) {
     await ipc.invoke('sessions:observe', 'session-1', `observer-${i}`);
-    assert.equal(ipc.rendererListenerCount(), 2);
+    assert.equal(ipc.rendererListenerCount(), 1);
     ipc.rendererNavigate(true); // Same-document navigation keeps live subscriptions.
     ipc.rendererNavigate(false, false); // So do child-frame navigations.
     assert.deepEqual(registry.observationSessionIds(), ['session-1']);
@@ -2511,6 +2551,46 @@ test('renderer reload releases old observations without accumulating destroyed l
   await registry.close();
   assert.equal(ipc.rendererListenerCount(), 0);
 });
+
+for (const teardown of ['reload', 'destroy'] as const) {
+  test(`one renderer lifecycle listener releases all read replicas on ${teardown}`, async () => {
+    const active = new Set<string>();
+    const source = {
+      async observe(_sessionId: string, observerId: string) { active.add(observerId); },
+      async unobserve(observerId: string) { active.delete(observerId); },
+      async openTranscript(sessionId: string, consumerId: string) {
+        active.add(consumerId);
+        return { sessionId, generation: 'generation-1', hostEpoch: 'host-epoch-1', readThroughMessageId: null };
+      },
+      async closeTranscript(consumerId: string) { active.delete(consumerId); },
+      async loadEarlierTranscript() {},
+      async readTranscriptTurn() { return []; },
+      acknowledgeTranscriptTail() {},
+    };
+    const registry = new RuntimeHostSessionObservationRegistry();
+    await registry.attach(source);
+    const ipc = observationIpcHarness(registry);
+    try {
+      for (let i = 0; i < 6; i++) {
+        await ipc.invoke('sessions:observe', `session-${i}`, `observer-${i}`);
+        await ipc.invoke('sessions:transcript:open', `session-${i}`, `consumer-${i}`, 'tail');
+      }
+      assert.equal(active.size, 12);
+      assert.equal(ipc.rendererListenerCount(), 1, 'read replicas share the tracked renderer lifetime');
+      registry.detach(source);
+      await registry.attach(source);
+      assert.equal(ipc.rendererListenerCount(), 1, 'reconnection must not register another lifetime');
+      if (teardown === 'reload') ipc.rendererNavigate();
+      else ipc.rendererDestroyed();
+      assert.deepEqual(registry.trackedSessionIds(), []);
+      assert.equal(active.size, 0, 'both Host observers and transcript consumers were released');
+      assert.equal(ipc.rendererListenerCount(), teardown === 'reload' ? 1 : 0);
+    } finally {
+      await registry.close();
+    }
+    assert.equal(ipc.rendererListenerCount(), 0);
+  });
+}
 
 test('an observation admitted across document replacement is cancelled before registration', async () => {
   const registry = new RuntimeHostSessionObservationRegistry();

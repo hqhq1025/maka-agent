@@ -19,29 +19,23 @@
 
 import { buildComputerUseTools, type ComputerUseToolSet } from '@maka/runtime/computer-use-tools';
 import { type CuOverlayHook, type CuDispatchBackend } from '@maka/runtime/computer-use-types';
-import { createMakaCuBackend } from './maka-cu-backend.js';
-import type { MakaCuBackendOptions } from './maka-cu-backend.js';
-import type { MakaCuServiceSnapshot } from './maka-cu-service.js';
+import {
+  createCuaDriverBackend,
+  type CuaDriverBackendOptions,
+  type CuaDriverState,
+} from './cua-driver-backend.js';
 
-/**
- * One executor.
- *
- * This was a two-member set while cua-driver was being replaced, and the
- * selector took an overload per member. Keeping the id now that the second
- * executor is gone is not ceremony: `backendId` is what the capability snapshot
- * reports and what `'none'` is distinguished from, so it stays a named value
- * rather than becoming a boolean nobody can read.
- */
-export const CU_BACKEND_IDS = ['maka-cu'] as const;
+/** Desktop capability identity for the sole native executor. */
+export const CU_BACKEND_IDS = ['cua-driver'] as const;
 export type CuBackendId = (typeof CU_BACKEND_IDS)[number];
 
-export const DEFAULT_CU_BACKEND_ID: CuBackendId = 'maka-cu';
+export const DEFAULT_CU_BACKEND_ID: CuBackendId = 'cua-driver';
 
 type DisposableBackend = CuDispatchBackend & {
   clearSession?: (sessionId: string) => void;
-  dispose?: () => void;
-  /** maka-cu supervises one child, not a role pair, so it reports its own shape. */
-  executorState?: () => MakaCuServiceSnapshot;
+  dispose?: () => void | Promise<void>;
+  /** Loading/health belongs to the Desktop-owned native runtime. */
+  executorState?: () => CuaDriverState;
 };
 
 export interface SelectedComputerUseBackend {
@@ -74,39 +68,41 @@ const NONE: SelectedComputerUseBackend = {
   backendId: 'none',
 };
 
-export interface MakaCuSelection {
+export interface CuaDriverSelection {
   /** Omitted means the default; see `DEFAULT_CU_BACKEND_ID`. */
-  backendId?: 'maka-cu';
-  binaryPath?: string;
-  expectedBinarySha256?: string;
+  backendId?: 'cua-driver';
+  requestAccessibilityPermission?: CuaDriverBackendOptions['requestAccessibilityPermission'];
+  presentationTargetIdentity?: CuaDriverBackendOptions['presentationTargetIdentity'];
+  listOwnedWindows?: CuaDriverBackendOptions['listOwnedWindows'];
   compressFrame?: (
     base64: string,
     mimeType: string,
   ) => { base64: string; mimeType: 'image/png' | 'image/jpeg' };
   physicalInputRecentlyActive?: () => boolean | Promise<boolean>;
+  foregroundAuthorized?: CuaDriverBackendOptions['foregroundAuthorized'];
   /**
-   * Whether the machine is locked. Handed to the tool layer rather than to the
-   * driver, because the refusal is a session-state decision (see
-   * `buildComputerUseTools`) and the driver has no session state to latch it in.
+   * Checked by the tool layer and again by the adapter before native dispatch.
    */
   screenLocked?: (context: { sessionId: string }) => boolean | Promise<boolean>;
   overlay?: CuOverlayHook;
-  onTrace?: MakaCuBackendOptions['onTrace'];
-  createBackend?: (options: MakaCuBackendOptions) => DisposableBackend;
+  onTrace?: CuaDriverBackendOptions['onTrace'];
+  createBackend?: (options: CuaDriverBackendOptions) => DisposableBackend;
 }
 
-export type ComputerUseBackendSelection = MakaCuSelection;
+export type ComputerUseBackendSelection = CuaDriverSelection;
 
-export function selectComputerUseBackend(deps?: MakaCuSelection): SelectedComputerUseBackend {
-  if (process.platform !== 'darwin') return NONE;
-  if (!deps?.binaryPath || !deps.expectedBinarySha256) return NONE;
-  const binaryPath = deps.binaryPath;
-  const expectedBinarySha256 = deps.expectedBinarySha256;
+export function selectComputerUseBackend(
+  deps: CuaDriverSelection = {},
+): SelectedComputerUseBackend {
+  if (!['darwin', 'win32', 'linux'].includes(process.platform)) return NONE;
   try {
     let tools: ComputerUseToolSet | undefined;
-    const backend = (deps.createBackend ?? createMakaCuBackend)({
-      binaryPath,
-      expectedBinarySha256,
+    const backend = (deps.createBackend ?? createCuaDriverBackend)({
+      requestAccessibilityPermission: deps.requestAccessibilityPermission,
+      presentationTargetIdentity: deps.presentationTargetIdentity,
+      listOwnedWindows: deps.listOwnedWindows,
+      screenLocked: deps.screenLocked,
+      foregroundAuthorized: deps.foregroundAuthorized,
       ...(deps.compressFrame ? { compressFrame: deps.compressFrame } : {}),
       ...(deps.physicalInputRecentlyActive
         ? { physicalInputRecentlyActive: deps.physicalInputRecentlyActive }
@@ -118,6 +114,7 @@ export function selectComputerUseBackend(deps?: MakaCuSelection): SelectedComput
     });
     tools = buildComputerUseTools({
       backend,
+      foregroundAuthorized: deps.foregroundAuthorized,
       ...(deps.overlay ? { overlay: deps.overlay } : {}),
       ...(deps.screenLocked ? { screenLocked: deps.screenLocked } : {}),
     });

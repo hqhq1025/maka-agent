@@ -1,0 +1,113 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+name: Cua Driver platform integration
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+  pull_request:
+    paths:
+      - 'packages/computer-use/**'
+      - 'packages/core/src/computer-use*'
+      - 'packages/runtime/src/computer-use*'
+      - 'scripts/cua-driver-spike/**'
+      - 'scripts/build-cua-driver*'
+      - 'patches/cua-driver/**'
+      - 'package.json'
+      - 'package-lock.json'
+      - '.github/workflows/cua-driver-platform.yml'
+permissions:
+  contents: read
+jobs:
+  native-patches:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-15, windows-2025]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24.18.1
+          cache: npm
+      - run: npm ci --ignore-scripts --no-audit --no-fund
+      - run: rustup toolchain install 1.97.1 --profile minimal
+      - run: npm run build:cua-driver
+      - name: Restore native patches after a clean reinstall
+        run: |
+          npm ci --ignore-scripts --no-audit --no-fund
+          npm run build:cua-driver
+  builder-boundaries:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24.18.1
+      - run: node --test scripts/build-cua-driver.test.mjs
+  native-fixture:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, windows-2025]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24.18.1
+          cache: npm
+      - run: npm ci --ignore-scripts --no-audit --no-fund
+      - run: node scripts/apply-dependency-patches.mjs
+      - name: Build the production Computer Use tool
+        shell: bash
+        run: |
+          npm --workspace @maka/core run build
+          npm --workspace @maka/storage run build
+          npm --workspace @maka/mcp run build
+          npm --workspace @maka/runtime run build
+          npm --workspace @maka/computer-use run build
+          node scripts/cua-driver-spike/prepare-platform.mjs
+      - name: Test adapter boundaries
+        run: npm --workspace @maka/computer-use run test:dist
+      - name: Install isolated Linux desktop
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y xvfb openbox python3-gi gir1.2-gtk-3.0 at-spi2-core dbus-x11
+      - name: Verify Linux native effects
+        if: runner.os == 'Linux'
+        run: dbus-run-session -- xvfb-run -a sh -c 'export NO_AT_BRIDGE=0 GTK_MODULES=gail:atk-bridge; openbox >/dev/null 2>&1 & node scripts/cua-driver-spike/platform-smoke.mjs'
+      - name: Verify Windows native effects
+        if: runner.os == 'Windows'
+        run: node scripts/cua-driver-spike/platform-smoke.mjs
+      - name: Keep native verification report
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: cua-driver-${{ matrix.os }}
+          path: scripts/cua-driver-spike/results/platform-*.json
+          if-no-files-found: warn

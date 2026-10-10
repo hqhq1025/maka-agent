@@ -24,6 +24,7 @@ export {
   type ClientCapabilitySnapshot,
 } from '../server/client-capability-coordinator.js';
 export { RuntimePolicyActivationGate } from '../server/runtime-policy-activation-gate.js';
+export { ClientCapabilityChannel } from '../client/client-capability-channel.js';
 
 export function clientCapabilityCoordinatorTestAdmission() {
   return {

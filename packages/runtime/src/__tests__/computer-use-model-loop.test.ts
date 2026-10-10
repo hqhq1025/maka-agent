@@ -88,7 +88,7 @@ describe('AiSdkBackend Computer Use model loop', () => {
       );
 
       const serialized = JSON.stringify(declaredTools);
-      assert.match(serialized, /maka_computer/);
+      assert.match(serialized, /computer/);
     }
   });
 
@@ -181,17 +181,17 @@ describe('AiSdkBackend Computer Use model loop', () => {
     assert.equal(textComplete?.type === 'text_complete' ? textComplete.text : undefined, 'done');
     assert.deepEqual(
       messages.filter((message) => message.type === 'tool_call').map((message) => message.toolName),
-      ['maka_computer', 'maka_computer', 'maka_computer'],
+      ['computer', 'computer', 'computer'],
     );
     assert.equal(telemetry.length, 3);
     assert.equal(
-      telemetry.every((record) => record.toolName === 'maka_computer'),
+      telemetry.every((record) => record.toolName === 'computer'),
       true,
     );
     assert.match(JSON.stringify(modelPrompts[2]), /CUA Lab Set Value Field/);
     assert.match(JSON.stringify(modelPrompts[3]), /model-written/);
     assert.equal(
-      (modelTools[0] as Array<{ name?: string }>).some((tool) => tool.name === 'maka_computer'),
+      (modelTools[0] as Array<{ name?: string }>).some((tool) => tool.name === 'computer'),
       true,
     );
   });
@@ -373,7 +373,7 @@ function toolCall(id: string, args: Record<string, unknown>): LanguageModelV4Str
     {
       type: 'tool-call',
       toolCallId: id,
-      toolName: 'maka_computer',
+      toolName: 'computer',
       input: JSON.stringify(args),
     },
     {

@@ -20,6 +20,7 @@
 import { resolveDesktopWslHostHandoff } from './runtime-host-wsl-handoff.js';
 import {
   app,
+  BrowserWindow as ElectronBrowserWindow,
   autoUpdater as nativeAutoUpdater,
   type BrowserWindow,
   clipboard,
@@ -31,6 +32,7 @@ import {
   powerSaveBlocker,
   protocol,
   shell,
+  systemPreferences,
   Tray,
 } from "electron";
 import { randomUUID } from "node:crypto";
@@ -122,8 +124,11 @@ import {
 } from "./browser-message-box.js";
 import { createE2eFixtureBotOnboardingAdapters } from "./bot-onboarding-e2e-fixture.js";
 import { computerUseServiceHealth } from "./computer-use-host.js";
+import { registerComputerUsePresentationIpc } from "./computer-use/presentation-ipc-main.js";
+import { registerComputerUsePreviewIpc } from './computer-use/window-preview-ipc.js';
 import { registerDesktopDiagnosticsIpc } from "./desktop-diagnostics-ipc-main.js";
 import { assembleDesktopNativeCapabilities } from "./desktop-native-capability-assembly.js";
+import { createComputerUseForegroundPolicyAuthority } from './computer-use/foreground-admission.js';
 import { clientSettingsConfirmation } from "./client-settings-confirmation-copy.js";
 import { nativeFileDialogCopy } from "./native-file-dialog-copy.js";
 import { buildRiveWorkflowTool } from "./rive-workflow-tool.js";
@@ -264,7 +269,6 @@ import {
   type SettingsBotsIpcHandle,
 } from "./settings-bots-ipc-main.js";
 import {
-  isComputerUseRealModelE2e,
   isE2e,
   isIsolatedE2e,
   revealMode,
@@ -409,26 +413,28 @@ const localRuntimeHostRemoteAccess = createDesktopLocalRuntimeHostRemoteAccess({
     runtimeHostSetupPackage.resolveForThisDesktop(signal),
   operator: localRuntimeHostOperator,
 });
+const computerUseForegroundPolicy = createComputerUseForegroundPolicyAuthority(
+  async () => (await settingsStore.get()).computerUse.foregroundPolicy,
+);
 const native = assembleDesktopNativeCapabilities({
-  isComputerUseRealModelE2e,
   revealMode,
   locale: desktopLocale,
   keepSystemAwake,
-  mainWindow: mainWindowController,
+  isComputerUseSessionActive: (sessionId) => runtimeHostManager?.ownsScope(parseDesktopSessionResourceKey(sessionId)) === true,
 });
 const riveWorkflowTool = buildRiveWorkflowTool();
 const completeDesktopInteractionTurn = (sessionId: string): void => {
   workHubControl.complete(sessionId);
+  native.computerUsePresentation.complete(sessionId);
   native.computerUseOverlay.clearForSession(sessionId);
-  native.computerUsePip.complete(sessionId);
   native.computerUseStatusItem.clearForSession(sessionId);
   native.computerUseScreenLock.clearForSession(sessionId);
   native.computerUseTools.clearSession(sessionId);
 };
 const releaseDesktopInteractionSession = (sessionId: string): void => {
   workHubControl.complete(sessionId);
+  native.computerUsePresentation.release(sessionId);
   native.computerUseOverlay.clearForSession(sessionId);
-  native.computerUsePip.clearForSession(sessionId);
   native.computerUseStatusItem.clearForSession(sessionId);
   native.computerUseScreenLock.clearForSession(sessionId);
   native.computerUseTools.clearSession(sessionId);
@@ -439,7 +445,6 @@ const permissionOverlay = createPermissionOverlayMain({
 });
 mainWindowDelegates.onMainWindowClose = () => {
   native.computerUseOverlay.destroyAll();
-  native.computerUsePip.destroyAll();
 };
 const attachmentApprovals = createAttachmentApprovalRegistry();
 const sessionLocalStore = new DesktopSessionLocalStore(join(userDataDir, 'session-experience.sqlite'));
@@ -855,6 +860,7 @@ const clientSettingsEffects = createClientSettingsEffects({
   },
   systemPrefersDark: () => nativeTheme.shouldUseDarkColors,
   observeLocale: (settings) => desktopLocale.observe(settings),
+  observeComputerUseForegroundPolicy: (policy) => computerUseForegroundPolicy.observe(policy),
   emitExternalChanged: () => {
     const emitted = safeSendToRenderer("settings:clientChanged");
     sendActiveRuntimeHostEvent("settings:externalChanged", { ts: Date.now() });
@@ -1044,6 +1050,7 @@ const createLocalRuntimeHostManager = () => createRuntimeHostDesktopManager(
       },
       releaseBrowserSession,
       computerUseTools: native.computerUseTools,
+      computerUseForegroundPolicy,
       additionalGroups: (scope) => {
         const mcpTools = buildMcpToolsWithIdentities(mcpManager);
         const mcpServers = new Map<string, typeof mcpTools>();
@@ -1206,6 +1213,7 @@ const createLocalRuntimeHostManager = () => createRuntimeHostDesktopManager(
           );
       }
       if (state.readiness === "unavailable") {
+        native.computerUsePresentation.retire({ hostId: state.hostId, targetEpoch: state.epoch });
         void browserIpc.retireTarget({
           hostId: state.hostId,
           targetEpoch: state.epoch,
@@ -1233,6 +1241,7 @@ const createLocalRuntimeHostManager = () => createRuntimeHostDesktopManager(
       }
     },
     onTargetRemoved: (state) => {
+      native.computerUsePresentation.retire({ hostId: state.hostId, targetEpoch: state.epoch });
       const localTarget = localSessionTarget(state);
       if (localTarget) sessionLocal.purge(localTarget);
       mainWindowController.send("runtime-host-profiles:changed", {
@@ -1432,14 +1441,57 @@ void runtimeHostBootReady.then(async () => {
 }).catch((error: unknown) =>
   console.error("[runtime-host] background startup failed:", error),
 );
-const stopComputerUseSession = (sessionId: string): void => {
+const stopComputerUseSession = async (sessionId: string): Promise<void> => {
   const ref = parseDesktopSessionResourceKey(sessionId);
-  void runtimeHostManager
-    ?.stopSession(ref)
-    .catch((error) => console.error("[runtime-host] stop failed:", error));
+  native.computerUsePresentation.stopping(sessionId);
+  native.computerUseOverlay.clearForSession(sessionId);
+  await runtimeHostManager?.stopSession(ref);
 };
-native.computerUsePip.setStopHandler(stopComputerUseSession);
-native.computerUseStatusItem.setStopHandler(stopComputerUseSession);
+const stopComputerUseFromNative = (sessionId: string): void => {
+  void stopComputerUseSession(sessionId).catch((error) => console.error("[runtime-host] stop failed:", error));
+};
+native.computerUseStatusItem.setStopHandler(stopComputerUseFromNative);
+const computerUsePresentationIpc = registerComputerUsePresentationIpc({
+  ipcMain,
+  feed: native.computerUsePresentation,
+  ownsRenderer: (contents) => mainWindowController.isMainRenderer(contents) || auxiliaryWindowRegistry.rendererParent(contents) !== undefined,
+  isHostActive: (scope) => runtimeHostManager?.ownsScope(scope) === true,
+  stop: stopComputerUseSession,
+});
+const computerUsePreviewIpc = registerComputerUsePreviewIpc({
+  ipcMain,
+  parent: (contents) => {
+    if (contents.isDestroyed()) return undefined;
+    if (mainWindowController.isMainRenderer(contents)) {
+      return ElectronBrowserWindow.fromWebContents(contents)?.contentView;
+    }
+    return auxiliaryWindowRegistry.rendererParent(contents);
+  },
+  visible: (contents) => {
+    const parent = mainWindowController.isMainRenderer(contents)
+      ? ElectronBrowserWindow.fromWebContents(contents)?.contentView
+      : auxiliaryWindowRegistry.rendererParent(contents);
+    const window = ElectronBrowserWindow.fromWebContents(contents);
+    return !!parent?.getVisible() && !!window && !window.isDestroyed()
+      && window.isVisible() && !window.isMinimized();
+  },
+  isHostActive: (scope) => runtimeHostManager?.ownsScope(scope) === true,
+  target: (key) => native.computerUsePresentation.previewTarget(key),
+  subscribeTarget: (key, listener) => native.computerUsePresentation.subscribePreviewTarget(key, listener),
+  validateTarget: (target) => native.computerUseWindowIdentity.validate(target.leaseId, target.pid, target.windowId),
+  permissionDenied: () => {
+    if (process.platform !== 'darwin') return false;
+    if (!systemPreferences.isTrustedAccessibilityClient(false)) return true;
+    const recording = systemPreferences.getMediaAccessStatus('screen');
+    return recording === 'denied' || recording === 'restricted';
+  },
+  startNativeCapture: (target, listener) => native.computerUseWindowIdentity.startCapture(target, listener),
+  locked: () => native.computerUseScreenLock.locked(),
+  subscribeLock: (listener) => {
+    powerMonitor.on('lock-screen', listener);
+    return () => powerMonitor.off('lock-screen', listener);
+  },
+});
 
 updateService.start();
 void ensureMcpReady()
@@ -2065,7 +2117,6 @@ function wireLifecycle(): void {
   });
   app.on("window-all-closed", () => {
     native.computerUseOverlay.destroyAll();
-    native.computerUsePip.destroyAll();
     if (process.platform !== "darwin" && !windowsAppTray.hasTray() && !isBrowserMessageBoxPresentationActive()) app.quit();
   });
   // macOS `quitAndInstall` closes every window and then waits, silently, for
@@ -2105,6 +2156,9 @@ function closeRuntimeHostDesktop(): Promise<void> {
 }
 
 async function disposeRuntimeHostDesktop(): Promise<void> {
+  computerUsePreviewIpc.dispose();
+  computerUsePresentationIpc.dispose();
+  native.computerUsePresentation.dispose();
   sessionLocal.close();
   powerMonitor.off("resume", wakePeerRecoveryAfterResume);
   clientSettingsWatcher.stop();
@@ -2145,7 +2199,6 @@ async function disposeRuntimeHostDesktop(): Promise<void> {
     mcpManager.close(),
     mainWindowController.disposeBrowserViews(),
     Promise.resolve().then(() => native.computerUseOverlay.destroyAll()),
-    Promise.resolve().then(() => native.computerUsePip.destroyAll()),
     Promise.resolve().then(() => native.computerUseStatusItem.destroy()),
     Promise.resolve().then(() => native.computerUseScreenLock.dispose()),
     Promise.resolve().then(() => native.computerUse.backend?.dispose?.()),

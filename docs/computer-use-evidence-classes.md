@@ -6,7 +6,7 @@ source_language: en
 implementation_status: current
 document_status: current
 translation_status: source-only
-last_verified: 2026-09-11
+last_verified: 2026-10-07
 owners:
   - maka-backend
 ---
@@ -57,8 +57,8 @@ state alone.
 
 The live provider and production Runtime ran, but the named failure was
 injected by a wrapper rather than observed from the real host boundary.
-`intervention-recovery` currently belongs here because the wrapper injects
-`user_intervened` before the backend and HID-age guard run.
+For example, injecting `user_intervened` before native dispatch tests recovery
+from that signal; it does not establish that the host detects physical input.
 
 Fault-injection reports are useful regression evidence but cannot satisfy a
 `real-runtime` provider qualification cell.
@@ -71,35 +71,34 @@ state. No live provider credential or network model execution is claimed.
 
 ## static-contract
 
-Source, schema, or deterministic harness checks only. The superseded direct
-real-machine qualification runner was removed. The five-round process-restart
-runner remains as a non-qualifying soak after its qualification checks moved
-into the canonical Runtime-backed harness.
+Source, schema, or deterministic harness checks only. Mocked Driver outcomes
+can establish Maka's adapter behavior, but cannot establish native delivery,
+platform permissions, or an application's business effect.
 
-### Lab fixture setup
+## Current SDK integration evidence
 
-The `real-ax` and `restart-soak` commands require a local checkout of the
-[Codex Computer Use Lab](https://github.com/hqhq1025/codex-computer-use-lab).
-Clone it outside this repository and export its absolute repository root:
+The executor is the official Cua Driver 0.34.0 SDK on macOS, Windows and Linux.
+The owned native fixture entry points are documented in
+[`scripts/cua-driver-spike/README.md`](../scripts/cua-driver-spike/README.md).
+They exercise the production selector and `computer` implementation with
+real Driver input and independently read the fixture's state. They do not call
+a live provider model, so they cannot qualify as `real-runtime` provider runs.
 
-```bash
-git clone https://github.com/hqhq1025/codex-computer-use-lab.git ../codex-computer-use-lab
-export MAKA_CU_AX_MODEL_LAB_ROOT="$(cd ../codex-computer-use-lab && pwd)"
-```
+The composed Host text-admission fixture additionally exercises real grants,
+SQLite interaction storage and native foreground input. Its in-memory transport
+and tool-commit stand-ins do not establish Composer, socket or durable tool-event
+logging behavior; it remains native integration evidence without a live model.
 
-The path must contain `test-app/launch.sh`. The launchers invoke that script,
-which builds the fixture when its application bundle is absent.
+These checks are native integration evidence alongside the four provider
+evidence classes. Report the exact OS, architecture, display server, toolkit,
+Driver release, actual route/delivery/effect and independent state oracle.
+Passing on one platform or toolkit does not qualify another. Before/after
+focus samples do not prove the absence of transient foreground activation.
 
-With the variable exported, run the canonical operator commands:
+The legacy standalone-executor scenario runners and launchers have been removed.
+Their archived results remain historical; they cannot qualify the SDK backend.
+There is currently no replacement live-provider qualification launcher. A new
+launcher must satisfy [the provider evidence contract](./computer-use-provider-evidence.md)
+before claiming a provider matrix pass.
 
-```bash
-npm run computer-use -- real-ax
-npm run computer-use -- real-ax --scenario restart-recovery
-npm run computer-use -- real-model
-```
-
-The non-qualifying five-round restart soak uses the same fixture checkout:
-
-```bash
-npm run computer-use -- restart-soak
-```
+Use `npm run computer-use -- help` for the current validation entry points.

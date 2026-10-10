@@ -61,6 +61,7 @@ export interface CursorCancelInput {
 
 export interface OverlayCursorSink {
   ensure(sessionId: string): void;
+  clearForSession?(sessionId: string): void;
   move(input: CursorMoveInput): CuPresentationFence | void;
   complete(input: CursorCompleteInput): void;
   cancel(input: CursorCancelInput): void;
@@ -74,8 +75,12 @@ const RESOLVED_PRESENTATION_FENCE: CuPresentationFence = {
 function kindOf(action: CuPresentationAction): CursorActionKind | undefined {
   switch (action.type) {
     case 'click_element':
+    case 'double_click_element':
     case 'select_text':
     case 'secondary_action':
+    case 'set_value':
+    case 'type':
+    case 'press_key':
       return 'click';
     case 'scroll_element':
       return 'scroll';
@@ -112,8 +117,10 @@ export function createComputerUseOverlayHook(controller: OverlayCursorSink): CuO
     onActionBegin(action, context) {
       const kind = kindOf(action);
       const screenPoint = context.presentationScreenPoint;
-      if (!kind || !screenPoint) {
-        controller.ensure(context.sessionId);
+      if (context.presentationVisibility === 'unavailable' || !kind || !screenPoint) {
+        // Creating an empty canvas leaves its cursor outside the viewport;
+        // retaining the preceding target would imply this action drove it.
+        controller.clearForSession?.(context.sessionId);
         return RESOLVED_PRESENTATION_FENCE;
       }
       return controller.move({
@@ -122,15 +129,19 @@ export function createComputerUseOverlayHook(controller: OverlayCursorSink): CuO
         screenX: screenPoint.x,
         screenY: screenPoint.y,
         kind,
-        instant: true,
         keepElevated: keepElevated(context),
         ...(context.targetWindowId !== undefined ? { targetWindowId: context.targetWindowId } : {}),
       });
     },
     onActionEnd(action, result, context) {
+      if (result?.observation?.presentationVisibility === 'unavailable') {
+        controller.clearForSession?.(context.sessionId);
+        return;
+      }
       const kind = kindOf(action);
       if (!kind) return;
-      if (!result?.outcome.ok) {
+      const outcome = result?.outcome;
+      if (!outcome || (!outcome.ok && outcome.error !== 'outcome_unknown')) {
         controller.cancel({
           actionId: context.toolCallId,
           sessionId: context.sessionId,
@@ -138,7 +149,7 @@ export function createComputerUseOverlayHook(controller: OverlayCursorSink): CuO
         return;
       }
       const screenPoint = context.presentationScreenPoint;
-      if (!screenPoint) {
+      if (context.presentationVisibility === 'unavailable' || !screenPoint) {
         controller.cancel({
           actionId: context.toolCallId,
           sessionId: context.sessionId,
@@ -151,7 +162,12 @@ export function createComputerUseOverlayHook(controller: OverlayCursorSink): CuO
         screenX: screenPoint.x,
         screenY: screenPoint.y,
         kind,
-        pulse: kind === 'click',
+        // A target marker shows intent; only a confirmed pointer action shows a press.
+        pulse:
+          (action.type === 'click_element' || action.type === 'double_click_element') &&
+          outcome.ok &&
+          outcome.verified === true &&
+          (!outcome.evidence?.effect || outcome.evidence.effect === 'confirmed'),
         // `complete` raises the cursor for the landing, so it has to know
         // where to come back down to.
         ...(context.targetWindowId !== undefined ? { targetWindowId: context.targetWindowId } : {}),

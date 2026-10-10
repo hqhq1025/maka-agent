@@ -265,6 +265,11 @@ export interface SideChatSessionPort {
     sessionId: string,
     response: ClientCapabilityResponse,
   ): Promise<void>;
+  respondToInteractionByText(
+    sessionId: string,
+    response: { readonly requestId: string; readonly text: string },
+  ): Promise<{ readonly kind: 'answered'; readonly decision: 'allow' | 'deny' }
+    | { readonly kind: 'unrecognized' | 'unavailable' }>;
   respondToUserQuestion(
     sessionId: string,
     response: UserQuestionResponse,
@@ -285,6 +290,12 @@ export interface SideChatSessionPort {
 }
 
 export interface WorkbarServices {
+  readonly computerUsePreview?: import('../../../shared/computer-use-preview.js').ComputerUsePreviewBridge;
+  readonly computerUse?: {
+    read(sessionId: string): Promise<import('../../../shared/computer-use-presentation.js').ComputerUsePresentation | null>;
+    subscribe(sessionId: string, handler: (state: import('../../../shared/computer-use-presentation.js').ComputerUsePresentation | null) => void): WorkbarUnsubscribe;
+    stop(sessionId: string): Promise<void>;
+  };
   popupMenu(input: import('../../../shared/native-menu.js').NativeMenuRequest): Promise<string | null>;
   readonly review: WorkbarReviewService;
   /**

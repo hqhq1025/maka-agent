@@ -3623,7 +3623,7 @@ function validateMainWindowEntryContract(desktopRoot, violations) {
     'src/main/browser-message-box.ts',
     'src/main/browser/controller.ts',
     'src/main/computer-use/cursor-overlay-window.ts',
-    'src/main/computer-use/pip-electron.ts',
+    'src/main/computer-use/window-preview-surface.ts',
     MAIN_RENDERER_LOADER_SOURCE,
     'src/main/permission-overlay/permission-overlay-main.ts',
   ]);

@@ -25,44 +25,16 @@ export {
 export type {
   ComputerUseBackendSelection,
   CuBackendId,
-  MakaCuSelection,
+  CuaDriverSelection,
   SelectedComputerUseBackend,
 } from './select-backend.js';
 
-export { createMakaCuBackend } from './maka-cu-backend.js';
-export type { MakaCuBackendOptions, MakaCuTraceEvent } from './maka-cu-backend.js';
-export {
-  MakaCuLifecycleError,
-  MakaCuRpcError,
-  MakaCuService,
-  isMakaCuLifecycleError,
-} from './maka-cu-service.js';
+export { createCuaDriverBackend, CUA_DRIVER_VERSION } from './cua-driver-backend.js';
 export type {
-  MakaCuCapabilities,
-  MakaCuHandshake,
-  MakaCuLimits,
-  MakaCuReleaseEvent,
-  MakaCuServiceOptions,
-  MakaCuServiceSnapshot,
-} from './maka-cu-service.js';
-export {
-  MAKA_CU_PROTOCOL_VERSION,
-  MAKA_CU_RPC_ERROR,
-  MakaCuProtocolViolation,
-  mapMakaCuDomainError,
-  readDispatchResult,
-  readEnvelope,
-  readSnapshot,
-} from './maka-cu-protocol.js';
-export type {
-  MakaCuDispatchResult,
-  MakaCuDomainError,
-  MakaCuElement,
-  MakaCuEnvelope,
-  MakaCuSnapshot,
-} from './maka-cu-protocol.js';
-export { decodeJsonLines } from './stdio-json-rpc.js';
-export type { HostLifecycleErrorCode, HostRequestStage } from './stdio-json-rpc.js';
+  CuaDriverBackendOptions,
+  CuaDriverState,
+  CuaDriverPort,
+} from './cua-driver-backend.js';
 
 export { resolveCuaDisplaySnapshots } from './display-snapshot.js';
 export type { CuaHostDisplay } from './display-snapshot.js';

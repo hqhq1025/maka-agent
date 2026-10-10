@@ -281,6 +281,7 @@ test('drives the renderer Session catalog facade through real UDS framing', asyn
       ipcMain: ipc,
       workspaceRoot: base,
       mainWindowController: {
+        isMainRenderer: () => true,
         showSaveDialog: async () => ({ canceled: true }),
         showOpenDialog: async () => ({ canceled: true, filePaths: [] }),
       },
@@ -462,6 +463,7 @@ test('drives the renderer Session execution facade through real UDS framing', as
       {
         client,
         observer,
+        authorizeTextResponse: () => true,
         attachmentApprovals: createAttachmentApprovalRegistry(),
         emitSessionsChanged() {},
         stat: async () => ({ size: 0 }),

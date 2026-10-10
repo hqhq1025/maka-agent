@@ -20,6 +20,10 @@
 import type { WorkbarServices } from './ports.js';
 
 export { WorkbarServicesProvider } from './services-context.js';
+export { useComputerUsePresentation } from './tools/computer/use-computer-use-presentation.js';
+export { useComputerUsePreview } from './tools/computer/use-computer-use-preview.js';
+export { ComputerUsePanelView } from './tools/computer/computer-use-panel.js';
+export { ComputerUseStatusView } from './tools/computer/computer-use-status.js';
 export { BrowserPanel } from './tools/browser/browser-panel.js';
 export type {
   WorkbarServices,
@@ -175,6 +179,7 @@ export function createFakeWorkbarServices(
       },
       respondToSandboxBoundary: async () => undefined,
       respondToClientCapability: async () => undefined,
+      respondToInteractionByText: async () => ({ kind: 'unavailable' }),
       respondToUserQuestion: async () => undefined,
       respondToUserForm: async () => undefined,
       subscribeEvents: (_sessionId, _handler, onSeeded) => {

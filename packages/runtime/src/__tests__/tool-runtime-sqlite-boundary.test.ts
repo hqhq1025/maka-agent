@@ -131,7 +131,7 @@ describe('ToolRuntime with real SQLite boundary', () => {
               {
                 descriptor: {
                   serverId: 'desktop_computer_use',
-                  name: 'maka_computer',
+                  name: 'computer',
                   description: 'Client-owned Computer Use',
                   inputSchema: {
                     type: 'object',

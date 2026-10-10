@@ -259,9 +259,83 @@ export class SkillCatalogRepository {
   async recover(): Promise<void> {
     try {
       await this.#transactions.recover();
+      await this.#refreshBundledComputerSkill();
     } catch (error) {
       throw mapPersistenceError(error);
     }
+  }
+
+  async #refreshBundledComputerSkill(): Promise<void> {
+    const source = getBundledSkillSource('computer-use');
+    if (!source) return;
+    const current = await this.#runWithRoot(async (rootInput) => {
+      const root = await canonicalDataRoot(rootInput);
+      let manifest: SkillDeletionManifest;
+      try {
+        manifest = await snapshotWorkspaceSkillTree(root, source.id);
+      } catch {
+        return null;
+      }
+      const names = Object.keys(manifest).sort();
+      const hasBaseline = Object.hasOwn(manifest, BASELINE_FILE);
+      const expectedNames = hasBaseline
+        ? [SKILL_FILE, LOCK_FILE, BASELINE_FILE, '.maka/', '.maka/baseline/']
+        : [SKILL_FILE, LOCK_FILE];
+      if (names.join('\n') !== expectedNames.sort().join('\n')) return null;
+      const directory = join(root, 'skills', source.id);
+      const [skill, lock, baseline] = await Promise.all([
+        readContainedArtifact(root, join(directory, SKILL_FILE)),
+        readContainedArtifact(root, join(directory, LOCK_FILE)),
+        hasBaseline ? readContainedArtifact(root, join(directory, BASELINE_FILE)) : undefined,
+      ]);
+      if (
+        skill.status !== 'available' ||
+        lock.status !== 'available' ||
+        (hasBaseline && baseline?.status !== 'available') ||
+        skill.sha256 === source.contentSha256
+      ) {
+        return null;
+      }
+      return {
+        skillSha256: skill.sha256,
+        baselineSha256: baseline?.status === 'available' ? baseline.sha256 : undefined,
+        artifacts: {
+          skill: skill.content,
+          lock: lock.content,
+          ...(baseline?.status === 'available' ? { baseline: baseline.content } : {}),
+        },
+      };
+    });
+    if (!current) return;
+    let lock: unknown;
+    try {
+      lock = JSON.parse(String(current.artifacts.lock));
+    } catch {
+      return;
+    }
+    const governance = validateSkillLock({
+      lock,
+      skillId: source.id,
+      currentContentSha256: current.skillSha256,
+    });
+    if (
+      governance.sourceType !== 'bundled' ||
+      governance.validationStatus !== 'ok' ||
+      governance.userModified ||
+      (current.baselineSha256 !== undefined && current.baselineSha256 !== governance.contentSha256)
+    ) {
+      return;
+    }
+    // The exact owned legacy directory is refreshed before model discovery.
+    // The existing replacement transaction compares every expected artifact,
+    // so a concurrent local edit cannot be overwritten by this rename migration.
+    requireProjectableSkillContent(source.body);
+    await this.#transactions.replaceManagedSkill(
+      source.id,
+      current.artifacts,
+      bundledArtifacts(source, governance.installedAt),
+      'bundled-computer-refresh',
+    );
   }
 
   async query(
@@ -1652,10 +1726,13 @@ function hashBytes(content: Uint8Array): string {
   return `sha256:${createHash('sha256').update(content).digest('hex')}`;
 }
 
-function bundledArtifacts(source: BundledSkillSource): ManagedSkillTransactionArtifacts {
+function bundledArtifacts(
+  source: BundledSkillSource,
+  installedAt?: string,
+): ManagedSkillTransactionArtifacts {
   return {
     skill: source.body,
-    lock: `${JSON.stringify(createBundledSkillLock(source), null, 2)}\n`,
+    lock: `${JSON.stringify(createBundledSkillLock(source, installedAt), null, 2)}\n`,
     baseline: source.body,
   };
 }

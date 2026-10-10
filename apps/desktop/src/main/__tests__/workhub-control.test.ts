@@ -28,6 +28,9 @@ import { WorkHubUi } from "../workhub-ui.js";
 import type { DesktopRuntimeHostClient } from "../runtime-host-client.js";
 import { desktopSessionResourceKey } from "../../shared/runtime-host-identity.js";
 import type { MakaTool } from "@maka/runtime/tool-runtime";
+import type { ComputerUseToolSet } from "@maka/runtime/computer-use-tools";
+import { decodeClientCapabilityClientFrame } from "@maka/runtime-host/protocol";
+import { createDesktopNativeCapabilityProvider } from "../runtime-host-native-capabilities.js";
 
 const scope = { hostId: "host", targetEpoch: "epoch" };
 function harness(prepareWindow: () => Promise<void> = async () => {}) {
@@ -184,6 +187,62 @@ test("partial batches never replay input and the failure budget belongs to the r
   h.setTurn("new-turn");
   assert.equal((await act()).recoverable, true);
   assert.equal((await h.command("snapshot")).error, undefined, "a new turn does not inherit the previous terminal error");
+});
+
+test("WorkHub diagnostics survive native result forwarding at the wire error limit", async (t) => {
+  const h = harness();
+  t.after(() => h.control.close());
+  const observation = { controls: [], accessibility: "Fresh WorkHub observation" };
+  t.mock.method(WorkHubUi.prototype, "observe", async () => observation);
+  t.mock.method(WorkHubUi.prototype, "begin", async () => {});
+  let diagnostic = "控".repeat(128);
+  t.mock.method(WorkHubUi.prototype, "execute", async () => {
+    throw new Error(diagnostic);
+  });
+  const provider = createDesktopNativeCapabilityProvider({
+    browserTools: [],
+    resolveBrowserUrl: () => "",
+    releaseBrowserSession() {},
+    computerUseTools: [] as unknown as ComputerUseToolSet,
+    releaseDesktopInteractionSession() {},
+    additionalGroups: () => [h.control.group(scope)],
+  }, { targetScope: scope });
+  t.after(() => provider.close());
+  for (const expectedError of [diagnostic, "tool_failed"]) {
+    const result = await provider.call({
+      kind: "client.capability.call",
+      invocationId: "invocation",
+      registrationId: "registration",
+      offerId: "desktop_workhub",
+      serverId: "desktop_workhub",
+      toolName: "control",
+      arguments: { status: "Checking Maka", request: {
+        operation: "act", actions: [{ kind: "click", ref: "current" }],
+      } },
+      sessionId: WORKHUB_COORDINATION_SESSION_ID,
+      turnId: "turn",
+      toolCallId: "call",
+      cwd: "/tmp",
+    }, {
+      signal: new AbortController().signal,
+      accept: async () => {},
+      requestInteraction: async () => assert.fail("Unexpected interaction"),
+    });
+    const frame = decodeClientCapabilityClientFrame({
+      kind: "client.capability.result", invocationId: "invocation", result,
+    });
+    assert.equal(frame.kind, "client.capability.result");
+    if (frame.kind !== "client.capability.result") assert.fail("Expected result frame");
+    assert.equal(frame.result.error, expectedError);
+    const content = frame.result.content[0];
+    assert.equal(content?.type, "text");
+    if (content?.type !== "text") assert.fail("Expected model diagnostic");
+    const modelOutput = JSON.parse(content.text);
+    assert.equal(modelOutput.error, diagnostic);
+    assert.equal(modelOutput.recoverable, true);
+    assert.deepEqual(modelOutput.observation, observation);
+    diagnostic += "控";
+  }
 });
 
 test("takeover cancels waiting and interrupts the exact owning turn", async (t) => {

@@ -24,6 +24,7 @@ export type SessionWorkbarTabKind =
   | 'terminal'
   | 'work-board'
   | 'browser'
+  | 'computer'
   | 'files'
   | 'inspector'
   | 'side-chat';
@@ -121,6 +122,7 @@ const STATIC_TAB_IDS: Record<Exclude<SessionWorkbarTabKind, 'side-chat'>, string
   terminal: 'workbar:terminal',
   'work-board': 'workbar:work-board',
   browser: 'workbar:browser',
+  computer: 'workbar:computer',
   files: 'workbar:files',
   inspector: 'workbar:inspector',
 };
@@ -492,6 +494,7 @@ export function isSessionWorkbarTabKind(value: unknown): value is SessionWorkbar
     value === 'terminal' ||
     value === 'work-board' ||
     value === 'browser' ||
+    value === 'computer' ||
     value === 'files' ||
     value === 'inspector' ||
     value === 'side-chat'

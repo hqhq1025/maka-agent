@@ -544,6 +544,7 @@ export class CursorEngine {
   private moveDistance = 0;
   private opacity = 0;
   private fadingIn = false;
+  private fadingOut = false;
   private clickT: number | null = null;
   private clickPoint: [number, number] | null = null;
   private clickOnArrive = false;
@@ -596,6 +597,8 @@ export class CursorEngine {
   }
 
   moveTo(x: number, y: number, _endHeading?: number, clickOnArrive = false): void {
+    this.fadingOut = false;
+    if (this.opacity < 1) this.fadingIn = true;
     const destination: Point = [x, y];
     if (clickOnArrive) this.clickPoint = [x, y];
 
@@ -656,6 +659,7 @@ export class CursorEngine {
     this.moveDistance = 0;
     this.opacity = 1;
     this.fadingIn = false;
+    this.fadingOut = false;
     this.clickOnArrive = false;
     this.pressed = false;
     this.clickT = null;
@@ -679,6 +683,7 @@ export class CursorEngine {
     this.moveDistance = 0;
     this.opacity = 1;
     this.fadingIn = false;
+    this.fadingOut = false;
     this.clickT = null;
     this.clickPoint = null;
     this.clickOnArrive = false;
@@ -689,6 +694,7 @@ export class CursorEngine {
   isMoving(): boolean {
     return this.path !== null
       || this.fadingIn
+      || this.fadingOut
       || this.clickT !== null
       || !springSettled(this.stretchX)
       || !springSettled(this.stretchY)
@@ -697,6 +703,20 @@ export class CursorEngine {
 
   isVisible(): boolean {
     return this.pos[0] >= -100;
+  }
+
+  isAppearing(): boolean {
+    return this.fadingIn;
+  }
+
+  fadeOut(): void {
+    if (this.isVisible()) this.fadingOut = true;
+  }
+
+  hide(): void {
+    this.cancel();
+    this.pos = [SENTINEL, SENTINEL];
+    this.opacity = 0;
   }
 
   motionProgress(): number {
@@ -769,6 +789,10 @@ export class CursorEngine {
   }
 
   private step(dt: number): void {
+    if (this.fadingOut) {
+      this.opacity = Math.max(0, this.opacity - dt / 0.18);
+      if (this.opacity === 0) this.hide();
+    }
     if (this.fadingIn) {
       this.opacity = Math.min(1, this.opacity + dt / 0.16);
       if (this.opacity >= 1) this.fadingIn = false;

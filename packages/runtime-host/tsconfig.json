@@ -7,6 +7,6 @@
     "declarationMap": true,
     "composite": true
   },
-  "include": ["src"],
+  "include": ["src", "src/__tests__/fixtures/computer-use-previous-bundle.json"],
   "references": [{ "path": "../core" }, { "path": "../storage" }, { "path": "../runtime" }]
 }

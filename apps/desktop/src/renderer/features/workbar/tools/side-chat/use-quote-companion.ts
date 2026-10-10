@@ -19,9 +19,10 @@
 
 import { activeHostTurn, chatTurnActivity, type SessionExecutionProjection } from '../../../../application/contracts/session-execution.js';
 
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import {
   activeInteractionFor,
+  dequeueInteractionByRequestId,
   applyLiveTurnBufferEvent,
   retainLiveTurn,
   type LiveTurnBuffer,
@@ -239,6 +240,9 @@ export interface UseQuoteCompanionResult {
   stop: () => Promise<void>;
   respondToSandboxBoundary: (response: SandboxBoundaryResponse) => Promise<void>;
   respondToClientCapability: (response: ClientCapabilityResponse) => Promise<void>;
+  respondToInteractionByText: (requestId: string, text: string) => Promise<
+    { readonly kind: 'answered'; readonly decision: 'allow' | 'deny' }
+    | { readonly kind: 'unrecognized' | 'unavailable' }>;
   respondToUserQuestion: (response: UserQuestionResponse) => Promise<void>;
   respondToUserForm: (response: InteractionFormResponse) => Promise<void>;
 }
@@ -379,6 +383,8 @@ export function useQuoteCompanion(input: UseQuoteCompanionInput): UseQuoteCompan
   const liveTurnsRef = useRef(liveTurns);
   liveTurnsRef.current = liveTurns;
   const [interactions, setInteractions] = useState<InteractionQueues>({});
+  const interactionsRef = useRef(interactions);
+  useLayoutEffect(() => { interactionsRef.current = interactions; }, [interactions]);
   const [pendingAdmission, setPendingAdmissionState] = useState<PendingAdmission | null>(null);
   const processing = pendingAdmission !== null;
   const streaming = processing || Boolean(activeHostTurn(execution));
@@ -1717,6 +1723,29 @@ export function useQuoteCompanion(input: UseQuoteCompanionInput): UseQuoteCompan
     [mountedRef, sideChat],
   );
 
+  const textResponsePendingRef = useRef(false);
+  const respondToInteractionByText = useCallback(async (requestId: string, text: string) => {
+    const id = companionIdRef.current;
+    const request = id ? activeInteractionFor(interactionsRef.current, id) : undefined;
+    if (!mountedRef.current || !id || textResponsePendingRef.current
+      || request?.requestId !== requestId || request.type !== 'client_capability_request'
+      || request.capability !== 'computer_use') return { kind: 'unavailable' } as const;
+    textResponsePendingRef.current = true;
+    try {
+      const result = await sideChat.respondToInteractionByText(id, { requestId, text });
+      if (result.kind === 'answered') {
+        if (mountedRef.current) setInteractions((current) => dequeueInteractionByRequestId(current, id, requestId));
+      } else if (result.kind === 'unrecognized' && (companionIdRef.current !== id
+        || activeInteractionFor(interactionsRef.current, id)?.requestId !== requestId)) return { kind: 'unavailable' } as const;
+      return result;
+    } catch {
+      if (mountedRef.current && companionIdRef.current === id) setError(copyRef.current.errors.respondFailed);
+      return { kind: 'unavailable' } as const;
+    } finally {
+      textResponsePendingRef.current = false;
+    }
+  }, [mountedRef, sideChat]);
+
   const respondToUserForm = useCallback(
     async (response: InteractionFormResponse): Promise<void> => {
       const id = companionIdRef.current;
@@ -1800,6 +1829,7 @@ export function useQuoteCompanion(input: UseQuoteCompanionInput): UseQuoteCompan
     stop,
     respondToSandboxBoundary,
     respondToClientCapability,
+    respondToInteractionByText,
     respondToUserQuestion,
     respondToUserForm,
   };

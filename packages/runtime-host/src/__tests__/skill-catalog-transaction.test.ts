@@ -536,6 +536,74 @@ test('managed recovery fails closed without overwriting a third-party edit', asy
   assert.deepEqual(await transactionEntries(root), entries);
 });
 
+test('automatic bundled refresh abandons a pre-freeze conflict and remains recoverable', async () => {
+  const root = await tempRoot();
+  const expected = managedArtifacts('old');
+  const next = managedArtifacts('new');
+  await createManaged(root, 'computer-use', expected);
+  await assert.rejects(
+    writer(root, 'after_intent').replaceManagedSkill(
+      'computer-use',
+      expected,
+      next,
+      'bundled-computer-refresh',
+    ),
+    isTransactionError('commit_outcome_unknown'),
+  );
+  const customized = '# user edited the skill after refresh intent\n';
+  await writeFile(join(root, 'skills', 'computer-use', 'SKILL.md'), customized);
+  const reopened = writer(root);
+  await reopened.recover();
+  await reopened.recover();
+  assert.deepEqual(await readManaged(root, 'computer-use'), { ...expected, skill: customized });
+  assert.deepEqual(await transactionEntries(root), []);
+  assert.deepEqual(await frozenEntries(root), []);
+});
+
+test('automatic bundled refresh does not abandon a conflict after freezing the old generation', async () => {
+  const root = await tempRoot();
+  const expected = managedArtifacts('old');
+  const next = managedArtifacts('new');
+  await createManaged(root, 'computer-use', expected);
+  await assert.rejects(
+    writer(root, 'after_managed_freeze').replaceManagedSkill(
+      'computer-use',
+      expected,
+      next,
+      'bundled-computer-refresh',
+    ),
+    isTransactionError('commit_outcome_unknown'),
+  );
+  const customized = managedArtifacts('user customization');
+  await createManaged(root, 'computer-use', customized);
+  await assert.rejects(writer(root).recover(), isTransactionError('persistence_failed'));
+  await assert.rejects(writer(root).recover(), isTransactionError('persistence_failed'));
+  assert.deepEqual(await readManaged(root, 'computer-use'), customized);
+  assert.equal((await transactionEntries(root)).length, 1);
+  assert.equal((await frozenEntries(root)).length, 1);
+});
+
+test('automatic bundled refresh keeps an unsafe pre-freeze target conflict fail-closed', async () => {
+  const root = await tempRoot();
+  const expected = managedArtifacts('old');
+  const next = managedArtifacts('new');
+  await createManaged(root, 'computer-use', expected);
+  await assert.rejects(
+    writer(root, 'after_intent').replaceManagedSkill(
+      'computer-use',
+      expected,
+      next,
+      'bundled-computer-refresh',
+    ),
+    isTransactionError('commit_outcome_unknown'),
+  );
+  await symlink(join(root, 'unrelated'), join(root, 'skills', 'computer-use', 'unsafe'));
+  await assert.rejects(writer(root).recover(), isTransactionError('persistence_failed'));
+  await assert.rejects(writer(root).recover(), isTransactionError('persistence_failed'));
+  assert.deepEqual(await readManaged(root, 'computer-use'), expected);
+  assert.equal((await transactionEntries(root)).length, 1);
+});
+
 test('managed replacement preserves a pre-GC stale save and fails before transaction completion', async () => {
   const root = await tempRoot();
   const expected = managedArtifacts('old');

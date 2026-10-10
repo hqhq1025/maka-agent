@@ -614,6 +614,17 @@ test('does not replay settled transcript steps when the active step reaches term
 
 test('marks Runtime Host tool results whose durable content is omitted', () => {
   const projector = projectorAt();
+  const computerUse = {
+    toolCallId: 'tool-1',
+    action: 'click_element' as const,
+    target: { observationId: 'frame-1', appId: 'Fixture', elementId: 'button', label: 'Open' },
+    outcome: {
+      execution: 'attempted' as const,
+      ok: false,
+      error: 'outcome_unknown' as const,
+      effect: 'unverifiable' as const,
+    },
+  };
 
   const projected = projector.accept({
     kind: 'subscription.session_event',
@@ -628,11 +639,15 @@ test('marks Runtime Host tool results whose durable content is omitted', () => {
       turnId: 'turn-1',
       ts: 10,
       toolUseId: 'tool-1',
-      status: 'completed',
+      status: 'errored',
+      computerUse,
     },
   }).events[0];
 
   assert.equal(projected?.type, 'tool_result');
+  assert.ok(projected?.type === 'tool_result');
+  assert.deepEqual(projected.computerUse, computerUse);
+  assert.equal(projected.isError, true);
   assert.equal(
     projected?.type === 'tool_result' && 'contentOmitted' in projected
       ? projected.contentOmitted

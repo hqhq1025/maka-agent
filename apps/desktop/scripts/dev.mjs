@@ -42,6 +42,8 @@ import { fileURLToPath } from 'node:url';
 import { createServer } from 'vite';
 import { build as esbuildBuild } from 'esbuild';
 import { buildCursorOverlay } from '../../../scripts/build-cursor-overlay.mjs';
+import { buildDesktopWindowIdentity } from '../../../native/desktop-window-identity/build.mjs';
+import { buildCuaDriver } from '../../../scripts/build-cua-driver.mjs';
 import { buildExecutorPlugins } from './build-executor-plugins.mjs';
 import {
   createDevelopmentLaunchSession,
@@ -99,6 +101,11 @@ const librariesBuild = runNodeTool(REPO_ROOT, TSC_CLI, ['--build', 'tsconfig.lib
 );
 await Promise.all([
   librariesBuild,
+  buildCuaDriver().then(() => log('build', 'Cua Driver native patches — done')),
+  buildDesktopWindowIdentity().then(
+    () => log('build', 'Desktop window identity — done'),
+    (e) => { log('build', `Desktop window identity — FAILED: ${e.message}`); throw e; },
+  ),
   // Host stages the self-contained plugin.mjs entries, not tsc's index.js.
   // Rebuild them after workspace dependencies so branch switches cannot load
   // stale executor implementations (or fail on a clean checkout).

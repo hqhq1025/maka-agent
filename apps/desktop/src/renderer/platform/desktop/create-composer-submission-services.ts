@@ -31,6 +31,7 @@ export type DesktopComposerSubmissionBridge = {
     | 'branchFromTurn'
     | 'respondToSandboxBoundary'
     | 'respondToUserQuestion'
+    | 'respondToInteractionByText'
   >;
   readonly newTasks: Pick<MakaBridge['newTasks'], 'create'>;
 };
@@ -49,5 +50,6 @@ export function createDesktopComposerSubmissionServices(
     branchFromTurn: (sessionId, input) => bridge.sessions.branchFromTurn(sessionId, input),
     respondToSandboxBoundary: (sessionId, response) => bridge.sessions.respondToSandboxBoundary(sessionId, response),
     respondToUserQuestion: (sessionId, response) => bridge.sessions.respondToUserQuestion(sessionId, response),
+    respondToInteractionByText: (sessionId, response) => bridge.sessions.respondToInteractionByText(sessionId, response),
   };
 }

@@ -38,6 +38,7 @@ import type {
   ToolStepProgress,
 } from '@maka/core/events';
 import type { ToolActivityStatus } from '@maka/core/tool-result-status';
+import type { ComputerUseActivity } from '@maka/core/computer-use';
 import type { ShellRunToolResult } from '@maka/core/shell-run-result';
 import type { StoredMessage, TurnRecord, TurnStatus, UserMessage } from '@maka/core/session';
 import type { UiLocale } from '@maka/core/ui-locale';
@@ -111,6 +112,8 @@ export interface ToolActivityItem {
   status: ToolActivityStatus;
   args: unknown;
   result?: ToolResultContent;
+  /** Observed target and native outcome for this exact call, including omitted live payloads. */
+  computerUse?: ComputerUseActivity;
   durationMs?: number;
   /** Live-only progress for a bounded multi-step tool invocation. */
   progress?: ToolStepProgress;
@@ -214,6 +217,8 @@ export function materializeTools(
           : unfinishedToolActivityStatus(turnStatusById.get(call.turnId)),
         args: projectToolActivityArgs(call.toolName, call.args),
         result: result?.content,
+        ...(result?.content.kind === 'text' && result.content.computerUse
+          ? { computerUse: result.content.computerUse } : {}),
         durationMs: result?.durationMs,
       };
     });
@@ -259,6 +264,9 @@ function mergeLiveOverPersisted(
     // merge. Only absence asks durable state to fill the result; an explicit
     // empty result is still meaningful newer evidence.
     merged.result = persisted.result;
+  }
+  if (live.computerUse === undefined && persisted.computerUse !== undefined) {
+    merged.computerUse = persisted.computerUse;
   }
   // A settled turn always yields a settled persisted status — materializeTools
   // only reads a tool as in-flight while the turn record says `running` — so

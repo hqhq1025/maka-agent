@@ -1,0 +1,217 @@
+--- a/libs/cua-driver/rust/crates/platform-macos/src/ax/bindings.rs
++++ b/libs/cua-driver/rust/crates/platform-macos/src/ax/bindings.rs
+@@ -83,6 +83,7 @@
+         timeout_in_seconds: f32,
+     ) -> AXError;
+     pub fn AXUIElementGetTypeID() -> CFTypeID;
++    pub fn AXUIElementGetPid(element: AXUIElementRef, pid: *mut i32) -> AXError;
+     pub fn AXIsProcessTrusted() -> bool;
+     /// `AXIsProcessTrustedWithOptions(options)` — when called with
+     /// `{kAXTrustedCheckOptionPrompt: true}` raises the system Accessibility
+@@ -920,8 +921,8 @@
+     }
+ }
+ 
+-/// `AXWindows` of `pid`'s application element, plus the requested window when
+-/// `AXWindows` does not list it because it is on another Space. Returns
++/// `AXWindows` of `pid`'s application element, plus the requested sheet or window
++/// when it is nested in AXChildren/AXSheets or located on another Space. Returns
+ /// retained elements the caller must release.
+ ///
+ /// # Safety
+@@ -934,15 +935,91 @@
+     window_id: u32,
+ ) -> Vec<AXUIElementRef> {
+     let mut windows = copy_ax_windows(app);
+-    let listed = windows
++    let mut listed = windows
+         .iter()
+         .any(|&window| ax_get_window_id(window) == Some(window_id));
++    if !listed && matches!(crate::windows::resolve_window_owner(pid, window_id), crate::windows::WindowOwner::SamePid) {
++        if let Some(window) = copy_ax_descendant_window(app, &windows, pid, window_id) {
++            windows.push(window);
++            listed = true;
++        }
++    }
+     if should_probe_off_space_window(listed, || {
+         crate::windows::window_space_view_by_id(window_id)
+     }) {
+         windows.extend(copy_ax_window_by_remote_token(pid, window_id));
+     }
+     windows
++}
++
++/// Read at most `limit` retained elements from an AX array attribute.
++unsafe fn copy_element_array_bounded(
++    element: AXUIElementRef,
++    name: &str,
++    limit: usize,
++) -> Vec<super::snapshot::RetainedElement> {
++    if limit == 0 { return Vec::new(); }
++    let attr = CFStr::new(name);
++    let mut value: CFTypeRef = std::ptr::null();
++    if AXUIElementCopyAttributeValue(element, attr.as_concrete_TypeRef(), &mut value) != kAXErrorSuccess
++        || value.is_null() { return Vec::new(); }
++    if core_foundation::base::CFGetTypeID(value) != CFArray::<CFTypeRef>::type_id() {
++        CFRelease(value);
++        return Vec::new();
++    }
++    let array = CFArray::<CFTypeRef>::wrap_under_create_rule(value as _);
++    (0..array.len()).take(limit).filter_map(|index| {
++        let item = *array.get(index)?;
++        (core_foundation::base::CFGetTypeID(item) == AXUIElementGetTypeID())
++            .then(|| super::snapshot::RetainedElement::retain(item as usize))
++    }).collect()
++}
++
++/// Find one exact same-process descendant window without walking a document unboundedly.
++/// Every queue entry owns its AX reference, including on timeout and early return.
++unsafe fn copy_ax_descendant_window(
++    app: AXUIElementRef,
++    windows: &[AXUIElementRef],
++    pid: i32,
++    window_id: u32,
++) -> Option<AXUIElementRef> {
++    use super::snapshot::RetainedElement;
++    use core_foundation::base::CFEqual;
++    use std::{collections::VecDeque, time::{Duration, Instant}};
++    const MAX_NODES: usize = 128;
++    const MAX_DEPTH: usize = 6;
++    const DEADLINE: Duration = Duration::from_millis(250);
++    let started = Instant::now();
++    let mut queue: VecDeque<_> = std::iter::once(app).chain(windows.iter().copied())
++        .take(MAX_NODES).map(|element| (RetainedElement::retain(element as usize), 0)).collect();
++    let mut seen: Vec<RetainedElement> = Vec::new();
++    while let Some((element, depth)) = queue.pop_front() {
++        if started.elapsed() >= DEADLINE || seen.len() >= MAX_NODES { break; }
++        let raw = element.as_ptr() as AXUIElementRef;
++        if seen.iter().any(|prior| CFEqual(prior.as_ptr() as CFTypeRef, raw as CFTypeRef) != 0) { continue; }
++        seen.push(element.clone());
++        let mut owner = 0;
++        if AXUIElementGetPid(raw, &mut owner) != kAXErrorSuccess || owner != pid { continue; }
++        if AXUIElementSetMessagingTimeout(raw, 0.025) != kAXErrorSuccess { continue; }
++        let role = copy_string_attr(raw, "AXRole");
++        if matches!(role.as_deref(), Some("AXWindow" | "AXSheet"))
++            && ax_get_window_id(raw) == Some(window_id)
++            && matches!(crate::windows::resolve_window_owner(pid, window_id), crate::windows::WindowOwner::SamePid) {
++            AXUIElementSetMessagingTimeout(raw, 0.0);
++            CFRetain(raw as CFTypeRef);
++            return Some(raw);
++        }
++        if depth < MAX_DEPTH {
++            for attribute in ["AXSheets", "AXChildren"] {
++                if started.elapsed() >= DEADLINE { break; }
++                let remaining = MAX_NODES.saturating_sub(seen.len() + queue.len());
++                queue.extend(copy_element_array_bounded(raw, attribute, remaining)
++                    .into_iter().map(|child| (child, depth + 1)));
++            }
++        }
++        AXUIElementSetMessagingTimeout(raw, 0.0);
++    }
++    None
+ }
+ 
+ #[cfg(test)]
+--- a/libs/cua-driver/rust/crates/platform-macos/src/ax/tree.rs
++++ b/libs/cua-driver/rust/crates/platform-macos/src/ax/tree.rs
+@@ -374,8 +374,8 @@
+             let subrole = copy_string_attr(child, "AXSubrole");
+             let identifier = copy_string_attr(child, "AXIdentifier");
+             // Match AX window element → CGWindowID via private SPI.
+-            // Only windows carry one, so skip the round-trip elsewhere.
+-            let ax_window_id = if role == "AXWindow" {
++            // Sheets can own a separate WindowServer surface.
++            let ax_window_id = if matches!(role.as_str(), "AXWindow" | "AXSheet") {
+                 ax_get_window_id(child)
+             } else {
+                 None
+--- a/libs/cua-driver/rust/crates/platform-macos/src/ax/window_scope.rs
++++ b/libs/cua-driver/rust/crates/platform-macos/src/ax/window_scope.rs
+@@ -14,7 +14,7 @@
+ /// What the requested `window_id` turned out to be.
+ #[derive(Debug, Clone, PartialEq, Eq)]
+ pub enum WindowScope {
+-    /// A top-level AXWindow reported the requested CGWindowID.
++    /// An AXWindow or AXSheet reported the requested CGWindowID.
+     Matched,
+     /// WindowServer has no record of the requested CGWindowID — closed,
+     /// stale, or fabricated.
+@@ -26,8 +26,8 @@
+         owner_pid: i32,
+         owner_app_name: String,
+     },
+-    /// The CGWindowID exists under the requested pid, but no top-level
+-    /// AXWindow claims it. The screenshot is still the requested window; the
++    /// The CGWindowID exists under the requested pid, but no discovered
++    /// AXWindow or AXSheet claims it. The screenshot is still the requested window; the
+     /// AX surface is not, so callers report a degraded (empty-tree) snapshot
+     /// rather than an error.
+     AxUnresolved { ax_window_count: usize },
+@@ -54,7 +54,7 @@
+     /// themselves as `open-panel` / `save-panel`.
+     pub identifier: Option<String>,
+     /// `_AXUIElementGetWindow` result, when the SPI resolved one. Only read
+-    /// for `AXWindow` roles.
++    /// for `AXWindow` and `AXSheet` roles.
+     pub ax_window_id: Option<u32>,
+ }
+ 
+@@ -133,7 +133,8 @@
+     let matched: Vec<usize> = candidates
+         .iter()
+         .enumerate()
+-        .filter(|(_, c)| c.role == "AXWindow" && c.ax_window_id == Some(requested))
++        .filter(|(_, c)| matches!(c.role.as_str(), "AXWindow" | "AXSheet")
++            && c.ax_window_id == Some(requested))
+         .map(|(i, _)| i)
+         .collect();
+ 
+@@ -149,6 +150,12 @@
+             scope,
+             walk: Vec::new(),
+         };
++    }
++
++    // A sheet selected by its own CGWindowID is a separate snapshot scope.
++    // Parent-window snapshots retain their existing sheet behavior below.
++    if matched.iter().any(|&i| candidates[i].role == "AXSheet") {
++        return ScopeDecision { scope: WindowScope::Matched, walk: matched };
+     }
+ 
+     // Matched: walk the requested window plus the non-window top-level children.
+@@ -219,6 +226,35 @@
+     }
+ 
+     #[test]
++    fn exact_sheet_walks_only_its_own_surface() {
++        let candidates = [
++            TopLevelCandidate::new("AXMenuBar", None),
++            TopLevelCandidate::new("AXWindow", Some(594)),
++            TopLevelCandidate::new("AXSheet", Some(611)),
++            TopLevelCandidate::new("AXSheet", Some(612)),
++        ];
++        let d = decide_window_scope(&candidates, 611, never_called);
++        assert_eq!(d.scope, WindowScope::Matched);
++        assert_eq!(d.walk, vec![2], "do not expose the parent or another sheet");
++    }
++
++    #[test]
++    fn sheet_with_another_window_id_does_not_resolve_the_target() {
++        let candidates = [TopLevelCandidate::new("AXSheet", Some(612))];
++        let d = decide_window_scope(&candidates, 611, || WindowOwner::SamePid);
++        assert!(!d.scope.is_matched());
++        assert!(d.walk.is_empty());
++    }
++
++    #[test]
++    fn non_window_role_cannot_claim_a_window_id() {
++        let candidates = [TopLevelCandidate::new("AXGroup", Some(611))];
++        let d = decide_window_scope(&candidates, 611, || WindowOwner::SamePid);
++        assert!(!d.scope.is_matched());
++        assert!(d.walk.is_empty());
++    }
++
++    #[test]
+     fn matched_appkit_file_panel_excludes_the_application_menu_bar() {
+         let candidates = [
+             TopLevelCandidate::new("AXMenuBar", None),

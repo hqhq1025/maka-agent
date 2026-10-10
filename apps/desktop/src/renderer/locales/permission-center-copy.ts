@@ -28,6 +28,7 @@ import type {
 } from '@maka/core/capabilities';
 
 import type { UiCatalog, UiLocale } from '@maka/core/ui-locale';
+import type { ComputerUseForegroundPolicy } from '@maka/core/settings';
 
 type Tone = StatusSemantic;
 type StatusCopy = { label: string; tone: Tone };
@@ -68,6 +69,11 @@ export type PermissionCenterCopy = {
   capabilitiesHelp: string;
   capabilityListAria: string;
   footnote: string;
+  computerUseSection: string;
+  foregroundPolicy: string;
+  foregroundPolicyHelp: string;
+  foregroundPolicyOptions: Record<ComputerUseForegroundPolicy, string>;
+  foregroundPolicyFailed: string;
   layers: {
     aria(label: string): string;
     feature: string;
@@ -94,8 +100,6 @@ export type PermissionCenterCopy = {
   /** macOS drag-to-grant onboarding (accessibility / screen recording). */
   dragGrant: string;
   dragGranting: string;
-  // Single-backend assumption: CU_BACKEND_IDS is ['maka-cu'], so the backend
-  // name stays a literal in copy. Revisit when a second backend lands.
   cuBackendStatus(missingPermissionLabels: readonly string[], health: RuntimeProbeState): string;
   reasonFallback: string;
 };
@@ -110,10 +114,10 @@ const PERMISSION_CENTER_COPY = {
       paused: { label: '已暂停', detail: '功能开关被显式关闭，但配置仍保留。', tone: 'neutral' },
     },
     osPermissions: {
-      accessibility: { label: '辅助功能', purpose: 'Computer Use 需要它来读取窗口焦点 / 模拟键盘鼠标。', impact: 'Computer Use · 自动化键鼠操作' },
-      screen_recording: { label: '屏幕录制', purpose: 'Computer Use 需要它来读取窗口内容；未来屏幕活动录制也会使用。', impact: 'Computer Use · 截屏上下文' },
+      accessibility: { label: '辅助功能', purpose: 'macOS 上的 Computer Use 需要它来读取和操作应用控件。', impact: 'Computer Use · 读取与操作控件' },
+      screen_recording: { label: '屏幕录制', purpose: 'macOS 上的窗口截图和图像确认需要它。未授权时仍可读取和操作应用控件。', impact: 'Computer Use · 截屏与图像确认' },
       notifications: { label: '通知', purpose: '权限申请、回顾完成等系统通知需要它。', impact: '权限申请提醒 · 每日回顾完成通知' },
-      automation: { label: '自动化（Apple Events）', purpose: 'Computer Use 控制其他 App 需要逐 target 授权。', impact: 'Computer Use · 跨 App 自动化' },
+      automation: { label: '自动化（Apple Events）', purpose: '通过 Apple Events 控制其他应用时，macOS 会按目标应用请求授权。Computer Use 不依赖这项权限。', impact: 'Apple Events 自动化' },
     },
     osStates: {
       unsupported: { label: '当前平台不支持', tone: 'neutral' }, unknown: { label: '无法读取状态', tone: 'neutral' },
@@ -130,12 +134,17 @@ const PERMISSION_CENTER_COPY = {
       open_settings_failed: '无法打开系统设置，请手动前往「隐私与安全性」。',
       failed: '权限操作未成功，请稍后重试。',
     },
-    title: '权限与能力', subtitle: '查看 Maka 需要的系统权限和当前授权状态，直接从这里前往「系统设置 → 隐私与安全性」完成授权或撤销，不必自己翻菜单。',
+    title: '权限与能力', subtitle: '查看当前设备的系统权限、功能状态和需要处理的事项。',
     lastRead: '最近读取：', detectAgain: '重新检测', summaryAria: '按授权状态筛选系统权限', summaryFilterAria: (label, count, selected) => selected ? `${label} ${count} 项，当前筛选；再次按下显示全部` : `仅显示${label}权限，共 ${count} 项`, granted: '已授权', pending: '等待授权', denied: '已拒绝', other: '未知 / 不支持',
-    osSection: '系统权限', osSectionHelp: 'Maka 读到的 OS 级权限状态。点击右侧按钮可以直接前往「系统设置 → 隐私与安全性」对应分区。', osListAria: '系统权限列表',
+    osSection: '系统权限', osSectionHelp: '当前操作系统提供的权限状态。可用时，使用右侧按钮申请权限或打开对应设置；不适用的权限会单独标明。', osListAria: '系统权限列表',
     capabilitiesSection: '功能能力', capabilitiesHelp: '每个能力的就绪状态由「功能开关 · 配置 · 系统权限 · 运行态探测」共同决定。',
     capabilityListAria: '功能能力列表',
-    footnote: 'Maka 不会自动授予 Accessibility、Automation 或 Screen Recording。高风险自动化能力必须保持逐项审批、可审计、可撤销。这里只读取系统权限与功能能力的当前快照，授权变更仍需在「系统设置 → 隐私与安全性」完成。',
+    computerUseSection: '电脑操作',
+    foregroundPolicy: '使用前台',
+    foregroundPolicyHelp: '默认在后台操作。这项设置只影响需要使用前台的操作，并保存在这台电脑上；选择询问时，一次授权覆盖当前任务。',
+    foregroundPolicyOptions: { never: '禁止前台', ask: '使用前台前询问（默认）', allow: '允许前台' },
+    foregroundPolicyFailed: '无法读取或保存前台设置',
+    footnote: '系统权限由操作系统管理，与任务中的操作授权分别生效。macOS 修改辅助功能或屏幕录制授权后，请完全退出并重新打开 App。这里显示最近一次检测的状态；Computer Use 还会在操作前检查桌面环境和目标应用。',
     layers: {
       aria: (label) => `${label}能力状态明细`, feature: '功能开关', configuration: '配置', approval: '操作审批', memory: '记忆写入', runtime: '运行态探测',
       featureStates: { enabled: '已开启', partial: '部分可用', disabled: '已关闭', not_available: '未开放' },
@@ -144,17 +153,16 @@ const PERMISSION_CENTER_COPY = {
       memoryStates: { not_applicable: '不涉及记忆写入', disabled: '记忆写入已关闭', draft_required: '需要先草拟 memory 协议', accepted: '记忆写入已接受' },
       runtimeStates: { not_available: '尚无运行态探测', not_run: '探测未运行', healthy: '探测通过', degraded: '探测降级' },
     },
-    requiredPermissions: '所需系统权限', requiredPermissionsAria: (label) => `${label}所需系统权限列表`,
+    requiredPermissions: '相关系统权限', requiredPermissionsAria: (label) => `${label}相关系统权限列表`,
     auditSection: '审计记录', noAudit: '暂无审计记录', auditAria: (label) => `${label}审计记录列表`,
     impact: '影响功能', opening: '打开中…', openSettings: '前往系统设置', requesting: '请求中…', request: '请求授权', dragGrant: '引导授权', dragGranting: '引导中…',
     cuBackendStatus: (missing, health) =>
-      'maka-cu artifact 已通过本地完整性检查。'
-      + (missing.length > 0 ? `等待${missing.join('、')}权限。` : '')
+      (missing.length > 0 ? `等待${missing.join('、')}权限。` : '')
       + ({
-        not_available: 'maka-cu service 启动失败、已退出或已停止。',
-        degraded: 'maka-cu service 正在启动或恢复。',
-        healthy: '操作与截图 service 已就绪；按目标与动作类别授权后可操作本机应用。',
-        not_run: 'service 将在首次调用时启动；按目标与动作类别授权后可操作本机应用。',
+        not_available: 'Cua Driver 未能加载或已停止。请查看运行日志。',
+        degraded: 'Cua Driver 尚未就绪，正在加载或需要处理桌面环境与权限。',
+        healthy: 'Cua Driver 已就绪；操作前仍会检查目标应用和操作授权。',
+        not_run: 'Cua Driver 将在首次电脑操作时加载，并检查桌面环境与权限。',
       } satisfies Record<RuntimeProbeState, string>)[health],
     reasonFallback: '状态详情请查看运行日志。',
   },
@@ -167,10 +175,10 @@ const PERMISSION_CENTER_COPY = {
       paused: { label: '已暫停', detail: '功能開關被顯式關閉，但設定仍保留。', tone: 'neutral' },
     },
     osPermissions: {
-      accessibility: { label: '輔助功能', purpose: 'Computer Use 需要它來讀取視窗焦點 / 模擬鍵盤滑鼠。', impact: 'Computer Use · 自動化鍵鼠操作' },
-      screen_recording: { label: '螢幕錄製', purpose: 'Computer Use 需要它來讀取視窗內容；未來螢幕活動錄製也會使用。', impact: 'Computer Use · 截圖上下文' },
+      accessibility: { label: '輔助功能', purpose: 'macOS 上的 Computer Use 需要它來讀取和操作應用程式控制項。', impact: 'Computer Use · 讀取與操作控制項' },
+      screen_recording: { label: '螢幕錄製', purpose: 'macOS 上的視窗截圖和影像確認需要它。未授權時仍可讀取和操作應用程式控制項。', impact: 'Computer Use · 截圖與影像確認' },
       notifications: { label: '通知', purpose: '權限申請、回顧完成等系統通知需要它。', impact: '權限申請提醒 · 每日回顧完成通知' },
-      automation: { label: '自動化（Apple Events）', purpose: 'Computer Use 控制其他 App 需要逐 target 授權。', impact: 'Computer Use · 跨 App 自動化' },
+      automation: { label: '自動化（Apple Events）', purpose: '透過 Apple Events 控制其他應用程式時，macOS 會依目標應用程式請求授權。Computer Use 不依賴這項權限。', impact: 'Apple Events 自動化' },
     },
     osStates: {
       unsupported: { label: '目前平臺不支援', tone: 'neutral' }, unknown: { label: '無法讀取狀態', tone: 'neutral' },
@@ -187,12 +195,17 @@ const PERMISSION_CENTER_COPY = {
       open_settings_failed: '無法開啟系統設定，請手動前往「隱私與安全性」。',
       failed: '權限操作未成功，請稍後重試。',
     },
-    title: '權限與能力', subtitle: '檢視 Maka 需要的系統權限和目前授權狀態，直接從這裡前往「系統設定 → 隱私與安全性」完成授權或撤銷，不必自己翻選單。',
+    title: '權限與能力', subtitle: '檢視目前裝置的系統權限、功能狀態和需要處理的事項。',
     lastRead: '最近讀取：', detectAgain: '重新檢測', summaryAria: '按授權狀態篩選系統權限', summaryFilterAria: (label, count, selected) => selected ? `${label} ${count} 項，目前篩選；再次按下顯示全部` : `僅顯示${label}權限，共 ${count} 項`, granted: '已授權', pending: '等待授權', denied: '已拒絕', other: '未知 / 不支援',
-    osSection: '系統權限', osSectionHelp: 'Maka 讀到的 OS 級權限狀態。點選右側按鈕可以直接前往「系統設定 → 隱私與安全性」對應分割槽。', osListAria: '系統權限列表',
+    osSection: '系統權限', osSectionHelp: '目前作業系統提供的權限狀態。可用時，使用右側按鈕申請權限或開啟對應設定；不適用的權限會另外標示。', osListAria: '系統權限列表',
     capabilitiesSection: '功能能力', capabilitiesHelp: '每個能力的就緒狀態由「功能開關 · 設定 · 系統權限 · 執行態探測」共同決定。',
     capabilityListAria: '功能能力列表',
-    footnote: 'Maka 不會自動授予 Accessibility、Automation 或 Screen Recording。高風險自動化能力必須保持逐項審批、可審計、可撤銷。這裡只讀取系統權限與功能能力的目前快照，授權變更仍需在「系統設定 → 隱私與安全性」完成。',
+    computerUseSection: '電腦操作',
+    foregroundPolicy: '使用前景',
+    foregroundPolicyHelp: '預設在背景操作。這項設定只影響需要使用前景的操作，並儲存在這台電腦上；選擇詢問時，一次授權涵蓋目前任務。',
+    foregroundPolicyOptions: { never: '禁止前景', ask: '使用前景前詢問（預設）', allow: '允許前景' },
+    foregroundPolicyFailed: '無法讀取或儲存前景設定',
+    footnote: '系統權限由作業系統管理，與任務中的操作授權分別生效。macOS 修改輔助功能或螢幕錄製授權後，請完全結束並重新開啟 App。這裡顯示最近一次檢測的狀態；Computer Use 還會在操作前檢查桌面環境和目標應用程式。',
     layers: {
       aria: (label) => `${label}能力狀態明細`, feature: '功能開關', configuration: '設定', approval: '操作審批', memory: '記憶寫入', runtime: '執行態探測',
       featureStates: { enabled: '已開啟', partial: '部分可用', disabled: '已關閉', not_available: '未開放' },
@@ -201,17 +214,16 @@ const PERMISSION_CENTER_COPY = {
       memoryStates: { not_applicable: '不涉及記憶寫入', disabled: '記憶寫入已關閉', draft_required: '需要先草擬 memory 協議', accepted: '記憶寫入已接受' },
       runtimeStates: { not_available: '尚無執行態探測', not_run: '探測未執行', healthy: '探測透過', degraded: '探測降級' },
     },
-    requiredPermissions: '所需系統權限', requiredPermissionsAria: (label) => `${label}所需系統權限列表`,
+    requiredPermissions: '相關系統權限', requiredPermissionsAria: (label) => `${label}相關系統權限列表`,
     auditSection: '審計記錄', noAudit: '暫無審計記錄', auditAria: (label) => `${label}審計記錄列表`,
     impact: '影響功能', opening: '開啟中…', openSettings: '前往系統設定', requesting: '請求中…', request: '請求授權', dragGrant: '引導授權', dragGranting: '引導中…',
     cuBackendStatus: (missing, health) =>
-      'maka-cu artifact 已通過本機完整性檢查。'
-      + (missing.length > 0 ? `等待${missing.join('、')}權限。` : '')
+      (missing.length > 0 ? `等待${missing.join('、')}權限。` : '')
       + ({
-        not_available: 'maka-cu service 啟動失敗、已退出或已停止。',
-        degraded: 'maka-cu service 正在啟動或恢復。',
-        healthy: '操作與截圖 service 已就緒；依目標與動作類別授權後可操作本機應用程式。',
-        not_run: 'service 將在首次呼叫時啟動；依目標與動作類別授權後可操作本機應用程式。',
+        not_available: 'Cua Driver 未能載入或已停止。請查看執行日誌。',
+        degraded: 'Cua Driver 尚未就緒，正在載入或需要處理桌面環境與權限。',
+        healthy: 'Cua Driver 已就緒；操作前仍會檢查目標應用程式和操作授權。',
+        not_run: 'Cua Driver 將在首次電腦操作時載入，並檢查桌面環境與權限。',
       } satisfies Record<RuntimeProbeState, string>)[health],
     reasonFallback: '狀態詳情請查看執行日誌。',
   },
@@ -224,10 +236,10 @@ const PERMISSION_CENTER_COPY = {
       paused: { label: 'Paused', detail: 'The feature was explicitly disabled while its configuration remains saved.', tone: 'neutral' },
     },
     osPermissions: {
-      accessibility: { label: 'Accessibility', purpose: 'Computer Use needs it to read window focus and simulate keyboard or mouse input.', impact: 'Computer Use · automated keyboard and mouse input' },
-      screen_recording: { label: 'Screen Recording', purpose: 'Computer Use needs it to read window contents; future screen activity recording will use it too.', impact: 'Computer Use · screenshot context' },
+      accessibility: { label: 'Accessibility', purpose: 'On macOS, Computer Use needs it to read and operate app controls.', impact: 'Computer Use · read and operate controls' },
+      screen_recording: { label: 'Screen Recording', purpose: 'On macOS, window screenshots and visual verification need it. App controls can still be read and operated without it.', impact: 'Computer Use · screenshots and visual verification' },
       notifications: { label: 'Notifications', purpose: 'System alerts use it for permission requests and completed reviews.', impact: 'Permission alerts · Daily Review completion' },
-      automation: { label: 'Automation (Apple Events)', purpose: 'Computer Use needs per-target authorization to control other apps.', impact: 'Computer Use · cross-app automation' },
+      automation: { label: 'Automation (Apple Events)', purpose: 'macOS requests permission for each app controlled through Apple Events. Computer Use does not require this permission.', impact: 'Apple Events automation' },
     },
     osStates: {
       unsupported: { label: 'Unsupported on this platform', tone: 'neutral' }, unknown: { label: 'Status unavailable', tone: 'neutral' },
@@ -244,12 +256,17 @@ const PERMISSION_CENTER_COPY = {
       open_settings_failed: 'Could not open System Settings. Open Privacy & Security manually.',
       failed: 'The permission action did not succeed. Try again later.',
     },
-    title: 'Permissions and capabilities', subtitle: 'Review the system permissions Maka needs and their current state. Open the matching Privacy & Security section directly to grant or revoke access.',
+    title: 'Permissions and capabilities', subtitle: 'Review system permissions, feature status, and anything that needs attention on this device.',
     lastRead: 'Last read: ', detectAgain: 'Check again', summaryAria: 'Filter system permissions by authorization status', summaryFilterAria: (label, count, selected) => selected ? `${label}, ${count}; filter selected. Press again to show all permissions` : `Show only ${label.toLowerCase()} permissions, ${count}`, granted: 'Granted', pending: 'Waiting', denied: 'Denied', other: 'Unknown / unsupported',
-    osSection: 'System permissions', osSectionHelp: 'OS-level permission states reported to Maka. Use the action on the right to open the matching Privacy & Security section in System Settings.', osListAria: 'System permission list',
+    osSection: 'System permissions', osSectionHelp: 'Permission states reported by this operating system. Where available, use the actions on the right to request access or open settings. Permissions that do not apply are marked separately.', osListAria: 'System permission list',
     capabilitiesSection: 'Feature capabilities', capabilitiesHelp: 'Each readiness state combines the feature toggle, configuration, system permissions, and runtime probe.',
     capabilityListAria: 'Feature capability list',
-    footnote: 'Maka never grants Accessibility, Automation, or Screen Recording automatically. High-risk automation must remain individually approved, auditable, and revocable. This page only reads the current snapshot; permission changes still happen in System Settings under Privacy & Security.',
+    computerUseSection: 'Computer Use',
+    foregroundPolicy: 'Foreground access',
+    foregroundPolicyHelp: 'Actions use the background by default. This setting applies when an action needs the foreground and is saved on this computer. When set to ask, one approval covers the current task.',
+    foregroundPolicyOptions: { never: 'Never allow foreground', ask: 'Ask before foreground (default)', allow: 'Allow foreground' },
+    foregroundPolicyFailed: 'Could not read or save foreground settings',
+    footnote: 'System permissions apply separately from task action approval. After changing Accessibility or Screen Recording grants on macOS, fully quit and reopen the app. This page shows the latest detected state; Computer Use also checks the desktop environment and target app before acting.',
     layers: {
       aria: (label) => `${label} capability state details`, feature: 'Feature toggle', configuration: 'Configuration', approval: 'Action approval', memory: 'Memory writes', runtime: 'Runtime probe',
       featureStates: { enabled: 'Enabled', partial: 'Partially available', disabled: 'Disabled', not_available: 'Unavailable' },
@@ -258,17 +275,16 @@ const PERMISSION_CENTER_COPY = {
       memoryStates: { not_applicable: 'No memory writes', disabled: 'Memory writes disabled', draft_required: 'Draft a memory protocol first', accepted: 'Memory writes accepted' },
       runtimeStates: { not_available: 'No runtime probe available', not_run: 'Probe not run', healthy: 'Probe passed', degraded: 'Probe degraded' },
     },
-    requiredPermissions: 'Required system permissions', requiredPermissionsAria: (label) => `${label} required system permissions`,
+    requiredPermissions: 'Related system permissions', requiredPermissionsAria: (label) => `${label} related system permissions`,
     auditSection: 'Audit records', noAudit: 'No audit records', auditAria: (label) => `${label} audit records`,
     impact: 'Affects', opening: 'Opening…', openSettings: 'Open System Settings', requesting: 'Requesting…', request: 'Request permission', dragGrant: 'Guide me', dragGranting: 'Opening…',
     cuBackendStatus: (missing, health) =>
-      'The maka-cu artifact passed the local integrity check. '
-      + (missing.length > 0 ? `Waiting for ${missing.join(', ')} permission. ` : '')
+      (missing.length > 0 ? `Waiting for ${missing.join(', ')} permission. ` : '')
       + ({
-        not_available: 'The maka-cu service failed to start, exited, or was stopped.',
-        degraded: 'The maka-cu service is starting or recovering.',
-        healthy: 'The action and screenshot service is ready; grant by target and action category to operate local apps.',
-        not_run: 'The service starts on first use; grant by target and action category to operate local apps.',
+        not_available: 'Cua Driver could not load or has stopped. See the runtime logs.',
+        degraded: 'Cua Driver is not ready: it is loading, or the desktop environment or permissions need attention.',
+        healthy: 'Cua Driver is ready; target apps and action approvals are still checked before acting.',
+        not_run: 'Cua Driver loads on the first computer action and checks the desktop environment and permissions.',
       } satisfies Record<RuntimeProbeState, string>)[health],
     reasonFallback: 'See the runtime logs for details.',
   },
